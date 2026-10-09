@@ -15,7 +15,7 @@ Fredy ──Telegram-Adapter──▶ Telegram  (Inserat wie bisher)
 
 ## Setup in Coolify
 
-1. **Neue Application** aus dem GitHub-Repo, Build Pack **Dockerfile**, Port **3000** (Coolify-Standard), Domain z. B. `https://immobot.fentreactor.de`.
+1. **Neue Application** aus dem GitHub-Repo, Build Pack **Dockerfile**, Port **8000** (Coolify übernimmt ihn aus `EXPOSE`), Domain z. B. `https://immobot.fentreactor.de`.
 2. **Persistent Storage:** Volume `immobot-data` → `/data` (SQLite-Datenbank).
 3. **Environment Variables** (alle als Secret markieren):
 
