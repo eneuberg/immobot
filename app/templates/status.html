@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Status{% endblock %}
+{% block content %}
+<h1>Status</h1>
+
+<table>
+  <tr><th>Letzter Webhook von Fredy</th><td>{{ last_webhook_at|local_time }}</td></tr>
+  <tr>
+    <th>Telegram-Bot</th>
+    <td>
+      {% if bot_disabled %}deaktiviert (IMMOBOT_DISABLE_BOT)
+      {% elif bot_running %}<span class="success">läuft</span>
+      {% else %}<span class="error">läuft nicht</span>{% endif %}
+    </td>
+  </tr>
+  <tr><th>Letztes Telegram-Update</th><td>{{ bot_last_update_at|local_time }}</td></tr>
+  <tr><th>Letzter Bot-Fehler</th><td class="pre-wrap">{{ bot_last_error or "–" }}</td></tr>
+  <tr><th>Telegram-Chat konfiguriert</th><td>{{ "ja" if chat_configured else "nein" }}</td></tr>
+  <tr><th>Anthropic API-Key gesetzt</th><td>{{ "ja" if api_key_set else "nein" }}</td></tr>
+  <tr><th>Version</th><td>{{ version }}</td></tr>
+</table>
+
+<h2>Datenbank</h2>
+<table>
+  <tr><th>Inserate</th><td>{{ stats.listings_total }}</td></tr>
+  {% for key, label in STATUSES.items() %}
+  <tr><th>… davon {{ label }}</th><td>{{ stats.by_status.get(key, 0) }}</td></tr>
+  {% endfor %}
+  <tr><th>Entwürfe</th><td>{{ stats.drafts_total }}</td></tr>
+  <tr><th>Kosten {{ stats.month }} (USD)</th><td>{{ stats.cost_month|usd }}</td></tr>
+  <tr><th>Kosten gesamt (USD)</th><td>{{ stats.cost_total|usd }}</td></tr>
+</table>
+
+<h2>Fredy einrichten</h2>
+<p>In Fredy beim Job zusätzlich den <strong>HTTP-Adapter</strong> eintragen (Fredys Telegram-Adapter bleibt):</p>
+<ul>
+  <li>URL: <code>{{ hook_url }}</code> (Pfad <code>/hook/fredy</code>)</li>
+  <li>Token = <code>FREDY_WEBHOOK_TOKEN</code> aus Coolify (wird als <code>Authorization: Bearer …</code> gesendet)</li>
+</ul>
+<p class="muted">Secrets (API-Key, Tokens, Passwort) werden nur als Env-Variablen in Coolify gepflegt und hier nie angezeigt.</p>
+{% endblock %}

@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Einstellungen{% endblock %}
+
+{% macro field_error(key) %}{% if errors[key] %}<small class="error">{{ errors[key] }}</small>{% endif %}{% endmacro %}
+
+{% macro textarea(key, label, help, rows) %}
+<label for="{{ key }}"><strong>{{ label }}</strong>{% if help %} <small class="muted">– {{ help }}</small>{% endif %}</label>
+{# The newline after <textarea> is swallowed by the HTML parser, so a leading newline in the value survives. #}
+<textarea id="{{ key }}" name="{{ key }}" rows="{{ rows }}" {% if errors[key] %}aria-invalid="true"{% endif %}>
+{{ values[key] }}</textarea>
+{{ field_error(key) }}
+<p><button type="submit" form="reset-{{ key }}" class="secondary outline"
+  data-confirm="„{{ label }}“ auf den Standard zurücksetzen? Ungespeicherte Änderungen auf dieser Seite gehen verloren.">Standard wiederherstellen</button></p>
+{% endmacro %}
+
+{% block content %}
+<h1>Einstellungen</h1>
+{% if message %}<p class="success" role="status">{{ message }}</p>{% endif %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+{% if test %}
+<article id="test">
+  <header>
+    <strong>Test-Entwurf</strong> für „{{ test.listing.title or "(ohne Titel)" }}“<br>
+    <small class="muted">{{ test.draft.model_label }} · {{ test.draft.input_tokens }} Tokens ein / {{ test.draft.output_tokens }} aus ·
+      Kosten {{ test.draft.cost_usd|usd }} (USD)</small>
+  </header>
+  {% if test.draft.hint %}<p><mark>Hinweis:</mark> <span class="pre-wrap">{{ test.draft.hint }}</span></p>{% endif %}
+  <pre class="draft" id="draft-test">{{ test.draft.text }}</pre>
+  <button type="button" class="secondary outline" data-copy="draft-test">Kopieren</button>
+</article>
+{% endif %}
+
+<form method="post" action="/settings">
+  <h2>Über mich</h2>
+  {{ textarea("profile", "Über mich", "Person, Job/Einkommen, Haushalt, Haustiere/Raucher, Einzug, Umzugsgrund, Unterlagen, Kontakt/Signatur", 14) }}
+
+  <h2>Wünsche</h2>
+  {{ textarea("wishes", "Wünsche", "was dir an einer Wohnung wichtig ist", 6) }}
+
+  <h2>Schreibstil</h2>
+  {{ textarea("style", "Schreibstil", "Ton, Sie/Du", 3) }}
+  <label>Ziellänge (Wörter, 30–600)
+    <input type="number" name="target_words" min="30" max="600" step="1" value="{{ values.target_words }}"
+      {% if errors.target_words %}aria-invalid="true"{% endif %}>
+    {{ field_error("target_words") }}
+  </label>
+
+  <h2>Modell und Kosten</h2>
+  <label>Modell (Preise in USD)
+    <select name="model" {% if errors.model %}aria-invalid="true"{% endif %}>
+      {% for key, label in model_options %}
+      <option value="{{ key }}" {% if values.model == key %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    {{ field_error("model") }}
+  </label>
+  <label>Effort
+    <select name="effort" {% if errors.effort %}aria-invalid="true"{% endif %}>
+      {% for key, label in effort_options %}
+      <option value="{{ key }}" {% if values.effort == key %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    {{ field_error("effort") }}
+  </label>
+  <label>Monatsbudget in USD (0 = kein Limit)
+    <input type="text" inputmode="decimal" name="monthly_budget_usd" value="{{ values.monthly_budget_usd }}"
+      {% if errors.monthly_budget_usd %}aria-invalid="true"{% endif %}>
+    {{ field_error("monthly_budget_usd") }}
+  </label>
+  <label>
+    <input type="checkbox" name="send_image" value="1" {% if values.send_image|as_bool %}checked{% endif %}>
+    Bild des Inserats an Claude mitschicken
+  </label>
+
+  <h2>Telegram</h2>
+  <label>Verzögerung nach Fredys Nachricht (Sekunden, 0–60)
+    <input type="number" name="followup_delay_s" min="0" max="60" step="1" value="{{ values.followup_delay_s }}"
+      {% if errors.followup_delay_s %}aria-invalid="true"{% endif %}>
+    {{ field_error("followup_delay_s") }}
+  </label>
+  <label>
+    <input type="checkbox" name="paused" value="1" {% if values.paused|as_bool %}checked{% endif %}>
+    Pause (der Bot meldet sich nicht zu neuen Inseraten)
+  </label>
+
+  <h2>System-Prompt</h2>
+  <details {% if errors.system_prompt %}open{% endif %}>
+    <summary>Expertenfeld anzeigen</summary>
+    {{ textarea("system_prompt", "System-Prompt", "Grundanweisung an Claude", 18) }}
+  </details>
+
+  <button type="submit">Speichern</button>
+</form>
+
+{# Reset forms live outside the main form; the buttons above point here via form="…". #}
+{% for key in ["profile", "wishes", "style", "system_prompt"] %}
+<form id="reset-{{ key }}" method="post" action="/settings/reset/{{ key }}"></form>
+{% endfor %}
+
+<h2>Testen</h2>
+<form method="post" action="/settings/test" data-once>
+  <p class="muted">Erzeugt einen Entwurf für das neueste Inserat mit den <strong>gespeicherten</strong> Einstellungen –
+    ohne Telegram. Kostet wie ein normaler Entwurf.</p>
+  <button type="submit" class="secondary">Test-Entwurf erzeugen</button>
+</form>
+{% endblock %}

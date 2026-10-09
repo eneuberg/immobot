@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}{{ listing.title or "Inserat" }}{% endblock %}
+{% block content %}
+<p><a href="/">← Inserate</a></p>
+<h1>{{ listing.title or "(ohne Titel)" }}</h1>
+{% if error %}<article class="error" role="alert">{{ error }}</article>{% endif %}
+
+<div class="grid">
+  <div>
+    <table>
+      <tr><th>Adresse</th><td>{{ listing.address or "–" }}</td></tr>
+      <tr><th>Preis</th><td>{{ listing.price or "–" }}</td></tr>
+      <tr><th>Größe</th><td>{{ listing.size or "–" }}</td></tr>
+      <tr><th>Portal</th><td>{{ portal }}</td></tr>
+      <tr><th>Eingegangen</th><td>{{ listing.received_at|local_time }}</td></tr>
+      <tr><th>Status</th><td>{{ STATUSES.get(listing.status, listing.status) }}</td></tr>
+    </table>
+    <div class="actions">
+      {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button">Inserat öffnen ↗</a>{% endif %}
+      {% if fredy_url %}<a href="{{ fredy_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline">In Fredy öffnen ↗</a>{% endif %}
+    </div>
+  </div>
+  {% if image_url %}
+  <div><img class="listing" src="{{ image_url }}" alt="Bild zum Inserat" referrerpolicy="no-referrer" loading="lazy"></div>
+  {% endif %}
+</div>
+
+<h2>Beschreibung</h2>
+<p class="pre-wrap">{{ listing.description or "–" }}</p>
+
+<h2>Status</h2>
+<form method="post" action="/listing/{{ listing.id }}/status">
+  <fieldset role="group">
+    <select name="status" aria-label="Status">
+      {% for key, label in STATUSES.items() %}
+      <option value="{{ key }}" {% if key == listing.status %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">Status setzen</button>
+  </fieldset>
+</form>
+
+<h2 id="entwuerfe">Entwürfe ({{ drafts|length }})</h2>
+<form method="post" action="/listing/{{ listing.id }}/draft" data-once>
+  <button type="submit">Entwurf erzeugen</button>
+  <small class="muted">Ruft Claude auf (kostet ein paar Cent) und dauert einige Sekunden.</small>
+</form>
+
+{% for d in drafts %}
+<article id="d{{ d.id }}">
+  <header>
+    <strong>{{ d.kind_label }}</strong> · {{ d.created_at|local_time }}<br>
+    <small class="muted">{{ d.model_label }} · {{ d.input_tokens }} Tokens ein / {{ d.output_tokens }} aus · {{ d.cost_usd|usd }} (USD)</small>
+  </header>
+  {% if d.instruction %}<p><small class="muted">Anweisung:</small> <span class="pre-wrap">{{ d.instruction }}</span></p>{% endif %}
+  {% if d.hint %}<p><mark>Hinweis:</mark> <span class="pre-wrap">{{ d.hint }}</span></p>{% endif %}
+  <pre class="draft" id="draft-{{ d.id }}">{{ d.text }}</pre>
+  <button type="button" class="secondary outline" data-copy="draft-{{ d.id }}">Kopieren</button>
+</article>
+{% else %}
+<p>Noch keine Entwürfe.</p>
+{% endfor %}
+{% endblock %}

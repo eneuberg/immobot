@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Inserate{% endblock %}
+{% block content %}
+<h1>Inserate</h1>
+
+<article class="stats">
+  <div><small class="muted">Kosten {{ stats.month }} (USD)</small><strong>{{ stats.cost_month|usd }}</strong></div>
+  <div><small class="muted">Kosten gesamt (USD)</small><strong>{{ stats.cost_total|usd }}</strong></div>
+  <div><small class="muted">Inserate</small><strong>{{ stats.listings_total }}</strong></div>
+  <div><small class="muted">Entwürfe</small><strong>{{ stats.drafts_total }}</strong></div>
+</article>
+
+<p class="filters">
+  <a href="/" {% if not status_filter %}aria-current="page"{% endif %}>alle ({{ stats.listings_total }})</a>
+  {% for key, label in STATUSES.items() %}
+  <a href="/?status={{ key }}" {% if status_filter == key %}aria-current="page"{% endif %}>{{ label }} ({{ stats.by_status.get(key, 0) }})</a>
+  {% endfor %}
+</p>
+
+{% if listings %}
+<div class="overflow-auto">
+<table class="striped">
+  <thead>
+    <tr>
+      <th>Datum</th><th>Titel</th><th class="num">Preis</th><th class="num">Größe</th><th>Portal</th><th>Status</th>
+      <th class="num">Entwürfe</th><th class="num">Kosten (USD)</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for l in listings %}
+    <tr>
+      <td>{{ l.received_at|local_time }}</td>
+      <td>
+        <a href="/listing/{{ l.id }}">{{ l.title or "(ohne Titel)" }}</a>
+        {% if l.address %}<br><small class="muted">{{ l.address }}</small>{% endif %}
+      </td>
+      <td class="num">{{ l.price or "–" }}</td>
+      <td class="num">{{ l.size or "–" }}</td>
+      <td>{{ l.portal }}</td>
+      <td>{{ STATUSES.get(l.status, l.status) }}</td>
+      <td class="num">{{ l.draft_count }}</td>
+      <td class="num">{{ l.cost_usd|usd }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p>Keine Inserate{% if status_filter %} mit diesem Status{% endif %}.</p>
+{% endif %}
+<p><small class="muted">Kosten in USD; „ct“ = US-Cent.</small></p>
+{% endblock %}
