@@ -77,7 +77,7 @@ def test_security_headers(client):
     r = client.get("/login")
     assert r.headers["x-frame-options"] == "DENY"
     assert r.headers["x-content-type-options"] == "nosniff"
-    assert r.headers["referrer-policy"] == "no-referrer"
+    assert r.headers["referrer-policy"] == "same-origin"  # no-referrer makes browsers send Origin: null
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
 
 
@@ -383,3 +383,47 @@ def test_no_secret_in_any_response(client, fake_llm, monkeypatch):
         exposed = r.text + "\n".join(f"{k}: {v}" for k, v in r.headers.items())
         for secret in secrets:
             assert secret not in exposed, f"secret leaked in {r.request.method} {r.request.url}"
+
+
+def test_browser_style_origins_accepted_for_login(client):
+    # Real browsers send the page's own origin (or "null" under strict privacy settings) on form posts.
+    r = client.post("/login", data={"password": PASSWORD}, headers={"Origin": "http://testserver"})
+    assert r.status_code == 303
+    client.cookies.clear()
+    r = client.post("/login", data={"password": PASSWORD}, headers={"Origin": "null"})
+    assert r.status_code == 303
+
+
+def test_login_limit_is_per_client_ip(client):
+    for _ in range(web.LOGIN_MAX_FAILURES):  # TestClient's peer address is "testclient"
+        client.post("/login", data={"password": "wrong"})
+    assert client.post("/login", data={"password": PASSWORD}).status_code == 429
+    # A stranger's failures don't lock out a different client.
+    web._login_failures["testclient"] = web.deque()
+    web._login_failures["203.0.113.9"] = web.deque([web.time.monotonic()] * web.LOGIN_MAX_FAILURES)
+    assert client.post("/login", data={"password": PASSWORD}).status_code == 303
+
+
+def test_logout_revokes_copied_session_cookie(client):
+    login(client)
+    stolen = dict(client.cookies)
+    assert client.get("/").status_code == 200
+    client.post("/logout")
+    client.cookies.clear()
+    client.cookies.update(stolen)
+    r = client.get("/")
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+
+
+def test_unexpected_draft_error_shows_generic_message(client, monkeypatch):
+    login(client)
+    hook(client, {"jobId": "j", "provider": "immoscout", "listings": [{"id": "boom1", "title": "T"}]})
+    lid = db.list_listings()[0]["id"]
+
+    async def explode(*args, **kwargs):
+        raise RuntimeError("internal detail that must not be shown")
+
+    monkeypatch.setattr(llm, "create_and_store_draft", explode)
+    r = client.post(f"/listing/{lid}/draft")
+    assert r.status_code == 200
+    assert "Unerwarteter Fehler" in r.text and "internal detail" not in r.text

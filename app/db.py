@@ -12,7 +12,7 @@ Tables:
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .settings import DEFAULT_SETTINGS
 
@@ -142,6 +142,17 @@ def list_listings(status: str | None = None, limit: int = 300) -> list[dict]:
     params.append(limit)
     with connect() as conn:
         return [dict(r) for r in conn.execute(sql.format(where=where), params).fetchall()]
+
+
+def unannounced_listing_ids(hours: int = 24) -> list[int]:
+    """Recent 'new' listings that never got a Telegram follow-up (e.g. bot was down when Fredy posted them)."""
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id FROM listings WHERE status = 'new' AND tg_message_id IS NULL AND received_at >= ? ORDER BY id",
+            (since,),
+        ).fetchall()
+        return [r["id"] for r in rows]
 
 
 def set_listing_status(listing_id: int, status: str) -> None:

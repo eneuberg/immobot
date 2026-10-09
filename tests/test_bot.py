@@ -332,7 +332,9 @@ def test_gen_shows_generating_then_draft(tg, monkeypatch):
 
     assert query.answers == [None]
     assert calls == [(listing_id, "initial", None)]
-    assert tg.edits[0]["text"].endswith("⏳ schreibe Entwurf …") and tg.edits[0]["reply_markup"] is None
+    assert tg.edits[0]["text"].endswith("⏳ schreibe Entwurf …")
+    # buttons stay while generating, so the message is still usable if the final edit never happens
+    assert tg.edits[0]["reply_markup"].inline_keyboard[0][0].callback_data == f"gen:{listing_id}"
     final = tg.edits[-1]
     assert final["chat_id"] == CHAT and final["message_id"] == 555 and final["parse_mode"] == "HTML"
     assert "<pre>Guten Tag &lt;Frau Müller&gt;</pre>" in final["text"]
