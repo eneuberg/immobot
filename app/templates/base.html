@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}{% endblock %} · immobot</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css"
+        integrity="sha384-7P0NVe9LPDbUCAF+fH2R8Egwz1uqNH83Ns/bfJY0fN2XCDBMUI2S9gGzIOIRBKsA" crossorigin="anonymous">
+  <style>
+    nav form { margin: 0; }
+    nav button { padding: .3rem .8rem; margin: 0; }
+    .pre-wrap { white-space: pre-wrap; }
+    pre.draft { white-space: pre-wrap; padding: 1rem; }
+    .error { color: var(--pico-del-color); }
+    .success { color: var(--pico-ins-color); }
+    .muted { color: var(--pico-muted-color); }
+    .stats { display: flex; flex-wrap: wrap; gap: .5rem 2.5rem; }
+    .stats div { display: flex; flex-direction: column; }
+    .filters a { margin-right: 1rem; white-space: nowrap; }
+    .filters a[aria-current] { font-weight: bold; }
+    .actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+    .actions form { margin: 0; }
+    td.num, th.num { text-align: right; white-space: nowrap; }
+    img.listing { max-height: 22rem; object-fit: cover; border-radius: var(--pico-border-radius); }
+    .login { max-width: 24rem; margin: 4rem auto; }
+  </style>
+</head>
+<body>
+  {% block nav %}
+  <header class="container">
+    <nav>
+      <ul><li><strong>immobot</strong></li></ul>
+      <ul>
+        <li><a href="/" {% if active == "listings" %}aria-current="page"{% endif %}>Inserate</a></li>
+        <li><a href="/settings" {% if active == "settings" %}aria-current="page"{% endif %}>Einstellungen</a></li>
+        <li><a href="/status" {% if active == "status" %}aria-current="page"{% endif %}>Status</a></li>
+        <li><form method="post" action="/logout"><button type="submit" class="secondary outline">Logout</button></form></li>
+      </ul>
+    </nav>
+  </header>
+  {% endblock %}
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    // Copy buttons: <button data-copy="element-id">; confirm buttons: <button data-confirm="question">.
+    document.addEventListener("click", function (e) {
+      var ask = e.target.closest("[data-confirm]");
+      if (ask && !window.confirm(ask.dataset.confirm)) { e.preventDefault(); return; }
+      var btn = e.target.closest("[data-copy]");
+      if (!btn) return;
+      navigator.clipboard.writeText(document.getElementById(btn.dataset.copy).textContent).then(function () {
+        btn.textContent = "Kopiert ✓";
+        setTimeout(function () { btn.textContent = "Kopieren"; }, 1500);
+      });
+    });
+    // Forms with data-once (slow Claude calls): show a spinner and ignore double submits.
+    document.addEventListener("submit", function (e) {
+      var form = e.target;
+      if (!form.hasAttribute("data-once")) return;
+      if (form.dataset.sent) { e.preventDefault(); return; }
+      form.dataset.sent = "1";
+      if (e.submitter) e.submitter.setAttribute("aria-busy", "true");
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Login{% endblock %}
+{% block nav %}{% endblock %}
+{% block content %}
+<article class="login">
+  <h1>immobot</h1>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/login">
+    <label>Passwort
+      <input type="password" name="password" autocomplete="current-password" required autofocus>
+    </label>
+    <button type="submit">Anmelden</button>
+  </form>
+</article>
+{% endblock %}
