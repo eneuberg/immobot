@@ -51,10 +51,12 @@ CHECKBOX_SETTINGS = ["send_image", "paused"]
 TEXT_SETTING_LABELS = {"system_prompt": "System-Prompt", "profile": "Über mich", "wishes": "Wünsche", "style": "Schreibstil"}
 MAX_TEXT_CHARS = 20_000
 
+GENERIC_DRAFT_ERROR = "Unerwarteter Fehler beim Generieren – Details im Log."
+
 LOGIN_MAX_FAILURES = 5
 LOGIN_WINDOW_S = 300
 LOGIN_FAIL_DELAY_S = 1.0
-_login_failures: deque[float] = deque()  # monotonic timestamps of failed logins (global, single user)
+_login_failures: dict[str, deque[float]] = {}  # client IP -> monotonic timestamps of failed logins
 
 
 # --- helpers ------------------------------------------------------------------
@@ -116,7 +118,9 @@ CSP = (
 SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
+    # Not "no-referrer": with that, browsers send "Origin: null" on same-site form posts.
+    # External links/images opt out per element (rel=noreferrer / referrerpolicy=no-referrer).
+    "Referrer-Policy": "same-origin",
     "Content-Security-Policy": CSP,
     "Cache-Control": "no-store",  # every response is dynamic and most are behind login
 }
@@ -130,8 +134,18 @@ async def security_headers(request: Request, call_next):
     return response
 
 
+def _session_stamp(request: Request) -> str:
+    """Binds a session to the current password, session secret and logout generation.
+    Changing DASHBOARD_PASSWORD / SESSION_SECRET or logging out invalidates every existing cookie."""
+    config = request.app.state.config
+    generation = db.get_meta("session_generation") or "0"
+    message = f"{generation}:{config.dashboard_password}".encode("utf-8")
+    return hmac.new(config.session_secret.encode("utf-8"), message, "sha256").hexdigest()
+
+
 def is_logged_in(request: Request) -> bool:
-    return request.session.get("auth") is True
+    stamp = request.session.get("stamp")
+    return request.session.get("auth") is True and isinstance(stamp, str) and hmac.compare_digest(stamp, _session_stamp(request))
 
 
 async def require_login(request: Request) -> None:
@@ -142,7 +156,8 @@ async def require_login(request: Request) -> None:
 async def same_origin(request: Request) -> None:
     """Cheap CSRF backstop on top of SameSite=Strict: reject form posts from another site."""
     origin = request.headers.get("origin")
-    if origin is not None and urlsplit(origin).netloc != request.headers.get("host"):
+    # "null" (privacy settings, sandboxed contexts) can't carry our SameSite=Strict cookie cross-site anyway.
+    if origin not in (None, "null") and urlsplit(origin).netloc != request.headers.get("host"):
         raise HTTPException(status_code=403, detail="Anfrage von fremder Herkunft abgelehnt")
 
 
@@ -217,26 +232,39 @@ async def login_page(request: Request):
 
 @router.post("/login", dependencies=[Depends(same_origin)])
 async def login(request: Request, password: str = Form("")):
+    # Per client IP (Traefik sets X-Forwarded-For, uvicorn runs with --proxy-headers), so a stranger
+    # hammering the login can't lock the owner out.
+    client = request.client.host if request.client else "?"
     now = time.monotonic()
-    while _login_failures and _login_failures[0] < now - LOGIN_WINDOW_S:
-        _login_failures.popleft()
-    if len(_login_failures) >= LOGIN_MAX_FAILURES:
+    for ip in list(_login_failures):
+        attempts = _login_failures[ip]
+        while attempts and attempts[0] < now - LOGIN_WINDOW_S:
+            attempts.popleft()
+        if not attempts:
+            del _login_failures[ip]
+    attempts = _login_failures.get(client, deque())
+    if len(attempts) >= LOGIN_MAX_FAILURES:
         return render(request, "login.html", {"error": "Zu viele Versuche, bitte warten."}, status_code=429)
 
     expected = request.app.state.config.dashboard_password
     if not hmac.compare_digest(password.encode("utf-8"), expected.encode("utf-8")):
-        _login_failures.append(now)
-        log.warning("Failed dashboard login (%d in the last %d s)", len(_login_failures), LOGIN_WINDOW_S)
+        if len(_login_failures) < 10_000:  # bound memory
+            _login_failures.setdefault(client, deque()).append(now)
+        log.warning("Failed dashboard login from %s", client)
         await asyncio.sleep(LOGIN_FAIL_DELAY_S)
         return render(request, "login.html", {"error": "Falsches Passwort."}, status_code=401)
 
     request.session.clear()
     request.session["auth"] = True
+    request.session["stamp"] = _session_stamp(request)
     return RedirectResponse("/", status_code=303)
 
 
 @router.post("/logout", dependencies=[Depends(same_origin)])
 async def logout(request: Request):
+    # Single user: logging out ends every session, including copies of the cookie elsewhere.
+    generation = int(db.get_meta("session_generation") or "0") + 1
+    db.set_meta("session_generation", str(generation))
     request.session.clear()
     return RedirectResponse("/login", status_code=303)
 
@@ -306,8 +334,11 @@ async def listing_create_draft(request: Request, listing_id: int):
     kind = "regenerate" if db.latest_draft(listing_id) else "initial"
     try:
         draft = await llm.create_and_store_draft(listing_id, kind)
-    except llm.LLMError as exc:
-        context = _listing_context(_listing_or_404(listing_id), error=redact(request, str(exc)))
+    except Exception as exc:
+        message = str(exc) if isinstance(exc, llm.LLMError) else GENERIC_DRAFT_ERROR
+        if not isinstance(exc, llm.LLMError):
+            log.exception("Draft generation failed for listing %s", listing_id)
+        context = _listing_context(_listing_or_404(listing_id), error=redact(request, message))
         return render(request, "listing.html", context)
     anchor = f"d{draft['id']}" if isinstance(draft, dict) and draft.get("id") else "entwuerfe"
     return RedirectResponse(f"/listing/{listing_id}#{anchor}", status_code=303)
@@ -421,8 +452,11 @@ async def settings_test(request: Request):
         return _render_settings(request, db.get_settings(), error="Noch kein Inserat vorhanden – der Test braucht mindestens eins.")
     try:
         draft = await llm.create_and_store_draft(listing["id"], "test")
-    except llm.LLMError as exc:
-        return _render_settings(request, db.get_settings(), error=redact(request, str(exc)))
+    except Exception as exc:
+        message = str(exc) if isinstance(exc, llm.LLMError) else GENERIC_DRAFT_ERROR
+        if not isinstance(exc, llm.LLMError):
+            log.exception("Test draft failed")
+        return _render_settings(request, db.get_settings(), error=redact(request, message))
     return _render_settings(request, db.get_settings(), test={"listing": listing, "draft": _draft_view(draft)})
 
 

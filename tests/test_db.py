@@ -58,3 +58,12 @@ def test_config_does_not_repr_secrets():
     text = repr(load_config())
     for secret in TEST_SECRETS.values():
         assert secret not in text
+
+
+def test_unannounced_listing_ids(fresh_db):
+    waiting, _ = fresh_db.insert_listing(_listing("a"))
+    announced, _ = fresh_db.insert_listing(_listing("b"))
+    dismissed, _ = fresh_db.insert_listing(_listing("c"))
+    fresh_db.set_listing_tg_message(announced, 99)
+    fresh_db.set_listing_status(dismissed, "dismissed")
+    assert fresh_db.unannounced_listing_ids() == [waiting]

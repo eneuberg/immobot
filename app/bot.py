@@ -71,6 +71,7 @@ _token: str = ""  # kept only to scrub it from error messages
 _start_retry: asyncio.Task | None = None
 _tasks: set[asyncio.Task] = set()  # running announce tasks (strong refs so they aren't GC'd)
 _locks: dict[int, asyncio.Lock] = {}  # one per listing, so a double tap can't generate twice
+_announcing: set[int] = set()  # listings whose follow-up is being sent right now
 _state: dict[str, str | None] = {"last_update_at": None, "last_error": None}
 
 
@@ -284,7 +285,8 @@ def _lock(listing_id: int) -> asyncio.Lock:
 async def _generate(tg_bot, listing: dict, kind: str, instruction: str | None = None) -> None:
     """Show '⏳ schreibe …', generate a draft, show it. On failure restore the previous view plus a warning."""
     listing_id = listing["id"]
-    await _edit(tg_bot, listing, generating_text(listing), None)
+    # Keep the buttons while generating: if the final edit never happens (restart, network), the message stays usable.
+    await _edit(tg_bot, listing, generating_text(listing), current_view(listing)[1])
     try:
         draft = await llm.create_and_store_draft(listing_id, kind, instruction)
     except llm.LLMError as exc:  # includes BudgetExceeded; message is safe to show
@@ -298,7 +300,11 @@ async def _generate(tg_bot, listing: dict, kind: str, instruction: str | None = 
     fresh = db.get_listing(listing_id) or listing
     if fresh.get("status") == "new":
         db.set_listing_status(listing_id, "drafted")
-    await _edit(tg_bot, listing, *draft_view(fresh, draft))
+    try:
+        await _edit(tg_bot, listing, *draft_view(fresh, draft))
+    except TelegramError:  # the draft is paid for and stored – try once more before giving up
+        await asyncio.sleep(2)
+        await _edit(tg_bot, listing, *draft_view(fresh, draft))
 
 
 async def _ask_instruction(tg_bot, listing: dict) -> None:
@@ -386,14 +392,16 @@ async def announce(tg_bot, chat_id: int, listing_ids: list[int]) -> None:
         if index:
             await asyncio.sleep(SEND_GAP_S)
         listing = db.get_listing(listing_id)
-        if listing is None or listing.get("tg_message_id"):
-            continue  # unknown or already announced
+        if listing is None or listing.get("tg_message_id") or listing_id in _announcing:
+            continue  # unknown, already announced, or another task is on it
+        _announcing.add(listing_id)
         try:
             message = await _send(tg_bot, chat_id, *followup_view(listing))
+            db.set_listing_tg_message(listing_id, message.message_id)
         except TelegramError as exc:
             _record_error(exc)
-            continue
-        db.set_listing_tg_message(listing_id, message.message_id)
+        finally:
+            _announcing.discard(listing_id)
 
 
 def _task_done(task: asyncio.Task) -> None:
@@ -456,6 +464,10 @@ async def _try_start() -> bool:
         return False
     _app = app
     log.info("Telegram bot started (long polling)")
+    missed = db.unannounced_listing_ids()
+    if missed:  # listings that arrived while the bot was down or restarting
+        log.info("Catching up on %d listing(s) without follow-up", len(missed))
+        schedule_announce(missed)
     return True
 
 
