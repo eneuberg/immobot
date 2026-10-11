@@ -170,9 +170,9 @@ def draft_view(listing: dict, draft: dict, note: str | None = None) -> tuple[str
     top = header(listing)
     if draft.get("hint"):
         top += f"\n⚠️ {_esc(_shorten(draft['hint'], HINT_MAX))}"
-    model = draft.get("model") or ""
-    kind = draft.get("kind") or ""
-    meta = [KIND_LABELS.get(kind, kind), settings.MODELS.get(model, {}).get("label", model), settings.fmt_usd(draft.get("cost_usd"))]
+    provider, kind = draft.get("provider") or settings.DEFAULT_PROVIDER, draft.get("kind") or ""
+    meta = [KIND_LABELS.get(kind, kind), settings.model_label(provider, draft.get("model")), settings.provider_label(provider),
+            settings.draft_cost_text(draft)]
     bottom = f"\n<i>{_esc(' · '.join(part for part in meta if part))}</i>" + _note(note)
 
     body = draft.get("text") or "–"

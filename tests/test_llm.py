@@ -12,7 +12,12 @@ import pytest
 from PIL import Image
 
 from app import llm
-from app.settings import DEFAULT_MODEL, DEFAULT_SETTINGS, MODELS, cost_usd
+from app.settings import DEFAULT_MODEL, DEFAULT_SETTINGS, PRICES, PROVIDERS, cost
+
+
+def cost_usd(model, *tokens):
+    """Anthropic prices are in USD."""
+    return cost("anthropic", model, *tokens)
 from tests.conftest import TEST_SECRETS
 
 LISTING = {
@@ -77,7 +82,7 @@ class FakeClient:
 @pytest.fixture
 def fake_client(monkeypatch):
     client = FakeClient(fake_response())
-    monkeypatch.setattr(llm, "_get_client", lambda: client)
+    monkeypatch.setattr(llm, "_get_client", lambda provider: client)
     return client
 
 
@@ -233,24 +238,38 @@ def test_generate_draft_unknown_model_and_effort_use_defaults(fake_client):
 
 
 def test_generate_draft_without_api_key(fresh_vault, monkeypatch):
-    monkeypatch.setattr(llm, "_client", None)
+    monkeypatch.setattr(llm, "_clients", {})
     with pytest.raises(llm.LLMError, match="Kein Anthropic-API-Key hinterlegt – im Dashboard unter Zugänge eintragen."):
         asyncio.run(llm.generate_draft(LISTING, settings_with(), "initial"))
     with pytest.raises(llm.LLMError, match="Kein Anthropic-API-Key"):
-        asyncio.run(llm.check_api_key())
+        asyncio.run(llm.check_api_key("anthropic"))
+    fresh_vault.set("anthropic_api_key", "sk-ant-only-anthropic-is-set")  # the other provider's key doesn't help
+    with pytest.raises(llm.LLMError, match="Kein DeutschlandGPT-API-Key hinterlegt"):
+        asyncio.run(llm.generate_draft(LISTING, settings_with(provider="deutschlandgpt"), "initial"))
+
+
+def test_client_per_provider_with_base_url(fresh_vault, monkeypatch):
+    monkeypatch.setattr(llm, "_clients", {})
+    fresh_vault.set("anthropic_api_key", "sk-ant-anthropic-key-1234")
+    fresh_vault.set("deutschlandgpt_api_key", "dgpt-test-key-0123456789abcdef")
+    anthropic_client, dgpt_client = llm._get_client("anthropic"), llm._get_client("deutschlandgpt")
+    assert anthropic_client is not dgpt_client
+    assert str(anthropic_client.base_url).startswith("https://api.anthropic.com")
+    assert str(dgpt_client.base_url).rstrip("/") == "https://api.deutschlandgpt.de/anthropic"
+    assert dgpt_client.api_key == "dgpt-test-key-0123456789abcdef"
 
 
 def test_client_follows_the_vault_key(fresh_vault, monkeypatch):
-    monkeypatch.setattr(llm, "_client", None)
+    monkeypatch.setattr(llm, "_clients", {})
     fresh_vault.init(TEST_SECRETS["SESSION_SECRET"], {"anthropic_api_key": "sk-ant-from-env"})
-    first = llm._get_client()
+    first = llm._get_client("anthropic")
     assert first.api_key == "sk-ant-from-env"
-    assert llm._get_client() is first  # reused while the key is unchanged
+    assert llm._get_client("anthropic") is first  # reused while the key is unchanged
     fresh_vault.set("anthropic_api_key", "sk-ant-from-dashboard")
-    second = llm._get_client()
+    second = llm._get_client("anthropic")
     assert second is not first and second.api_key == "sk-ant-from-dashboard"
     fresh_vault.clear("anthropic_api_key")
-    assert llm._get_client().api_key == "sk-ant-from-env"
+    assert llm._get_client("anthropic").api_key == "sk-ant-from-env"
 
 
 def _status_error(cls, status):
@@ -268,7 +287,7 @@ def _status_error(cls, status):
 ])
 def test_sdk_errors_become_llm_errors(monkeypatch, error, message):
     client = FakeClient(error=error)
-    monkeypatch.setattr(llm, "_get_client", lambda: client)
+    monkeypatch.setattr(llm, "_get_client", lambda provider: client)
     with pytest.raises(llm.LLMError, match=message):
         asyncio.run(llm.generate_draft(LISTING, settings_with(), "initial"))
 
@@ -295,7 +314,7 @@ def test_request_through_real_sdk(monkeypatch):
     async def run():
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
             client = anthropic.AsyncAnthropic(api_key="sk-test", http_client=http_client, max_retries=0)
-            monkeypatch.setattr(llm, "_get_client", lambda: client)
+            monkeypatch.setattr(llm, "_get_client", lambda provider: client)
             return await llm.generate_draft(LISTING, settings_with(effort="low"), "initial")
 
     result = asyncio.run(run())
@@ -328,7 +347,7 @@ def test_haiku_request_through_real_sdk(monkeypatch):
     async def run():
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
             client = anthropic.AsyncAnthropic(api_key="sk-test", http_client=http_client, max_retries=0)
-            monkeypatch.setattr(llm, "_get_client", lambda: client)
+            monkeypatch.setattr(llm, "_get_client", lambda provider: client)
             return await llm.generate_draft(LISTING, settings_with(model="claude-haiku-5-5"), "initial")
 
     result = asyncio.run(run())
@@ -341,7 +360,7 @@ def test_haiku_request_through_real_sdk(monkeypatch):
 
 
 @pytest.mark.parametrize("status, message", [
-    (200, None), (401, "lehnt den API-Key ab"), (403, "lehnt den API-Key ab"), (500, "HTTP 500"),
+    (200, None), (401, "Anthropic-API-Key ungültig"), (403, "Anthropic-API-Key ungültig"), (500, "HTTP 500"),
 ])
 def test_check_api_key_lists_one_model(monkeypatch, status, message):
     seen = []
@@ -357,8 +376,8 @@ def test_check_api_key_lists_one_model(monkeypatch, status, message):
     async def run():
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
             client = anthropic.AsyncAnthropic(api_key="sk-ant-check", http_client=http_client, max_retries=0)
-            monkeypatch.setattr(llm, "_get_client", lambda: client)
-            return await llm.check_api_key()
+            monkeypatch.setattr(llm, "_get_client", lambda provider: client)
+            return await llm.check_api_key("anthropic")
 
     if message is None:
         assert asyncio.run(run()) == "Anthropic-API-Key funktioniert."
@@ -376,8 +395,8 @@ def test_check_api_key_connection_error(monkeypatch):
     async def run():
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
             client = anthropic.AsyncAnthropic(api_key="sk-ant-check", http_client=http_client, max_retries=0)
-            monkeypatch.setattr(llm, "_get_client", lambda: client)
-            return await llm.check_api_key()
+            monkeypatch.setattr(llm, "_get_client", lambda provider: client)
+            return await llm.check_api_key("anthropic")
 
     with pytest.raises(llm.LLMError, match="Keine Verbindung zu Anthropic"):
         asyncio.run(run())
@@ -559,9 +578,205 @@ def test_end_to_end_with_fake_client_does_not_log_profile(fresh_db, listing_id, 
     assert "GEHEIMPROFIL" in fake_client.beta.messages.calls[0]["system"]
     assert "GEHEIMPROFIL" not in caplog.text
     assert "Codewort {Linde}" not in caplog.text
-    assert f"draft listing={listing_id} kind=initial model=claude-opus-5-5" in caplog.text
+    assert f"draft listing={listing_id} kind=initial provider=anthropic model=claude-opus-5-5" in caplog.text
 
 
-def test_price_table_has_all_selectable_models():
-    assert DEFAULT_MODEL in MODELS
-    assert llm.FALLBACK_MODELS <= set(MODELS)
+def test_price_tables_cover_defaults_and_fallbacks():
+    for provider, info in PROVIDERS.items():
+        assert info["default_model"] in PRICES[provider]
+    assert DEFAULT_MODEL == PROVIDERS["anthropic"]["default_model"]
+    assert llm.FALLBACK_MODELS <= set(PRICES["anthropic"])
+
+
+# --- DeutschlandGPT -------------------------------------------------------------
+
+DGPT_SETTINGS = {"provider": "deutschlandgpt", "model": "claude-haiku-5.5", "effort": "medium", "eur_usd_rate": "1.20"}
+
+
+def dgpt_reply(text, model="claude-haiku-5.5", usage=None):
+    """A DeutschlandGPT response as seen live: thinking + text blocks, token usage without cost."""
+    return {
+        "id": "msg_dgpt", "type": "message", "role": "assistant", "model": model,
+        "content": [{"type": "thinking", "thinking": "", "signature": "x"}, {"type": "text", "text": text}],
+        "stop_reason": "end_turn", "stop_sequence": None,
+        "usage": usage or {"input_tokens": 2000, "output_tokens": 500, "cache_read_input_tokens": 0,
+                           "cache_creation_input_tokens": 0},
+    }
+
+
+def run_dgpt(monkeypatch, handler, settings_overrides=None):
+    async def run():
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
+            client = anthropic.AsyncAnthropic(api_key="dgpt-key", base_url=PROVIDERS["deutschlandgpt"]["base_url"],
+                                              http_client=http_client, max_retries=0)
+            monkeypatch.setattr(llm, "_get_client", lambda provider: client)
+            return await llm.generate_draft(LISTING, settings_with(**{**DGPT_SETTINGS, **(settings_overrides or {})}), "initial")
+
+    return asyncio.run(run())
+
+
+def test_deutschlandgpt_request_has_no_schema_betas_or_fallbacks(monkeypatch):
+    captured = {}
+
+    def handler(request):
+        captured["url"], captured["headers"] = str(request.url), request.headers
+        captured["body"] = json.loads(request.content)
+        return httpx2.Response(200, json=dgpt_reply("<<<ENTWURF>>>\nGuten Tag\n<<<HINWEIS>>>\nCodewort Linde"))
+
+    result = run_dgpt(monkeypatch, handler, {"model": "claude-opus-5.5"})
+    assert captured["url"] == "https://api.deutschlandgpt.de/anthropic/v1/messages"
+    assert "anthropic-beta" not in captured["headers"]
+    body = captured["body"]
+    assert body["model"] == "claude-opus-5.5" and "fallbacks" not in body
+    assert body["thinking"] == {"type": "adaptive"}
+    assert body["output_config"] == {"effort": "medium"}  # no "format": DeutschlandGPT ignores it on most models
+    assert body["system"].endswith("\n\n" + llm.DELIMITER_INSTRUCTION)
+    assert llm.DELIMITER_INSTRUCTION == ("Antworte exakt in diesem Format, ohne Zeichen davor oder danach:\n"
+                                         "<<<ENTWURF>>>\n(Nachrichtentext)\n<<<HINWEIS>>>\n(kurzer Hinweis oder leer)")
+    assert (result.text, result.hint, result.provider) == ("Guten Tag", "Codewort Linde", "deutschlandgpt")
+
+
+def test_deutschlandgpt_cost_in_eur_and_usd(monkeypatch):
+    usage = {"input_tokens": 1_000_000, "output_tokens": 100_000, "cache_read_input_tokens": 200_000,
+             "cache_creation_input_tokens": 10_000}
+    result = run_dgpt(monkeypatch, lambda r: httpx2.Response(200, json=dgpt_reply("<<<ENTWURF>>>\nHallo", usage=usage)))
+    expected_eur = 0.83 + 0.1 * 4.13 + 0.2 * 0.09 + 0.01 * 1.04  # claude-haiku-5.5, EUR per 1M tokens
+    assert result.currency == "EUR" and result.cost_native == pytest.approx(expected_eur)
+    assert result.cost_usd == pytest.approx(expected_eur * 1.20)  # eur_usd_rate from the settings
+    assert (result.input_tokens, result.cache_read_tokens, result.cache_write_tokens) == (1_000_000, 200_000, 10_000)
+
+
+def test_unknown_answering_model_is_priced_as_requested(monkeypatch):
+    reply = dgpt_reply("<<<ENTWURF>>>\nHallo", model="some-internal-name")
+    result = run_dgpt(monkeypatch, lambda r: httpx2.Response(200, json=reply), {"model": "claude-opus-5.5"})
+    assert result.model == "some-internal-name"
+    assert result.cost_native == pytest.approx((2000 * 6.60 + 500 * 33.00) / 1_000_000)
+
+
+def test_deutschlandgpt_markdown_answer_as_seen_live(monkeypatch):
+    """Haiku/Opus 5.5 on DeutschlandGPT ignored the schema and answered like this."""
+    text = "**draft**\n\nGuten Tag Frau Müller,\n\nich interessiere mich für die Wohnung.\n\n**hint**\n\nCodewort Linde nennen"
+    result = run_dgpt(monkeypatch, lambda r: httpx2.Response(200, json=dgpt_reply(text)))
+    assert result.text == "Guten Tag Frau Müller,\n\nich interessiere mich für die Wohnung."
+    assert result.hint == "Codewort Linde nennen"
+
+
+@pytest.mark.parametrize("text,draft,hint,how", [
+    ("<<<ENTWURF>>>\nGuten Tag,\nich …\n<<<HINWEIS>>>\nCodewort Linde", "Guten Tag,\nich …", "Codewort Linde", "delimiter"),
+    ("<<<ENTWURF>>>\nGuten Tag\n<<<HINWEIS>>>\n", "Guten Tag", None, "delimiter"),
+    ("<<<ENTWURF>>>\nGuten Tag\n<<<HINWEIS>>>\n(leer)", "Guten Tag", None, "delimiter"),
+    ("Vorspann\n<<<ENTWURF>>>\nGuten Tag", "Guten Tag", None, "delimiter"),
+    ('{"draft": "Hallo", "hint": "Codewort"}', "Hallo", "Codewort", "json"),
+    ('```json\n{"draft": "Hallo", "hint": ""}\n```', "Hallo", None, "json"),
+    ('Hier der Entwurf: {"draft": "Hallo {Name}", "hint": "x"} – fertig', "Hallo {Name}", "x", "json"),
+    ("**draft**\n\nGuten Tag,\nich …\n\n**hint**\n\nCodewort", "Guten Tag,\nich …", "Codewort", "markdown"),
+    ("**Entwurf:**\nGuten Tag\n**Hinweis:** keiner", "Guten Tag", None, "markdown"),
+    ("## Entwurf\nGuten Tag\n## Hinweis\nBitte Codewort nennen", "Guten Tag", "Bitte Codewort nennen", "markdown"),
+    ("draft: Guten Tag\nhint: -", "Guten Tag", None, "markdown"),
+    ("Guten Tag,\nEntwurf eines Mietvertrags liegt bei.", "Guten Tag,\nEntwurf eines Mietvertrags liegt bei.", None, "plain"),
+    ("Nur ein Text ohne Struktur.", "Nur ein Text ohne Struktur.", None, "plain"),
+    ('{"hint": "nur Hinweis"}', '{"hint": "nur Hinweis"}', None, "plain"),
+])
+def test_parse_reply_variants(text, draft, hint, how):
+    assert llm.parse_reply(text) == (draft, hint, how)
+
+
+@pytest.mark.parametrize("text", ["", "   \n "])
+def test_parse_reply_empty_is_the_only_error(text):
+    with pytest.raises(llm.LLMError, match="leeren Entwurf"):
+        llm.parse_reply(text)
+
+
+def test_deutschlandgpt_thinking_only_reply_is_empty_error(monkeypatch):
+    reply = dgpt_reply("")
+    reply["content"] = [{"type": "thinking", "thinking": "", "signature": "x"}]
+    with pytest.raises(llm.LLMError, match="leeren Entwurf"):
+        run_dgpt(monkeypatch, lambda r: httpx2.Response(200, json=reply))
+
+
+@pytest.mark.parametrize("status,message", [
+    (401, "DeutschlandGPT-API-Key ungültig"),
+    (403, "DeutschlandGPT-API-Key ungültig"),
+    (402, "DeutschlandGPT-Guthaben oder Key-Limit aufgebraucht – im DeutschlandGPT-Dashboard aufladen."),
+    (429, "DeutschlandGPT-Rate-Limit"),
+    (500, "DeutschlandGPT ist gerade überlastet"),
+    (400, r"DeutschlandGPT-Anfrage abgelehnt \(HTTP 400\)"),
+])
+def test_deutschlandgpt_errors_name_the_provider(monkeypatch, status, message):
+    handler = lambda r: httpx2.Response(status, json={"type": "error", "error": {"type": "x", "message": "nope"}})  # noqa: E731
+    with pytest.raises(llm.LLMError, match=message):
+        run_dgpt(monkeypatch, handler)
+
+
+def test_list_and_cache_models(fresh_db, monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        data = [{"id": i, "type": "model", "display_name": i, "created_at": "2026-01-01T00:00:00Z"}
+                for i in ["claude-sonnet-5.5", "claude-haiku-5.5", "gpt-9", "claude-opus-4.5"]]
+        return httpx2.Response(200, json={"data": data, "has_more": False, "first_id": "a", "last_id": "b"})
+
+    async def run():
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
+            client = anthropic.AsyncAnthropic(api_key="dgpt-key", base_url=PROVIDERS["deutschlandgpt"]["base_url"],
+                                              http_client=http_client, max_retries=0)
+            monkeypatch.setattr(llm, "_get_client", lambda provider: client)
+            return await llm.refresh_models("deutschlandgpt")
+
+    assert llm.cached_models("deutschlandgpt") is None
+    ids = asyncio.run(run())
+    assert ids == ["claude-sonnet-5.5", "claude-haiku-5.5", "gpt-9", "claude-opus-4.5"]
+    assert calls[0].startswith("https://api.deutschlandgpt.de/anthropic/v1/models")
+    cache = llm.cached_models("deutschlandgpt")
+    assert cache["models"] == ids and cache["error"] is None and cache["fetched_at"]
+    assert llm.cached_models("anthropic") is None  # per provider
+
+
+def test_failed_model_list_is_cached_with_reason(fresh_db, monkeypatch):
+    async def run():
+        handler = lambda r: httpx2.Response(402, json={"type": "error", "error": {"type": "x", "message": "no credit"}})  # noqa: E731
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
+            client = anthropic.AsyncAnthropic(api_key="k", http_client=http_client, max_retries=0)
+            monkeypatch.setattr(llm, "_get_client", lambda provider: client)
+            return await llm.refresh_models("deutschlandgpt")
+
+    with pytest.raises(llm.LLMError, match="Guthaben"):
+        asyncio.run(run())
+    cache = llm.cached_models("deutschlandgpt")
+    assert cache["models"] == [] and "Guthaben" in cache["error"]
+
+
+def test_unexpected_model_list_failure_is_cached_generically(fresh_db, monkeypatch):
+    async def boom(provider):
+        raise RuntimeError("weird payload with secret-ish content")
+
+    monkeypatch.setattr(llm, "list_models", boom)
+    with pytest.raises(llm.LLMError, match="Unerwarteter Fehler"):
+        asyncio.run(llm.refresh_models("anthropic"))
+    assert "weird" not in llm.cached_models("anthropic")["error"]
+
+
+def test_create_and_store_draft_records_provider_and_currency(fresh_db, listing_id, monkeypatch):
+    fresh_db.update_settings(DGPT_SETTINGS)
+
+    async def generate(listing, settings, kind, previous_text=None, instruction=None):
+        return llm.DraftResult(text="Hallo", hint=None, model="claude-haiku-5.5", input_tokens=10, output_tokens=5,
+                               cache_read_tokens=0, cache_write_tokens=0, cost_usd=0.024, provider="deutschlandgpt",
+                               currency="EUR", cost_native=0.02)
+
+    monkeypatch.setattr(llm, "generate_draft", generate)
+    row = asyncio.run(llm.create_and_store_draft(listing_id, "initial"))
+    assert (row["provider"], row["currency"]) == ("deutschlandgpt", "EUR")
+    assert row["cost_native"] == pytest.approx(0.02) and row["cost_usd"] == pytest.approx(0.024)
+    assert fresh_db.cost_this_month() == pytest.approx(0.024)  # budget and totals stay in USD
+
+
+def test_anthropic_fallbacks_for_all_four_models(fake_client):
+    for model in ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"]:
+        asyncio.run(llm.generate_draft(LISTING, settings_with(model=model), "initial"))
+    assert [c["model"] for c in fake_client.beta.messages.calls] == [
+        "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"]
+    asyncio.run(llm.generate_draft(LISTING, settings_with(model="claude-opus-4-8"), "initial"))
+    (call,) = fake_client.messages.calls  # no fallback beta for other models
+    assert call["output_config"]["format"]["type"] == "json_schema"

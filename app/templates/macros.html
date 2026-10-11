@@ -1,0 +1,8 @@
+{# Shared snippets. key_line(c): status of a secret credential from vault.credential_status() - the hint
+   (e.g. "sk-ant-…A1B2") and where it comes from, never the value. #}
+{% macro key_line(c) -%}
+{% if c.source == "dashboard" %}Key: <code>{{ c.hint }}</code> · gesetzt am {{ c.updated_at|local_time }}
+{%- elif c.source == "env" %}Key: <code>{{ c.hint }}</code> · aus Env-Variable
+{%- else %}<span class="error">kein Key hinterlegt</span>{% endif %}
+{%- if c.undecryptable %} · <span class="error">⚠ gespeicherter Key nicht entschlüsselbar – neu eintragen</span>{% endif %}
+{%- endmacro %}

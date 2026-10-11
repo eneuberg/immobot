@@ -1,14 +1,19 @@
 """Claude drafting: build the prompt, call the API, compute the cost and store the draft.
 
 create_and_store_draft() is the single entry point for the Telegram bot and the dashboard.
-The API key comes from vault.py (dashboard "Zugänge", else env) and is read on every call, so a new
-key works immediately without a restart.
+
+Two providers (settings.PROVIDERS), both through the Anthropic SDK:
+- Anthropic: structured outputs (JSON schema) and server-side refusal fallbacks.
+- DeutschlandGPT: its Anthropic-compatible endpoint. It ignores the JSON schema on most models, so the
+  system prompt asks for a delimiter format and parse_reply() reads that tolerantly. No betas there.
+API keys come from vault.py and are read on every call, so a new key works without a restart.
 """
 
 import base64
 import io
 import json
 import logging
+import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -19,17 +24,19 @@ from PIL import Image
 from . import db, vault
 from .portals import provider_label, safe_url
 from .settings import (
-    DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, DRAFT_KINDS, EFFORTS, MODELS, as_bool, as_float, as_int, cost_usd, fmt_usd,
+    DEFAULT_SYSTEM_PROMPT, DRAFT_KINDS, EFFORTS, PRICES, PROVIDERS, as_bool, as_float, as_int, cost, fmt_money, fmt_usd,
+    model_of, provider_of, to_usd,
 )
 
 log = logging.getLogger(__name__)
 
 MAX_TOKENS = 8000  # thinking + reply; a draft is a few hundred tokens
 DEFAULT_EFFORT = "low"
-# Server-side refusal fallback: on a policy decline the API re-runs the request on Anthropic's
-# recommended fallback model. Claude Haiku 5.5 has no server-side fallback.
+# Server-side refusal fallback (Anthropic only): on a policy decline the API re-runs the request on
+# Anthropic's recommended fallback model. Only these models support the "default" form.
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
-FALLBACK_MODELS = {"claude-opus-5-5", "claude-sonnet-5-5"}
+FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"}
+MODEL_LIST_MAX = 500
 
 # Kinds that rework the latest stored draft.
 VARIANT_KINDS = ("regenerate", "shorter", "formal", "custom")
@@ -54,9 +61,14 @@ DRAFT_SCHEMA = {
     "additionalProperties": False,
 }
 
-NO_API_KEY = "Kein Anthropic-API-Key hinterlegt – im Dashboard unter Zugänge eintragen."
+# For providers without structured outputs (DeutschlandGPT): appended to the system prompt.
+DRAFT_MARK, HINT_MARK = "<<<ENTWURF>>>", "<<<HINWEIS>>>"
+DELIMITER_INSTRUCTION = (
+    "Antworte exakt in diesem Format, ohne Zeichen davor oder danach:\n"
+    + DRAFT_MARK + "\n(Nachrichtentext)\n" + HINT_MARK + "\n(kurzer Hinweis oder leer)"
+)
 
-_client: anthropic.AsyncAnthropic | None = None  # created lazily for the current key, see _get_client()
+_clients: dict[str, anthropic.AsyncAnthropic] = {}  # provider -> client for its current key, see _get_client()
 
 
 class LLMError(Exception):
@@ -76,34 +88,108 @@ class DraftResult:
     output_tokens: int
     cache_read_tokens: int
     cache_write_tokens: int
-    cost_usd: float
+    cost_usd: float  # counts toward budget and totals
+    provider: str = "anthropic"
+    currency: str = "USD"
+    cost_native: float = 0.0  # what the provider bills, in `currency`
 
 
-def _get_client() -> anthropic.AsyncAnthropic:
-    """Client for the current API key; recreated when the key was changed in the dashboard."""
-    global _client
-    api_key = vault.get("anthropic_api_key")
+def no_key_message(provider: str) -> str:
+    return "Kein " + PROVIDERS[provider]["label"] + "-API-Key hinterlegt – im Dashboard unter Zugänge eintragen."
+
+
+def _get_client(provider: str) -> anthropic.AsyncAnthropic:
+    """Client for the provider's current API key; recreated when the key was changed in the dashboard."""
+    info = PROVIDERS[provider]
+    api_key = vault.get(info["credential"])
     if not api_key:
-        raise LLMError(NO_API_KEY)
-    if _client is None or _client.api_key != api_key:
+        raise LLMError(no_key_message(provider))
+    client = _clients.get(provider)
+    if client is None or client.api_key != api_key:
         # The old client (if any) is left to the garbage collector: a running request may still use it.
-        _client = anthropic.AsyncAnthropic(api_key=api_key, timeout=120.0, max_retries=2)
-    return _client
+        client = anthropic.AsyncAnthropic(api_key=api_key, base_url=info["base_url"], timeout=120.0, max_retries=2)
+        _clients[provider] = client
+    return client
 
 
-async def check_api_key() -> str:
+def _api_error(provider: str, exc: Exception, context: str) -> LLMError:
+    """Map an SDK exception to a short German message naming the provider (details go to the log only)."""
+    label = PROVIDERS[provider]["label"]
+    if isinstance(exc, anthropic.RateLimitError):
+        log.warning("%s rate limit (%s)", provider, context)
+        return LLMError(label + "-Rate-Limit erreicht – bitte in einer Minute nochmal versuchen.")
+    if isinstance(exc, anthropic.APIStatusError):
+        log.warning("%s API error %s (%s, request_id=%s): %s", provider, exc.status_code, context, exc.request_id, exc.message)
+        if exc.status_code in (401, 403):
+            return LLMError(label + "-API-Key ungültig oder ohne Berechtigung.")
+        if exc.status_code == 402:
+            return LLMError(label + "-Guthaben oder Key-Limit aufgebraucht – im " + label + "-Dashboard aufladen.")
+        if exc.status_code >= 500:
+            return LLMError(label + " ist gerade überlastet oder gestört (HTTP " + str(exc.status_code)
+                            + ") – bitte gleich nochmal versuchen.")
+        return LLMError(label + "-Anfrage abgelehnt (HTTP " + str(exc.status_code) + ") – Details im Log.")
+    if isinstance(exc, anthropic.APITimeoutError):
+        log.warning("%s timeout (%s)", provider, context)
+        return LLMError(label + " hat nicht rechtzeitig geantwortet – bitte nochmal versuchen.")
+    log.warning("%s connection error (%s)", provider, context)
+    return LLMError("Keine Verbindung zu " + label + " – bitte später nochmal versuchen.")
+
+
+async def check_api_key(provider: str) -> str:
     """Cheapest authenticated call (list one model). Returns a short German OK message, raises LLMError."""
-    client = _get_client().with_options(timeout=15.0, max_retries=0)
+    client = _get_client(provider).with_options(timeout=15.0, max_retries=0)
     try:
         await client.models.list(limit=1)
-    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
-        raise LLMError("Anthropic lehnt den API-Key ab (ungültig oder ohne Berechtigung).") from None
-    except anthropic.APIStatusError as exc:
-        log.warning("claude key check: HTTP %s (request_id=%s)", exc.status_code, exc.request_id)
-        raise LLMError("Anthropic antwortet mit HTTP " + str(exc.status_code) + " – bitte später nochmal testen.") from None
-    except anthropic.APIConnectionError:  # includes timeouts
-        raise LLMError("Keine Verbindung zu Anthropic.") from None
-    return "Anthropic-API-Key funktioniert."
+    except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
+        raise _api_error(provider, exc, "key check") from None
+    return PROVIDERS[provider]["label"] + "-API-Key funktioniert."
+
+
+async def list_models(provider: str) -> list[str]:
+    """All model ids the provider offers for this key (live). Raises LLMError."""
+    client = _get_client(provider).with_options(timeout=20.0, max_retries=1)
+    ids: list[str] = []
+    try:
+        async for model in client.models.list(limit=1000):
+            ids.append(model.id)
+            if len(ids) >= MODEL_LIST_MAX:
+                break
+    except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
+        raise _api_error(provider, exc, "model list") from None
+    return ids
+
+
+def _models_key(provider: str) -> str:
+    return "models_cache:" + provider
+
+
+async def refresh_models(provider: str) -> list[str]:
+    """Fetch the live model list and cache it in meta (also a failure, so the page can say why).
+    Raises LLMError after caching the failure."""
+    try:
+        ids = await list_models(provider)
+    except Exception as exc:
+        if isinstance(exc, LLMError):
+            message = str(exc)
+        else:  # e.g. an unexpected response shape; type only, the message might quote the response
+            log.warning("model list for %s failed: %s", provider, type(exc).__name__)
+            message = "Unerwarteter Fehler beim Laden der Modellliste – Details im Log."
+        db.set_meta(_models_key(provider), json.dumps({"fetched_at": db.now_iso(), "models": [], "error": message}))
+        raise LLMError(message) from None
+    db.set_meta(_models_key(provider), json.dumps({"fetched_at": db.now_iso(), "models": ids, "error": None}))
+    return ids
+
+
+def cached_models(provider: str) -> dict | None:
+    """{"fetched_at", "models", "error"} of the last fetch, or None if there was none (or it's unreadable)."""
+    raw = db.get_meta(_models_key(provider))
+    try:
+        data = json.loads(raw) if raw else None
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("models"), list):
+        return None
+    return data
 
 
 # --- prompt -----------------------------------------------------------------
@@ -233,9 +319,10 @@ def _shrink_to_jpeg(data: bytes) -> bytes:
 async def generate_draft(
     listing: dict, settings: dict, kind: str, previous_text: str | None = None, instruction: str | None = None
 ) -> DraftResult:
-    """Ask Claude for one draft. No database writes."""
-    client = _get_client()
-    model = settings.get("model") if settings.get("model") in MODELS else DEFAULT_MODEL
+    """Ask Claude (through the configured provider) for one draft. No database writes."""
+    provider = provider_of(settings)
+    client = _get_client(provider)
+    model = model_of(settings)
     effort = settings.get("effort") if settings.get("effort") in EFFORTS else DEFAULT_EFFORT
 
     content = []
@@ -245,40 +332,33 @@ async def generate_draft(
             content.append(image)
     content.append({"type": "text", "text": build_user_text(listing, kind, previous_text, instruction)})
 
+    structured = provider == "anthropic"  # DeutschlandGPT ignores output_config.format on most models
+    system = build_system_prompt(settings)
+    output_config: dict = {"effort": effort}
+    if structured:
+        output_config["format"] = {"type": "json_schema", "schema": DRAFT_SCHEMA}
+    else:
+        system += "\n\n" + DELIMITER_INSTRUCTION
     params = {
         "model": model,
         "max_tokens": MAX_TOKENS,
-        "system": build_system_prompt(settings),
+        "system": system,
         "messages": [{"role": "user", "content": content}],
         "thinking": {"type": "adaptive"},
-        "output_config": {"effort": effort, "format": {"type": "json_schema", "schema": DRAFT_SCHEMA}},
+        "output_config": output_config,
     }
     try:
-        if model in FALLBACK_MODELS:
+        if provider == "anthropic" and model in FALLBACK_MODELS:
             response = await client.beta.messages.create(**params, betas=[FALLBACK_BETA], fallbacks="default")
         else:
             response = await client.messages.create(**params)
-    except anthropic.RateLimitError:
-        log.warning("claude rate limit (model=%s)", model)
-        raise LLMError("Claude-Rate-Limit erreicht – bitte in einer Minute nochmal versuchen.")
-    except anthropic.APIStatusError as exc:
-        log.warning("claude API error %s (model=%s, request_id=%s): %s", exc.status_code, model, exc.request_id, exc.message)
-        if exc.status_code in (401, 403):
-            raise LLMError("Claude-API-Key ungültig oder ohne Berechtigung.")
-        if exc.status_code >= 500:
-            raise LLMError("Claude ist gerade überlastet – bitte gleich nochmal versuchen.")
-        raise LLMError("Claude-Anfrage abgelehnt (HTTP " + str(exc.status_code) + ") – Details im Log.")
-    except anthropic.APITimeoutError:
-        log.warning("claude timeout (model=%s)", model)
-        raise LLMError("Claude hat nicht rechtzeitig geantwortet – bitte nochmal versuchen.")
-    except anthropic.APIConnectionError:
-        log.warning("claude connection error (model=%s)", model)
-        raise LLMError("Keine Verbindung zu Claude – bitte später nochmal versuchen.")
+    except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
+        raise _api_error(provider, exc, "model=" + model) from None
 
-    return _to_result(response, model)
+    return _to_result(response, model, provider, as_float(settings.get("eur_usd_rate"), 1.10))
 
 
-def _to_result(response, requested_model: str) -> DraftResult:
+def _to_result(response, requested_model: str, provider: str = "anthropic", eur_usd_rate: float = 1.10) -> DraftResult:
     # Check stop_reason before reading content: a refusal has empty or partial content.
     if response.stop_reason == "refusal":
         category = getattr(getattr(response, "stop_details", None), "category", None)
@@ -288,24 +368,32 @@ def _to_result(response, requested_model: str) -> DraftResult:
         log.warning("claude hit max_tokens (model=%s)", response.model)
         raise LLMError("Die Antwort wurde abgeschnitten – bitte nochmal versuchen.")
 
-    text = "".join(block.text for block in response.content if block.type == "text")
-    try:
-        data = json.loads(text)
-        draft = data["draft"].strip()
-        hint = (data.get("hint") or "").strip() or None
-    except (ValueError, KeyError, TypeError, AttributeError):
-        log.warning("claude returned unparseable output (model=%s, stop_reason=%s)", response.model, response.stop_reason)
-        raise LLMError("Claude hat keine lesbare Antwort geliefert.")
-    if not draft:
-        raise LLMError("Claude hat einen leeren Entwurf geliefert.")
+    text = "".join(block.text for block in response.content if block.type == "text")  # thinking blocks ignored
+    if provider == "anthropic":  # structured outputs: exactly our JSON schema
+        try:
+            data = json.loads(text)
+            draft = data["draft"].strip()
+            hint = (data.get("hint") or "").strip() or None
+        except (ValueError, KeyError, TypeError, AttributeError):
+            log.warning("claude returned unparseable output (model=%s, stop_reason=%s)", response.model, response.stop_reason)
+            raise LLMError("Claude hat keine lesbare Antwort geliefert.")
+        if not draft:
+            raise LLMError("Claude hat einen leeren Entwurf geliefert.")
+    else:
+        draft, hint, how = parse_reply(text)
+        log.info("%s reply parsed as %s (model=%s)", provider, how, response.model)
 
-    # response.model is the model that actually answered (differs after a server-side fallback).
+    # response.model is the model that actually answered (differs after a server-side fallback). A name the
+    # price table doesn't know is priced as the requested model.
     model = response.model or requested_model
     usage = response.usage
     input_tokens = usage.input_tokens or 0
     output_tokens = usage.output_tokens or 0
     cache_read = getattr(usage, "cache_read_input_tokens", None) or 0
     cache_write = getattr(usage, "cache_creation_input_tokens", None) or 0
+    priced_as = model if model in PRICES[provider] else requested_model
+    currency = PROVIDERS[provider]["currency"]
+    native = cost(provider, priced_as, input_tokens, output_tokens, cache_read, cache_write)
     return DraftResult(
         text=draft,
         hint=hint,
@@ -314,8 +402,81 @@ def _to_result(response, requested_model: str) -> DraftResult:
         output_tokens=output_tokens,
         cache_read_tokens=cache_read,
         cache_write_tokens=cache_write,
-        cost_usd=cost_usd(model, input_tokens, output_tokens, cache_read, cache_write),
+        cost_usd=to_usd(native, currency, eur_usd_rate),
+        provider=provider,
+        currency=currency,
+        cost_native=native,
     )
+
+
+# --- tolerant reply parsing (providers without structured outputs) ------------
+
+_FENCED = re.compile(r"```[a-zA-Z]*[ \t]*\n?(.*?)```", re.S)
+_MD_LABEL = re.compile(  # "**draft**", "**Entwurf:**", "## Hinweis", "hint:" at the start of a line
+    r"^[ \t]*(?:#{1,6}[ \t]*(draft|entwurf|hint|hinweis)\b[ \t]*:?"
+    r"|\*\*[ \t]*(draft|entwurf|hint|hinweis)[ \t]*:?[ \t]*\*\*[ \t]*:?"
+    r"|(draft|entwurf|hint|hinweis)[ \t]*:)",
+    re.I | re.M,
+)
+_EMPTY_HINTS = {"", "leer", "-", "–", "keiner", "kein hinweis", "keine", "none", "n/a"}
+
+
+def _clean_hint(value: str | None) -> str | None:
+    value = _strip_fence((value or "").strip())
+    return None if value.strip("()[]. ").lower() in _EMPTY_HINTS else value
+
+
+def _strip_fence(value: str) -> str:
+    match = _FENCED.fullmatch(value.strip())
+    return match.group(1).strip() if match else value.strip()
+
+
+def _json_object(text: str) -> dict | None:
+    """The first JSON object in the text: inside a ``` fence, or from the first "{" to the last "}"."""
+    candidates = [m.group(1) for m in _FENCED.finditer(text)]
+    if "{" in text and "}" in text:
+        candidates.append(text[text.index("{"): text.rindex("}") + 1])
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
+
+
+def _markdown_sections(text: str) -> tuple[str | None, str | None]:
+    """Draft and hint from "**draft** ... **hint** ..." style answers (first section of each kind)."""
+    found: dict[str, str] = {}
+    matches = list(_MD_LABEL.finditer(text))
+    for index, match in enumerate(matches):
+        label = next(group for group in match.groups() if group).lower()
+        kind = "draft" if label in ("draft", "entwurf") else "hint"
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        found.setdefault(kind, text[match.end():end].strip())
+    return found.get("draft"), found.get("hint")
+
+
+def parse_reply(text: str) -> tuple[str, str | None, str]:
+    """(draft, hint, how) from a reply without structured outputs. Tries, in this order: our delimiter
+    format, a JSON object (also inside ``` fences or surrounded by text), markdown "**draft**"/"**hint**"
+    sections, and finally the whole text as the draft. Only an empty reply is an error."""
+    text = (text or "").strip()
+    if not text:
+        raise LLMError("Claude hat einen leeren Entwurf geliefert.")
+    if DRAFT_MARK in text:
+        draft, _, hint = text.split(DRAFT_MARK, 1)[1].partition(HINT_MARK)
+        if _strip_fence(draft):
+            return _strip_fence(draft), _clean_hint(hint), "delimiter"
+    data = _json_object(text)
+    if data is not None and isinstance(data.get("draft"), str) and data["draft"].strip():
+        return data["draft"].strip(), _clean_hint(str(data.get("hint") or "")), "json"
+    draft, hint = _markdown_sections(text)
+    if draft:
+        return _strip_fence(draft), _clean_hint(hint), "markdown"
+    plain = text.replace(DRAFT_MARK, "").replace(HINT_MARK, "").strip()
+    return plain or text, None, "plain"
 
 
 # --- entry point ------------------------------------------------------------
@@ -358,9 +519,13 @@ async def create_and_store_draft(listing_id: int, kind: str, instruction: str | 
         cache_read_tokens=result.cache_read_tokens,
         cache_write_tokens=result.cache_write_tokens,
         cost_usd=result.cost_usd,
+        provider=result.provider,
+        currency=result.currency,
+        cost_native=result.cost_native,
     )
-    log.info("draft listing=%s kind=%s model=%s tokens=%s/%s cost=%s",
-             listing_id, kind, result.model, result.input_tokens, result.output_tokens, fmt_usd(result.cost_usd))
+    log.info("draft listing=%s kind=%s provider=%s model=%s tokens=%s/%s cost=%s",
+             listing_id, kind, result.provider, result.model, result.input_tokens, result.output_tokens,
+             fmt_money(result.cost_native, result.currency))
 
     # Re-read the status: it may have changed (e.g. "sent") while Claude was writing.
     if kind != "test":

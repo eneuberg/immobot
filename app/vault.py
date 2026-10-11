@@ -6,8 +6,9 @@
 - Rotating SESSION_SECRET makes stored values undecryptable. They then count as unset (status() marks
   them `undecryptable`) and have to be entered again.
 - Lookup order: value saved in the dashboard, else the env variable (migration fallback), else None.
-- Values are never logged, never rendered and never returned to the browser; only names, labels and
-  sources leave this module through status().
+- Values are never logged, never rendered and never returned to the browser; only names, labels,
+  sources and a short hint such as "sk-ant-…A1B2" (to recognise which key is set) leave this module
+  through status().
 
 Also here: the Telegram chat pairing ("/pair CODE"). Only an HMAC-SHA256 of the code (keyed from
 SESSION_SECRET, so a copy of the database can't be used to brute-force the short code) and its expiry
@@ -33,12 +34,13 @@ log = logging.getLogger(__name__)
 
 LABELS = {
     "anthropic_api_key": "Anthropic-API-Key",
+    "deutschlandgpt_api_key": "DeutschlandGPT-API-Key",
     "telegram_bot_token": "Telegram-Bot-Token",
     "telegram_chat_id": "Telegram-Chat-ID",
     "telegram_allowed_user_ids": "Erlaubte Telegram-User-IDs",
     "fredy_webhook_token": "Fredy-Webhook-Token",
 }
-SECRET_NAMES = ("anthropic_api_key", "telegram_bot_token", "fredy_webhook_token")  # chat id and user ids are not secret
+SECRET_NAMES = ("anthropic_api_key", "deutschlandgpt_api_key", "telegram_bot_token", "fredy_webhook_token")  # the others aren't
 ACTION_LABELS = {  # credential_events.action -> German label
     "set": "gespeichert",
     "clear": "entfernt",
@@ -151,7 +153,23 @@ def validate(name: str, value: str) -> str:
         value = ",".join(dict.fromkeys(str(int(part)) for part in value.split(",")))  # normalized, no duplicates
     if name == "fredy_webhook_token" and len(value) < 32:
         raise InvalidValue("Mindestens 32 Zeichen – am einfachsten „Neu erzeugen“ verwenden.")
+    if name == "deutschlandgpt_api_key" and not 20 <= len(value) <= 200:
+        raise InvalidValue("Ein DeutschlandGPT-API-Key hat 20 bis 200 Zeichen.")
     return value
+
+
+def hint(name: str, value: str | None) -> str | None:
+    """A short display form of a secret, enough to recognise which key is set: "sk-ant-…A1B2",
+    "123456:…A1B2", "abcd…wxyz"; values under 16 characters only "…" + the last 2. None for non-secrets."""
+    if not value or name not in SECRET_NAMES:
+        return None
+    if len(value) < 16:
+        return "…" + value[-2:]
+    if name == "anthropic_api_key" and value.startswith("sk-ant-"):
+        return "sk-ant-…" + value[-4:]
+    if name == "telegram_bot_token" and ":" in value:
+        return value.partition(":")[0] + ":…" + value[-4:]
+    return value[:4] + "…" + value[-4:]
 
 
 def set(name: str, value: str) -> None:  # noqa: A001 - shadows the builtin inside this module; don't use set() below
@@ -159,7 +177,7 @@ def set(name: str, value: str) -> None:  # noqa: A001 - shadows the builtin insi
     value = validate(name, value)
     nonce = os.urandom(12)
     ciphertext = _cipher().encrypt(nonce, value.encode("utf-8"), name.encode("utf-8"))
-    db.put_credential(name, nonce, ciphertext)
+    db.put_credential(name, nonce, ciphertext, hint(name, value))
     _warned.discard(name)
 
 
@@ -170,16 +188,24 @@ def clear(name: str) -> None:
 
 
 def status() -> list[dict]:
-    """Per credential: name, label, source, updated_at, undecryptable. Never values."""
-    rows = []
-    for name, label in LABELS.items():
-        value, updated_at, undecryptable = _load(name)
-        if value is not None:
-            where = "dashboard"
-        else:
-            where = "env" if name in _env else None
-        rows.append({"name": name, "label": label, "source": where, "updated_at": updated_at, "undecryptable": undecryptable})
-    return rows
+    """Per credential: name, label, source, updated_at, undecryptable, hint. Never values."""
+    return [credential_status(name) for name in LABELS]
+
+
+def credential_status(name: str) -> dict:
+    """name, label, source ("dashboard" / "env" / None), updated_at, undecryptable and hint of one credential.
+    The hint belongs to the value in use; for an undecryptable value it is the one stored at save time."""
+    value, updated_at, undecryptable = _load(name)
+    if value is not None:
+        where, shown = "dashboard", hint(name, value)
+    elif name in _env:
+        where, shown = "env", hint(name, _env[name])
+    else:
+        where, shown = None, None
+    if undecryptable and shown is None:
+        shown = (db.get_credential(name) or {}).get("hint")
+    return {"name": name, "label": LABELS[name], "source": where, "updated_at": updated_at,
+            "undecryptable": undecryptable, "hint": shown}
 
 
 def secret_values() -> list[str]:

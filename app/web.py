@@ -372,11 +372,13 @@ def _listing_or_404(listing_id: int) -> dict:
 
 
 def _draft_view(draft: dict) -> dict:
-    kind, model = draft.get("kind"), draft.get("model")
+    kind, provider = draft.get("kind"), draft.get("provider") or settings.DEFAULT_PROVIDER
     return {
         **draft,
         "kind_label": DRAFT_KIND_LABELS.get(kind, kind or "?"),
-        "model_label": settings.MODELS.get(model, {}).get("label", model or "?"),
+        "model_label": settings.model_label(provider, draft.get("model")),
+        "provider_label": settings.provider_label(provider),
+        "cost_text": settings.draft_cost_text(draft),  # "2,1 ct (€) ≈ 2,3 ct ($)"
     }
 
 
@@ -439,10 +441,10 @@ async def listing_create_draft(request: Request, listing_id: int):
 
 # --- settings -------------------------------------------------------------------
 
-def validate_settings(form: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
+def validate_settings(form: dict[str, str], current: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
     """Form fields -> (values to store, German error messages per field). Unknown keys are ignored.
 
-    Fields missing from the form keep their stored value; absent checkboxes mean "off" ("0").
+    Fields missing from the form keep their stored value (`current`); absent checkboxes mean "off" ("0").
     """
     values: dict[str, str] = {}
     errors: dict[str, str] = {}
@@ -466,9 +468,19 @@ def validate_settings(form: dict[str, str]) -> tuple[dict[str, str], dict[str, s
                 errors[key] = f"Ganze Zahl von {low} bis {high}."
             values[key] = str(number) if number is not None else raw
 
-    if "model" in form:
-        values["model"] = form["model"]
-        if form["model"] not in settings.MODELS:
+    provider = form.get("provider", settings.provider_of(current))
+    if "provider" in form:
+        values["provider"] = provider
+        if provider not in settings.PROVIDERS:
+            errors["provider"] = "Unbekannter Anbieter."
+    if provider in settings.PROVIDERS:
+        model = form.get("model", current.get("model"))
+        if model in settings.PRICES[provider]:
+            values["model"] = model
+        elif provider != settings.provider_of(current):  # switched provider: its default model
+            values["model"] = settings.PROVIDERS[provider]["default_model"]
+        elif "model" in form:
+            values["model"] = form["model"]
             errors["model"] = "Unbekanntes Modell."
     if "effort" in form:
         values["effort"] = form["effort"]
@@ -487,16 +499,67 @@ def validate_settings(form: dict[str, str]) -> tuple[dict[str, str], dict[str, s
         else:
             values["monthly_budget_usd"] = f"{budget:.10g}"
 
+    if "eur_usd_rate" in form:
+        raw = form["eur_usd_rate"].strip()
+        try:
+            rate = float(raw.replace(",", "."))
+        except ValueError:
+            rate = None
+        if rate is None or not math.isfinite(rate) or not 0.1 <= rate <= 10:
+            errors["eur_usd_rate"] = "Zahl zwischen 0,1 und 10, z. B. 1,10."
+            values["eur_usd_rate"] = raw
+        else:
+            values["eur_usd_rate"] = f"{rate:.10g}"
+
     for key in CHECKBOX_SETTINGS:
         values[key] = "1" if form.get(key) else "0"
     return values, errors
 
 
+def _ai_status(current: dict) -> dict:
+    """The selected AI provider, its key status (hint only, never the value) and a warning without a key."""
+    provider = settings.provider_of(current)
+    info = settings.PROVIDERS[provider]
+    key = vault.credential_status(info["credential"])
+    return {
+        "provider": provider,
+        "label": info["label"],
+        "currency": info["currency"],
+        "model_label": settings.model_label(provider, settings.model_of(current)),
+        "key": key,
+        "no_key_warning": (f"Kein {info['label']}-API-Key hinterlegt – Entwürfe schlagen fehl. "
+                           "Unter Einstellungen → KI-Anbieter eintragen.") if key["source"] is None else None,
+    }
+
+
+def _model_choices(request: Request, current: dict) -> dict:
+    """Models to offer: those in the provider's live list (cached) that also have a price. Without a usable
+    live list, every priced model, marked as unchecked."""
+    provider, model = settings.provider_of(current), settings.model_of(current)
+    prices = settings.PRICES[provider]
+    sign = settings.CURRENCY_SIGNS[settings.PROVIDERS[provider]["currency"]]
+    cache = llm.cached_models(provider)
+    checked = bool(cache) and not cache.get("error")
+    live = cache["models"] if checked else []
+    ids = [m for m in prices if m in live] if checked else list(prices)
+    if model not in ids:
+        ids.append(model)  # keep the saved choice selectable
+    return {
+        "model_options": [
+            (m, f"{prices[m]['label']} – {_price(prices[m]['input'])} {sign} / {_price(prices[m]['output'])} {sign} "
+                "pro 1 Mio. Tokens (Input/Output)")
+            for m in ids
+        ],
+        "current_model": model,
+        "models_checked": checked,
+        "models_fetched_at": cache.get("fetched_at") if cache else None,
+        "models_error": redact(request, cache["error"]) if cache and cache.get("error") else None,
+        "unsupported_models": [m for m in live if m not in prices],
+    }
+
+
 def _render_settings(request: Request, values: dict, *, errors=None, message=None, error=None, test=None, status_code=200):
-    model_options = [
-        (key, f"{m['label']} – {_price(m['input'])} $ / {_price(m['output'])} $ pro MTok (Input/Output)")
-        for key, m in settings.MODELS.items()
-    ]
+    current = db.get_settings()
     return render(request, "settings.html", {
         "active": "settings",
         "values": values,
@@ -504,25 +567,83 @@ def _render_settings(request: Request, values: dict, *, errors=None, message=Non
         "message": message,
         "error": error,
         "test": test,
-        "model_options": model_options,
+        "ai": {**_ai_status(current), **_model_choices(request, current)},
+        "providers": [(key, p["label"]) for key, p in settings.PROVIDERS.items()],
         "effort_options": [(e, EFFORT_LABELS.get(e, e)) for e in settings.EFFORTS],
     }, status_code=status_code)
+
+
+SETTINGS_MESSAGES = {
+    "saved": "Gespeichert.",
+    "provider": "KI-Anbieter gewechselt.",
+    "key": "API-Key gespeichert.",
+    "models": "Modellliste neu geladen.",
+}
 
 
 @router.get("/settings", dependencies=PAGE)
 def settings_page(request: Request, saved: str | None = None, reset: str | None = None):
     message = None
     if saved:
-        message = "Gespeichert."
+        message = SETTINGS_MESSAGES.get(saved, SETTINGS_MESSAGES["saved"])
     elif reset in TEXT_SETTING_LABELS:
         message = f"„{TEXT_SETTING_LABELS[reset]}“ auf Standard zurückgesetzt."
     return _render_settings(request, db.get_settings(), message=message)
 
 
+async def _refresh_models_quietly(provider: str) -> None:
+    """Fetch the live model list; a failure is cached by llm.refresh_models and shown on /settings."""
+    try:
+        await llm.refresh_models(provider)
+    except llm.LLMError:
+        pass
+
+
+@router.post("/settings/provider", dependencies=ACTION)
+async def settings_provider(provider: str = Form("")):
+    """Switch the AI provider. Keeps the model if the new provider prices it, else uses its default model."""
+    if provider not in settings.PROVIDERS:
+        raise HTTPException(status_code=400, detail="Unbekannter Anbieter")
+    current = db.get_settings()
+    values = {"provider": provider}
+    if current.get("model") not in settings.PRICES[provider]:
+        values["model"] = settings.PROVIDERS[provider]["default_model"]
+    db.update_settings(values)
+    if vault.get(settings.PROVIDERS[provider]["credential"]) and llm.cached_models(provider) is None:
+        await _refresh_models_quietly(provider)
+    return RedirectResponse("/settings?saved=provider#ki", status_code=303)
+
+
+@router.post("/settings/provider-key", dependencies=ACTION)
+async def settings_provider_key(request: Request, value: str = Form(""), password: str = Form("")):
+    """Save the selected provider's API key (same rules as on /credentials), then load its model list."""
+    provider = settings.provider_of(db.get_settings())
+    name = settings.PROVIDERS[provider]["credential"]
+
+    def error_page(request: Request, *, error: str, status_code: int):
+        return _render_settings(request, db.get_settings(), error=error, status_code=status_code)
+
+    denied = await _step_up(request, password, error_page)
+    if denied is not None:
+        return denied
+    try:
+        await _change(request, name, "set", lambda: vault.set(name, value))
+    except vault.InvalidValue as exc:  # the message never contains the value
+        return error_page(request, error=f"{vault.LABELS[name]}: {exc}", status_code=400)
+    await _refresh_models_quietly(provider)
+    return RedirectResponse("/settings?saved=key#ki", status_code=303)
+
+
+@router.post("/settings/models/refresh", dependencies=ACTION)
+async def settings_models_refresh():
+    await _refresh_models_quietly(settings.provider_of(db.get_settings()))
+    return RedirectResponse("/settings?saved=models#ki", status_code=303)
+
+
 @router.post("/settings", dependencies=ACTION)
 async def settings_save(request: Request):
     form = {key: value for key, value in (await request.form()).items() if isinstance(value, str)}
-    values, errors = validate_settings(form)
+    values, errors = validate_settings(form, db.get_settings())
     if errors:
         shown = {**db.get_settings(), **values}  # keep the user's input in the form
         return _render_settings(request, shown, errors=errors, error="Nicht gespeichert, bitte Eingaben prüfen.", status_code=400)
@@ -557,13 +678,15 @@ async def settings_test(request: Request):
 
 CREDENTIAL_HELP = {
     "anthropic_api_key": "Von console.anthropic.com → API Keys, beginnt mit „sk-ant-“.",
+    "deutschlandgpt_api_key": "Aus dem DeutschlandGPT-Dashboard (API-Keys). Welcher Anbieter genutzt wird, steht unter Einstellungen.",
     "telegram_bot_token": "Derselbe Token wie in Fredys Telegram-Adapter (von @BotFather).",
     "telegram_chat_id": "Dieselbe Chat-ID wie in Fredys Telegram-Adapter – oder per Code verbinden (Bot muss laufen).",
     "telegram_allowed_user_ids": ("Wer im Chat Buttons drücken darf, kommagetrennt. Leer = jedes Mitglied des Chats. "
                                   "„Chat per Code verbinden“ trägt dich automatisch ein."),
     "fredy_webhook_token": "Mindestens 32 Zeichen. Am einfachsten „Neu erzeugen“ und in Fredys HTTP-Adapter eintragen.",
 }
-CONNECTION_TESTS = {"anthropic": "anthropic_api_key", "telegram": "telegram_bot_token"}  # test -> name in the audit log
+# test -> credential named in the audit log when it fails
+CONNECTION_TESTS = {"anthropic": "anthropic_api_key", "deutschlandgpt": "deutschlandgpt_api_key", "telegram": "telegram_bot_token"}
 EVENT_NAME_LABELS = {**vault.LABELS, "dashboard": "Dashboard-Login"}
 OPEN_CHAT_WARNING = "Jedes Mitglied des Chats kann Buttons drücken – Pairing erneut ausführen oder User-ID eintragen."
 LOCKED_CHAT_WARNING = ("Die Liste erlaubter Telegram-User ist nicht entschlüsselbar (SESSION_SECRET geändert?) – "
@@ -625,16 +748,18 @@ def _render_credentials(request: Request, *, message=None, error=None, new_token
     }, status_code=status_code)
 
 
-async def _step_up(request: Request, password: str):
-    """Re-check the dashboard password before a credential change. Returns an error page, or None if ok.
-    Wrong passwords count toward the login limit; once it is reached every attempt is refused."""
+async def _step_up(request: Request, password: str, error_page=None):
+    """Re-check the dashboard password before a credential change. Returns an error page (by default the
+    credentials page), or None if ok. Wrong passwords count toward the login limit; once it is reached
+    every attempt is refused."""
+    error_page = error_page or _render_credentials
     client = _client_ip(request)
     if _too_many_failures(client):
-        return _render_credentials(request, error="Zu viele Fehlversuche – bitte ein paar Minuten warten.", status_code=429)
+        return error_page(request, error="Zu viele Fehlversuche – bitte ein paar Minuten warten.", status_code=429)
     if not _password_ok(request, password):
         log.warning("Wrong dashboard password for a credential change from %s", client)
         await _count_failure(client)
-        return _render_credentials(request, error="Dashboard-Passwort falsch – nichts geändert.", status_code=403)
+        return error_page(request, error="Dashboard-Passwort falsch – nichts geändert.", status_code=403)
     return None
 
 
@@ -731,8 +856,8 @@ async def credentials_test(request: Request, target: str):
     if target not in CONNECTION_TESTS:
         raise HTTPException(status_code=404, detail="Unbekannter Test")
     try:
-        if target == "anthropic":
-            text = await llm.check_api_key()
+        if target in settings.PROVIDERS:
+            text = await llm.check_api_key(target)
         else:
             text = await bot.check_connection()
         result = {"ok": True, "text": text}
@@ -767,6 +892,7 @@ def status_page(request: Request):
         "bot_last_error": redact(request, str(last_error)) if last_error else None,
         # Names, sources and dates only - never any part of a secret.
         "credentials": vault.status(),
+        "ai": _ai_status(db.get_settings()),
         "events": _credential_events(),
         "version": settings.APP_VERSION,
         "stats": db.stats(),

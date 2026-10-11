@@ -20,6 +20,7 @@ DASHBOARD_SECRETS = {
     "telegram_bot_token": "987654:DASHBOARDtelegramSECRETxxxxxxxxxxxxxx",
     "telegram_chat_id": "-100555",  # not secret
     "fredy_webhook_token": "dashboard-webhook-SECRET-" + "w" * 32,
+    "deutschlandgpt_api_key": "dgpt-DASHBOARD-SECRET-0123456789abcdef",
 }
 
 # main.py may not register the middleware yet; it has to be added before the app first starts.
@@ -382,13 +383,16 @@ def test_status_page_bot_states_and_sources(client, monkeypatch):
     enable_bot(monkeypatch)
     vault.init(TEST_SECRETS["SESSION_SECRET"], {})  # nothing in env
     r = client.get("/status")
-    assert "nicht konfiguriert" in r.text and r.text.count("nicht gesetzt") == 5
+    assert "nicht konfiguriert" in r.text
+    assert r.text.count("nicht gesetzt") == 6 and "Kein Anthropic-API-Key hinterlegt" in r.text  # + AI warning
     save_credential(client, "anthropic_api_key", DASHBOARD_SECRETS["anthropic_api_key"])
     save_credential(client, "telegram_bot_token", DASHBOARD_SECRETS["telegram_bot_token"])
     monkeypatch.setattr(bot, "status", lambda: {"running": True, "last_update_at": None, "last_error": None})
     r = client.get("/status")
     assert "nicht konfiguriert" not in r.text and "noch kein Chat verbunden" in r.text
-    assert r.text.count("gesetzt (Dashboard)") == 2 and "gespeichert" in r.text  # audit log shown
+    assert "Key: <code>sk-ant-…-777</code> · gesetzt am" in r.text  # hint + date, never the value
+    assert "Key: <code>987654:…xxxx</code> · gesetzt am" in r.text
+    assert "gespeichert" in r.text  # audit log shown
 
 
 def test_no_secret_in_any_response(client, fake_llm, monkeypatch):
@@ -441,7 +445,7 @@ def test_no_secret_in_any_response(client, fake_llm, monkeypatch):
     async def leaky_telegram():
         raise bot.CheckFailed(f"kaputt {DASHBOARD_SECRETS['telegram_bot_token']} {TEST_SECRETS['TELEGRAM_BOT_TOKEN']}")
 
-    async def leaky_anthropic():
+    async def leaky_anthropic(provider):
         raise llm.LLMError(f"kaputt {DASHBOARD_SECRETS['anthropic_api_key']} {TEST_SECRETS['ANTHROPIC_API_KEY']}")
 
     monkeypatch.setattr(bot, "check_connection", leaky_telegram)
@@ -545,14 +549,14 @@ def test_credentials_page_shows_status_never_values(client):
     r = client.get("/credentials")
     assert "gesetzt über Dashboard am" in r.text
     value_inputs = re.findall(r"<input[^>]*name=\"value\"[^>]*>", r.text)
-    assert len(value_inputs) == 5
+    assert len(value_inputs) == 6
     for tag in value_inputs:
         assert " value=" not in tag  # never prefilled
         # No second password field: password managers would offer to save the API key as the site password.
         assert 'type="text"' in tag and 'autocomplete="off"' in tag and 'spellcheck="false"' in tag
-    assert sum('class="masked"' in tag for tag in value_inputs) == 3  # the secrets, masked by CSS
+    assert sum('class="masked"' in tag for tag in value_inputs) == 4  # the secrets, masked by CSS
     password_inputs = re.findall(r"<input[^>]*type=\"password\"[^>]*>", r.text)
-    assert len(password_inputs) == 5 and all('name="password"' in tag and "current-password" in tag for tag in password_inputs)
+    assert len(password_inputs) == 6 and all('name="password"' in tag and "current-password" in tag for tag in password_inputs)
     assert DASHBOARD_SECRETS["anthropic_api_key"] not in r.text
 
 
@@ -719,7 +723,7 @@ def test_webhook_unavailable_without_token(client):
 def test_connection_tests(client, monkeypatch):
     login(client)
 
-    async def anthropic_ok():
+    async def anthropic_ok(provider):
         return "Anthropic-API-Key funktioniert."
 
     async def telegram_fails():
@@ -738,7 +742,7 @@ def test_connection_tests(client, monkeypatch):
 def test_connection_test_unexpected_error_is_generic(client, monkeypatch, caplog):
     login(client)
 
-    async def explode():
+    async def explode(provider):
         raise RuntimeError(f"boom {TEST_SECRETS['ANTHROPIC_API_KEY']}")
 
     monkeypatch.setattr(llm, "check_api_key", explode)
@@ -1024,3 +1028,198 @@ def test_dockerfile_trusts_only_private_proxies():
     # The proxy appends the real client; a client-supplied X-Forwarded-For entry can't override it.
     assert trusted.get_trusted_client_address("6.6.6.6, 203.0.113.9")[0] == "203.0.113.9"
     assert "172.18.0.2" in trusted and "203.0.113.9" not in trusted
+
+
+# --- AI provider (Einstellungen → KI-Anbieter) ------------------------------------------
+
+DGPT_KEY = "dgpt_qz7Xv9Mk3Jw8Lp0r4Tn6Yb2WXYZ"  # no common words: every 6-character piece is distinctive
+
+
+@pytest.fixture
+def model_refreshes(monkeypatch):
+    """Record llm.refresh_models() calls instead of calling a provider."""
+    calls = []
+
+    async def refresh(provider):
+        calls.append(provider)
+        return []
+
+    monkeypatch.setattr(llm, "refresh_models", refresh)
+    return calls
+
+
+def cache_models(provider, models, error=None):
+    db.set_meta(f"models_cache:{provider}", json.dumps({"fetched_at": db.now_iso(), "models": models, "error": error}))
+
+
+def model_options(html):
+    select = re.search(r'<select name="model"[^>]*>(.*?)</select>', html, re.S).group(1)
+    return re.findall(r'<option value="([^"]+)"', select)
+
+
+def test_settings_shows_provider_section(client):
+    login(client)
+    r = client.get("/settings")
+    assert 'id="ki"' in r.text and "KI-Anbieter" in r.text
+    assert '<option value="anthropic" selected>Anthropic</option>' in r.text and ">DeutschlandGPT</option>" in r.text
+    assert "Key: <code>sk-ant-…1234</code> · aus Env-Variable" in r.text  # conftest's env key, as a hint only
+    assert "Key speichern &amp; Modelle laden" in r.text and "Modelle neu laden" in r.text
+    assert "Modellliste nicht geprüft" in r.text
+    assert model_options(r.text) == list(settings.PRICES["anthropic"])  # unchecked: every priced model
+    assert "Umrechnungskurs EUR→USD (ca.)" in r.text and 'name="eur_usd_rate" value="1.10"' in r.text
+
+
+def test_switch_provider_uses_its_default_model(client, model_refreshes):
+    login(client)
+    client.post("/settings", data=valid_settings(model="claude-haiku-5-5"))
+    r = client.post("/settings/provider", data={"provider": "deutschlandgpt"})
+    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=provider#ki"
+    stored = db.get_settings()
+    assert stored["provider"] == "deutschlandgpt" and stored["model"] == "claude-sonnet-5.5"
+    assert model_refreshes == []  # no DeutschlandGPT key yet: nothing to fetch
+    page = client.get("/settings?saved=provider").text
+    assert "KI-Anbieter gewechselt." in page and "Preise in EUR" in page
+    assert "Kein DeutschlandGPT-API-Key hinterlegt" in page
+    assert set(model_options(page)) == set(settings.PRICES["deutschlandgpt"])
+    assert "3,30 € / 16,50 € pro 1 Mio. Tokens" in page
+    client.post("/settings/provider", data={"provider": "anthropic"})
+    assert db.get_settings()["model"] == "claude-opus-5-5"
+    assert client.post("/settings/provider", data={"provider": "openai"}).status_code == 400
+
+
+def test_switch_provider_fetches_models_once_when_a_key_exists(client, model_refreshes):
+    login(client)
+    vault.set("deutschlandgpt_api_key", DGPT_KEY)
+    client.post("/settings/provider", data={"provider": "deutschlandgpt"})
+    assert model_refreshes == ["deutschlandgpt"]
+    cache_models("deutschlandgpt", ["claude-sonnet-5.5"])
+    cache_models("anthropic", ["claude-opus-5-5"])
+    client.post("/settings/provider", data={"provider": "anthropic"})
+    client.post("/settings/provider", data={"provider": "deutschlandgpt"})
+    assert model_refreshes == ["deutschlandgpt"]  # cached: "Modelle neu laden" refreshes on demand
+
+
+def test_settings_form_validates_model_per_provider(client):
+    login(client)
+    r = client.post("/settings", data=valid_settings(model="claude-sonnet-5.5"))  # a DeutschlandGPT id on Anthropic
+    assert r.status_code == 400 and "Unbekanntes Modell" in r.text
+    r = client.post("/settings", data=valid_settings(provider="deutschlandgpt", model="claude-haiku-5-5"))
+    assert r.status_code == 303  # provider changed in the same form: its default model
+    assert db.get_settings()["model"] == "claude-sonnet-5.5"
+    assert client.post("/settings", data=valid_settings(provider="deutschlandgpt", model="claude-opus-5.5")).status_code == 303
+    assert db.get_settings()["model"] == "claude-opus-5.5"
+    assert client.post("/settings", data=valid_settings(provider="bogus")).status_code == 400
+
+
+@pytest.mark.parametrize("rate,ok", [("1,10", True), ("0.95", True), ("0", False), ("abc", False), ("11", False)])
+def test_eur_usd_rate_validation(client, rate, ok):
+    login(client)
+    r = client.post("/settings", data=valid_settings(eur_usd_rate=rate))
+    assert (r.status_code == 303) is ok
+    if ok:
+        assert float(db.get_settings()["eur_usd_rate"]) == float(rate.replace(",", "."))
+
+
+def test_model_select_is_live_list_intersected_with_prices(client):
+    login(client)
+    client.post("/settings/provider", data={"provider": "deutschlandgpt"})
+    cache_models("deutschlandgpt", ["claude-sonnet-5.5", "claude-haiku-5.5", "gpt-9-turbo", "claude-opus-4.5", "mistral-x"])
+    page = client.get("/settings").text
+    assert model_options(page) == ["claude-sonnet-5.5", "claude-haiku-5.5"]
+    assert "Modellliste von DeutschlandGPT geladen am" in page and "nicht geprüft" not in page
+    assert "3 weitere Modelle verfügbar, aber nicht unterstützt (kein Preis hinterlegt)" in page
+    assert "gpt-9-turbo, claude-opus-4.5, mistral-x" in page
+    db.update_settings({"model": "claude-opus-4.8"})  # saved choice not in the live list: still selectable
+    assert model_options(client.get("/settings").text)[-1] == "claude-opus-4.8"
+
+
+def test_failed_model_list_shows_reason_and_all_priced_models(client):
+    login(client)
+    cache_models("anthropic", [], error="Anthropic-API-Key ungültig oder ohne Berechtigung.")
+    page = client.get("/settings").text
+    assert "Modellliste nicht geprüft: Anthropic-API-Key ungültig oder ohne Berechtigung." in page
+    assert model_options(page) == list(settings.PRICES["anthropic"])
+
+
+def test_save_provider_key_needs_step_up_and_loads_models(client, notices, model_refreshes):
+    login(client)
+    client.post("/settings/provider", data={"provider": "deutschlandgpt"})
+    r = client.post("/settings/provider-key", data={"value": DGPT_KEY, "password": "wrong"})
+    assert r.status_code == 403 and "Dashboard-Passwort falsch" in r.text and 'id="ki"' in r.text
+    assert vault.get("deutschlandgpt_api_key") is None and model_refreshes == []
+    r = client.post("/settings/provider-key", data={"value": "too short", "password": PASSWORD})
+    assert r.status_code == 400 and "DeutschlandGPT-API-Key:" in r.text
+    r = client.post("/settings/provider-key", data={"value": f"  {DGPT_KEY} ", "password": PASSWORD})
+    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=key#ki"
+    assert vault.get("deutschlandgpt_api_key") == DGPT_KEY and model_refreshes == ["deutschlandgpt"]
+    assert events() == [("deutschlandgpt_api_key", "set", "testclient")]  # same audit + notice as on /credentials
+    assert "DeutschlandGPT-API-Key – gespeichert" in notices[-1][0] and DGPT_KEY not in notices[-1][0]
+    page = client.get("/settings?saved=key").text
+    assert "API-Key gespeichert." in page and "Key: <code>dgpt…WXYZ</code> · gesetzt am" in page
+    assert "Kein DeutschlandGPT-API-Key" not in page
+
+
+def test_refresh_models_needs_login_but_no_step_up(client, model_refreshes):
+    assert client.post("/settings/models/refresh").headers["location"] == "/login"
+    login(client)
+    r = client.post("/settings/models/refresh")
+    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=models#ki"
+    assert model_refreshes == ["anthropic"]
+    assert client.post("/settings/models/refresh", headers={"Origin": "https://evil.example"}).status_code == 403
+
+
+def test_no_key_warning_on_settings_and_status(client):
+    login(client)
+    vault.init(TEST_SECRETS["SESSION_SECRET"], {})
+    for path in ["/settings", "/status"]:
+        assert "Kein Anthropic-API-Key hinterlegt – Entwürfe schlagen fehl." in client.get(path).text, path
+    vault.set("anthropic_api_key", DASHBOARD_SECRETS["anthropic_api_key"])
+    for path in ["/settings", "/status"]:
+        assert "Kein Anthropic-API-Key hinterlegt" not in client.get(path).text, path
+    db.update_settings({"provider": "deutschlandgpt"})
+    status = client.get("/status").text
+    assert "Kein DeutschlandGPT-API-Key hinterlegt" in status and "DeutschlandGPT · Claude Sonnet 5.5" in status
+
+
+def test_key_hint_is_the_only_part_of_a_key_that_appears(client):
+    login(client)
+    vault.set("deutschlandgpt_api_key", DGPT_KEY)
+    vault.set("anthropic_api_key", "sk-ant-api03-Hq8Zt5Rw2Nv7Kp4Xm9Jc6-A1B2")
+    db.update_settings({"provider": "deutschlandgpt"})
+    pages = [client.get(p).text for p in ["/credentials", "/settings", "/status"]]
+    for value in [DGPT_KEY, "sk-ant-api03-Hq8Zt5Rw2Nv7Kp4Xm9Jc6-A1B2"]:
+        hint = vault.hint("deutschlandgpt_api_key" if value == DGPT_KEY else "anthropic_api_key", value)
+        assert all(hint in page for page in pages[:1])  # /credentials lists every key with its hint
+        for page in pages:
+            for i in range(len(value) - 5):  # no 6-character piece of the value outside the hint
+                chunk = value[i:i + 6]
+                if chunk not in hint:
+                    assert chunk not in page, chunk
+    assert "Key: <code>dgpt…WXYZ</code>" in pages[1] and "Key: <code>dgpt…WXYZ</code>" in pages[2]
+
+
+def test_connection_test_for_deutschlandgpt(client, monkeypatch):
+    login(client)
+    seen = []
+
+    async def check(provider):
+        seen.append(provider)
+        raise llm.LLMError("DeutschlandGPT-Guthaben oder Key-Limit aufgebraucht – im DeutschlandGPT-Dashboard aufladen.")
+
+    monkeypatch.setattr(llm, "check_api_key", check)
+    r = client.post("/credentials/test/deutschlandgpt")
+    assert seen == ["deutschlandgpt"] and "✗ DeutschlandGPT-Guthaben" in r.text
+    assert events() == [("deutschlandgpt_api_key", "test_failed", "testclient")]
+    assert "DeutschlandGPT testen" in client.get("/credentials").text
+
+
+def test_listing_shows_provider_and_both_currencies(client):
+    login(client)
+    lid = add_listing()
+    db.add_draft(lid, "initial", "Hallo", "claude-sonnet-5.5", cost_usd=0.0231, provider="deutschlandgpt", currency="EUR",
+                 cost_native=0.021)
+    db.add_draft(lid, "shorter", "Kurz", "claude-opus-5-5", cost_usd=0.042)
+    page = client.get(f"/listing/{lid}").text
+    assert "Claude Sonnet 5.5 · DeutschlandGPT · " in page and "2,1 ct (€) ≈ 2,3 ct ($)" in page
+    assert "Claude Opus 5.5 · Anthropic · " in page and "4,2 ct ($)" in page
+    assert "6,5 ct" in client.get("/").text  # listing total in USD: 2,31 + 4,2 ct

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import key_line %}
 {% block title %}Einstellungen{% endblock %}
 
 {% macro field_error(key) %}{% if errors[key] %}<small class="error">{{ errors[key] }}</small>{% endif %}{% endmacro %}
@@ -22,8 +23,8 @@
 <article id="test">
   <header>
     <strong>Test-Entwurf</strong> für „{{ test.listing.title or "(ohne Titel)" }}“<br>
-    <small class="muted">{{ test.draft.model_label }} · {{ test.draft.input_tokens }} Tokens ein / {{ test.draft.output_tokens }} aus ·
-      Kosten {{ test.draft.cost_usd|usd }} (USD)</small>
+    <small class="muted">{{ test.draft.model_label }} · {{ test.draft.provider_label }} · {{ test.draft.input_tokens }} Tokens ein /
+      {{ test.draft.output_tokens }} aus · Kosten {{ test.draft.cost_text }}</small>
   </header>
   {% if test.draft.hint %}<p><mark>Hinweis:</mark> <span class="pre-wrap">{{ test.draft.hint }}</span></p>{% endif %}
   <pre class="draft" id="draft-test">{{ test.draft.text }}</pre>
@@ -31,7 +32,71 @@
 </article>
 {% endif %}
 
-<form method="post" action="/settings">
+<section id="ki">
+  <h2>KI-Anbieter</h2>
+  {% if ai.no_key_warning %}<article class="error" role="alert">⚠ {{ ai.no_key_warning }}</article>{% endif %}
+  <form method="post" action="/settings/provider">
+    <fieldset role="group">
+      <select name="provider" aria-label="KI-Anbieter">
+        {% for key, label in providers %}
+        <option value="{{ key }}" {% if key == ai.provider %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="secondary">Anbieter wechseln</button>
+    </fieldset>
+  </form>
+
+  <p>{{ ai.label }}-API-Key: {{ key_line(ai.key) }}</p>
+  <form method="post" action="/settings/provider-key">
+    <div class="grid">
+      <label>{{ "Neuer" if ai.key.source else "" }} {{ ai.label }}-API-Key
+        {# type=text + CSS mask: the step-up field must stay the only password field (see credentials.html). #}
+        <input type="text" name="value" class="masked" autocomplete="off" spellcheck="false" autocapitalize="off"
+          maxlength="500" data-1p-ignore data-lpignore="true" required>
+      </label>
+      <label>Dashboard-Passwort
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+    </div>
+    <button type="submit" data-once>Key speichern &amp; Modelle laden</button>
+  </form>
+
+  {# Model and effort belong to the main settings form below (form="settings-form"). #}
+  <label>Modell (Preise in {{ ai.currency }})
+    <select name="model" form="settings-form" {% if errors.model %}aria-invalid="true"{% endif %}>
+      {% for key, label in ai.model_options %}
+      <option value="{{ key }}" {% if key == ai.current_model %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    {{ field_error("model") }}
+  </label>
+  <p><small class="muted">
+    {% if ai.models_checked %}Modellliste von {{ ai.label }} geladen am {{ ai.models_fetched_at|local_time }}.
+    {% else %}Modellliste nicht geprüft{% if ai.models_error %}: {{ ai.models_error }}{% endif %} – angezeigt werden alle Modelle mit hinterlegtem Preis.
+    {% endif %}
+  </small></p>
+  {% if ai.unsupported_models %}
+  <details>
+    <summary><small>{{ ai.unsupported_models|length }} weitere Modelle verfügbar, aber nicht unterstützt (kein Preis hinterlegt)</small></summary>
+    <p><small class="muted">{{ ai.unsupported_models|join(", ") }}</small></p>
+  </details>
+  {% endif %}
+  <label>Effort
+    <select name="effort" form="settings-form" {% if errors.effort %}aria-invalid="true"{% endif %}>
+      {% for key, label in effort_options %}
+      <option value="{{ key }}" {% if values.effort == key %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    {{ field_error("effort") }}
+  </label>
+  <div class="actions">
+    <button type="submit" form="settings-form">Modell speichern</button>
+    <button type="submit" form="refresh-models" class="secondary outline">Modelle neu laden</button>
+  </div>
+</section>
+<form id="refresh-models" method="post" action="/settings/models/refresh" data-once></form>
+
+<form id="settings-form" method="post" action="/settings">
   <h2>Über mich</h2>
   {{ textarea("profile", "Über mich", "Person, Job/Einkommen, Haushalt, Haustiere/Raucher, Einzug, Umzugsgrund, Unterlagen, Kontakt/Signatur", 14) }}
 
@@ -46,27 +111,16 @@
     {{ field_error("target_words") }}
   </label>
 
-  <h2>Modell und Kosten</h2>
-  <label>Modell (Preise in USD)
-    <select name="model" {% if errors.model %}aria-invalid="true"{% endif %}>
-      {% for key, label in model_options %}
-      <option value="{{ key }}" {% if values.model == key %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-    {{ field_error("model") }}
-  </label>
-  <label>Effort
-    <select name="effort" {% if errors.effort %}aria-invalid="true"{% endif %}>
-      {% for key, label in effort_options %}
-      <option value="{{ key }}" {% if values.effort == key %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-    {{ field_error("effort") }}
-  </label>
+  <h2>Kosten</h2>
   <label>Monatsbudget in USD (0 = kein Limit)
     <input type="text" inputmode="decimal" name="monthly_budget_usd" value="{{ values.monthly_budget_usd }}"
       {% if errors.monthly_budget_usd %}aria-invalid="true"{% endif %}>
     {{ field_error("monthly_budget_usd") }}
+  </label>
+  <label>Umrechnungskurs EUR→USD (ca.) <small class="muted">– für Budget und Summen, die in USD geführt werden</small>
+    <input type="text" inputmode="decimal" name="eur_usd_rate" value="{{ values.eur_usd_rate }}"
+      {% if errors.eur_usd_rate %}aria-invalid="true"{% endif %}>
+    {{ field_error("eur_usd_rate") }}
   </label>
   <label>
     <input type="checkbox" name="send_image" value="1" {% if values.send_image|as_bool %}checked{% endif %}>

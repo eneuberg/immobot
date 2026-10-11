@@ -50,7 +50,8 @@
 <article id="d{{ d.id }}">
   <header>
     <strong>{{ d.kind_label }}</strong> · {{ d.created_at|local_time }}<br>
-    <small class="muted">{{ d.model_label }} · {{ d.input_tokens }} Tokens ein / {{ d.output_tokens }} aus · {{ d.cost_usd|usd }} (USD)</small>
+    <small class="muted">{{ d.model_label }} · {{ d.provider_label }} · {{ d.input_tokens }} Tokens ein / {{ d.output_tokens }} aus ·
+      {{ d.cost_text }}</small>
   </header>
   {% if d.instruction %}<p><small class="muted">Anweisung:</small> <span class="pre-wrap">{{ d.instruction }}</span></p>{% endif %}
   {% if d.hint %}<p><mark>Hinweis:</mark> <span class="pre-wrap">{{ d.hint }}</span></p>{% endif %}

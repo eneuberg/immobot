@@ -249,7 +249,8 @@ def test_config_needs_only_password_and_session_secret(monkeypatch):
     for name in CREDENTIAL_ENV + ["IMMOBOT_DISABLE_BOT"]:
         monkeypatch.delenv(name, raising=False)
     config = load_config()
-    assert config.env_credentials() == {name: "" for name in vault.LABELS}
+    assert set(config.env_credentials()) <= set(vault.LABELS)
+    assert all(value == "" for value in config.env_credentials().values())
     assert config.disable_bot is False
 
 
@@ -258,7 +259,7 @@ def test_config_env_fallbacks(monkeypatch):
     monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "1001, 2002")
     creds = load_config().env_credentials()
     assert creds["telegram_allowed_user_ids"] == "1001,2002"
-    assert set(creds) == set(vault.LABELS)
+    assert set(creds) <= set(vault.LABELS)  # no env fallback for the DeutschlandGPT key
     assert creds["anthropic_api_key"] == TEST_SECRETS["ANTHROPIC_API_KEY"]
     assert creds["fredy_webhook_token"] == TEST_SECRETS["FREDY_WEBHOOK_TOKEN"]
     assert creds["telegram_chat_id"] == "-100123"
@@ -284,3 +285,56 @@ def test_config_repr_hides_secrets():
     text = repr(load_config())
     for secret in TEST_SECRETS.values():
         assert secret not in text
+
+
+# --- key hints ----------------------------------------------------------------------
+
+@pytest.mark.parametrize("name,value,expected", [
+    ("anthropic_api_key", "sk-ant-api03-abcdefghijklmnopqrstuvwxyzA1B2", "sk-ant-…A1B2"),
+    ("telegram_bot_token", "123456789:AAbbCCddEEffGGhhIIjjKKllMMnnOOpp9Z8Y", "123456789:…9Z8Y"),
+    ("fredy_webhook_token", "abcdEFGHijklMNOPqrstUVWXyz012345", "abcd…2345"),
+    ("deutschlandgpt_api_key", "dgpt_live_0123456789abcdefWXYZ", "dgpt…WXYZ"),
+    ("fredy_webhook_token", "short-token-12", "…12"),  # under 16 characters: only the last 2
+    ("telegram_chat_id", "-100123", None),  # not a secret: no hint (the value is shown anyway)
+    ("anthropic_api_key", "", None),
+])
+def test_hint(name, value, expected):
+    assert vault.hint(name, value) == expected
+
+
+def test_hint_stored_at_save_and_computed_for_env(fresh_vault):
+    vault.init(SECRET, {"anthropic_api_key": "sk-ant-from-env-0000000000ENV1"})
+    rows = {r["name"]: r for r in vault.status()}
+    assert rows["anthropic_api_key"]["hint"] == "sk-ant-…ENV1" and rows["anthropic_api_key"]["source"] == "env"
+    vault.set("deutschlandgpt_api_key", "dgpt_live_0123456789abcdefWXYZ")
+    assert fresh_vault.db.get_credential("deutschlandgpt_api_key")["hint"] == "dgpt…WXYZ"
+    assert vault.credential_status("deutschlandgpt_api_key")["hint"] == "dgpt…WXYZ"
+    # After a SESSION_SECRET change the stored hint still says which key it was.
+    vault.init("rotated-session-secret-" + "z" * 40, {})
+    status = vault.credential_status("deutschlandgpt_api_key")
+    assert status["undecryptable"] and status["source"] is None and status["hint"] == "dgpt…WXYZ"
+
+
+def test_rows_without_stored_hint_get_one_from_the_value(fresh_vault):
+    """Credentials saved before hints existed (hint column NULL)."""
+    vault.set("fredy_webhook_token", "abcdEFGHijklMNOPqrstUVWXyz012345")
+    with fresh_vault.db.connect() as conn:
+        conn.execute("UPDATE credentials SET hint = NULL")
+    assert vault.credential_status("fredy_webhook_token")["hint"] == "abcd…2345"
+
+
+@pytest.mark.parametrize("value,ok", [
+    ("x" * 20, True), ("x" * 200, True), ("dgpt_live_0123456789abcdefWXYZ", True),
+    ("x" * 19, False), ("x" * 201, False), ("dgpt live 0123456789abcdef", False), ("", False),
+])
+def test_deutschlandgpt_key_validation(value, ok):
+    if ok:
+        assert vault.validate("deutschlandgpt_api_key", value) == value
+    else:
+        with pytest.raises(vault.InvalidValue):
+            vault.validate("deutschlandgpt_api_key", value)
+
+
+def test_deutschlandgpt_key_is_a_secret(fresh_vault):
+    vault.set("deutschlandgpt_api_key", "dgpt_live_0123456789abcdefWXYZ")
+    assert "dgpt_live_0123456789abcdefWXYZ" in vault.secret_values()

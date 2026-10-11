@@ -3,7 +3,7 @@ FastAPI threadpool and the Telegram bot's event loop.
 
 Tables:
   listings         one row per listing received from Fredy
-  drafts           every generated message, with model, tokens and cost
+  drafts           every generated message, with provider, model, tokens and cost (native currency + USD)
   settings         user-editable, non-secret settings (key/value strings)
   meta             internal state such as last_webhook_at and a pending Telegram pairing
   pending_prompts  Telegram "Anpassen" questions waiting for the user's reply
@@ -52,7 +52,10 @@ CREATE TABLE IF NOT EXISTS drafts (
     cache_read_tokens INTEGER NOT NULL DEFAULT 0,
     cache_write_tokens INTEGER NOT NULL DEFAULT 0,
     cost_usd REAL NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'anthropic',
+    currency TEXT NOT NULL DEFAULT 'USD',
+    cost_native REAL
 );
 CREATE INDEX IF NOT EXISTS idx_drafts_listing ON drafts(listing_id);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -66,7 +69,8 @@ CREATE TABLE IF NOT EXISTS credentials (
     name TEXT PRIMARY KEY,
     nonce BLOB NOT NULL,
     ciphertext BLOB NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    hint TEXT
 );
 CREATE TABLE IF NOT EXISTS credential_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,6 +81,17 @@ CREATE TABLE IF NOT EXISTS credential_events (
     detail TEXT
 );
 """
+
+# Columns added after the first deployment. CREATE TABLE IF NOT EXISTS doesn't touch existing tables,
+# so init_db adds whatever is missing. Old drafts thereby count as Anthropic / USD.
+ADDED_COLUMNS = {
+    "drafts": [
+        ("provider", "TEXT NOT NULL DEFAULT 'anthropic'"),
+        ("currency", "TEXT NOT NULL DEFAULT 'USD'"),
+        ("cost_native", "REAL"),
+    ],
+    "credentials": [("hint", "TEXT")],
+}
 
 LISTING_FIELDS = ["fredy_id", "job_id", "provider", "title", "price", "size", "address", "description", "image_url", "url", "fredy_url"]
 
@@ -92,6 +107,17 @@ def init_db(data_dir: str) -> None:
     with connect() as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
+        _add_missing_columns(conn)
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    """Idempotent migration for databases created by an older version."""
+    for table, columns in ADDED_COLUMNS.items():
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column, definition in columns:
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    conn.execute("UPDATE drafts SET cost_native = cost_usd WHERE cost_native IS NULL")  # old drafts were USD
 
 
 @contextmanager
@@ -196,14 +222,20 @@ def add_draft(
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
     cost_usd: float = 0.0,
+    provider: str = "anthropic",
+    currency: str = "USD",
+    cost_native: float | None = None,
 ) -> int:
+    """cost_usd counts toward budget and totals; cost_native is what the provider bills, in `currency`."""
     with connect() as conn:
         cur = conn.execute(
             """INSERT INTO drafts (listing_id, kind, instruction, text, hint, model, input_tokens, output_tokens,
-                                   cache_read_tokens, cache_write_tokens, cost_usd, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   cache_read_tokens, cache_write_tokens, cost_usd, created_at,
+                                   provider, currency, cost_native)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (listing_id, kind, instruction, text, hint, model, input_tokens, output_tokens,
-             cache_read_tokens, cache_write_tokens, cost_usd, now_iso()),
+             cache_read_tokens, cache_write_tokens, cost_usd, now_iso(),
+             provider, currency, cost_usd if cost_native is None else cost_native),
         )
         return cur.lastrowid
 
@@ -315,13 +347,14 @@ def get_credential(name: str) -> dict | None:
         return _row(conn.execute("SELECT * FROM credentials WHERE name = ?", (name,)).fetchone())
 
 
-def put_credential(name: str, nonce: bytes, ciphertext: bytes) -> None:
+def put_credential(name: str, nonce: bytes, ciphertext: bytes, hint: str | None = None) -> None:
+    """`hint` is a short display form such as "sk-ant-…A1B2" (never the value)."""
     with connect() as conn:
         conn.execute(
-            """INSERT INTO credentials (name, nonce, ciphertext, updated_at) VALUES (?, ?, ?, ?)
+            """INSERT INTO credentials (name, nonce, ciphertext, updated_at, hint) VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(name) DO UPDATE SET nonce = excluded.nonce, ciphertext = excluded.ciphertext,
-                                              updated_at = excluded.updated_at""",
-            (name, nonce, ciphertext, now_iso()),
+                                              updated_at = excluded.updated_at, hint = excluded.hint""",
+            (name, nonce, ciphertext, now_iso(), hint),
         )
 
 

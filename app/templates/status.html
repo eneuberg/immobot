@@ -1,9 +1,14 @@
 {% extends "base.html" %}
+{% from "macros.html" import key_line %}
 {% block title %}Status{% endblock %}
 {% block content %}
 <h1>Status</h1>
 
+{% if ai.no_key_warning %}<article class="error" role="alert">⚠ {{ ai.no_key_warning }}</article>{% endif %}
+
 <table>
+  <tr><th>KI-Anbieter</th><td>{{ ai.label }} · {{ ai.model_label }} · <a href="/settings#ki">ändern</a></td></tr>
+  <tr><th>{{ ai.label }}-API-Key</th><td>{{ key_line(ai.key) }}</td></tr>
   <tr><th>Letzter Webhook von Fredy</th><td>{{ last_webhook_at|local_time }}</td></tr>
   <tr>
     <th>Telegram-Bot</th>
@@ -32,10 +37,13 @@
   <tr>
     <th>{{ c.label }}</th>
     <td>
-      {% if c.source == "dashboard" %}gesetzt (Dashboard)
-      {% elif c.source == "env" %}gesetzt (Env-Variable)
-      {% else %}<span class="error">nicht gesetzt</span>{% endif %}
-      {% if c.undecryptable %} · <span class="error">⚠ nicht entschlüsselbar</span>{% endif %}
+      {% if c.hint %}{{ key_line(c) }}
+      {% else %}
+        {% if c.source == "dashboard" %}gesetzt (Dashboard)
+        {% elif c.source == "env" %}gesetzt (Env-Variable)
+        {% else %}<span class="error">nicht gesetzt</span>{% endif %}
+        {% if c.undecryptable %} · <span class="error">⚠ nicht entschlüsselbar</span>{% endif %}
+      {% endif %}
     </td>
   </tr>
   {% endfor %}

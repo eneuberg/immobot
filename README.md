@@ -3,7 +3,8 @@
 Kleiner Begleitdienst zu [Fredy](https://github.com/orangecoding/fredy). Unter jedes Fredy-Inserat in Telegram setzt immobot eine
 Nachricht mit **✍️ Anschreiben** / **❌ Uninteressant**. Auf Knopfdruck schreibt Claude einen Anschreiben-Entwurf, mit
 **Neu / Kürzer / Förmlicher / Anpassen**. Ein Dashboard (mit Passwort) zeigt Inserate, alle Entwürfe und die API-Kosten
-und enthält Profil, System-Prompt, Modell, Budget und die Zugänge (API-Key, Bot-Token, Chat-ID, Webhook-Token).
+und enthält Profil, System-Prompt, KI-Anbieter (Anthropic oder DeutschlandGPT), Modell, Budget und die Zugänge (API-Keys,
+Bot-Token, Chat-ID, Webhook-Token).
 
 Gesendet wird **nie automatisch**. Du kopierst den Entwurf und schickst ihn im Portal selbst ab.
 
@@ -28,7 +29,8 @@ Fredy ──Telegram-Adapter──▶ Telegram  (Inserat wie bisher)
 
    | Zugang | Wert |
    |---|---|
-   | Anthropic-API-Key | von console.anthropic.com (`sk-ant-…`) |
+   | Anthropic-API-Key | von console.anthropic.com (`sk-ant-…`) – oder stattdessen: |
+   | DeutschlandGPT-API-Key | aus dem DeutschlandGPT-Dashboard; Anbieter unter Einstellungen → KI-Anbieter wählen |
    | Telegram-Bot-Token | **derselbe** Token wie in Fredys Telegram-Adapter |
    | Telegram-Chat-ID | **dieselbe** Chat-ID wie in Fredys Telegram-Adapter – oder per Code verbinden (siehe unten) |
    | Erlaubte Telegram-User-IDs | wer im Chat Buttons drücken darf (kommagetrennt); trägt das Pairing automatisch ein |
@@ -66,6 +68,30 @@ abgeleitet. Wird `SESSION_SECRET` geändert, sind alle im Dashboard gespeicherte
 (Zugänge zeigt „⚠ nicht entschlüsselbar – neu eintragen“) und müssen neu eingetragen werden. Außerdem werden alle Sessions
 ungültig.
 
+## KI-Anbieter: Anthropic oder DeutschlandGPT
+
+Unter **Einstellungen → KI-Anbieter** wählst du, wer die Entwürfe schreibt:
+
+- **Anthropic** (Abrechnung in USD): direkt über die Claude API, mit Structured Outputs (JSON-Schema) und dem
+  serverseitigen Refusal-Fallback (Opus 5.5, Opus 5, Sonnet 5.5, Fable 5.1).
+- **DeutschlandGPT** (Abrechnung in EUR, netto): über dessen Anthropic-kompatiblen Endpunkt
+  `https://api.deutschlandgpt.de/anthropic`. Dort wird das JSON-Schema von den meisten Modellen ignoriert. immobot bittet
+  deshalb im System-Prompt um ein festes Format (`<<<ENTWURF>>>` / `<<<HINWEIS>>>`) und liest die Antwort tolerant: zuerst
+  dieses Format, dann JSON, dann Markdown („**draft**“ …), zuletzt den ganzen Text als Entwurf. Fehlerhaft ist nur eine leere
+  Antwort.
+
+Im selben Abschnitt: den Key des gewählten Anbieters setzen oder ersetzen („Key speichern & Modelle laden“, mit
+Dashboard-Passwort, wie unter Zugänge) und das Modell wählen. Angeboten werden die Modelle, die der Anbieter für deinen Key
+live auflistet **und** für die immobot einen Preis kennt. Die Preistabellen stehen fest in `app/settings.py` (Anthropic:
+Listenpreise, DeutschlandGPT: Preise laut API, Stand 2026-10-12). Weitere Modelle des Anbieters werden nur als „verfügbar,
+aber nicht unterstützt“ aufgeführt. Konnte die Liste nicht geladen werden, zeigt die Seite alle Modelle mit Preis und
+„Modellliste nicht geprüft“. „Modelle neu laden“ holt die Liste erneut. Beim Anbieterwechsel wird das Standardmodell des
+neuen Anbieters gewählt, falls das bisherige dort nicht existiert (Anthropic: Opus 5.5, DeutschlandGPT: Sonnet 5.5).
+
+Kosten: Jeder Entwurf speichert Anbieter, Modell, Tokens und die Kosten in der Währung des Anbieters. Budget und Summen
+bleiben in USD; Euro-Beträge werden mit dem „Umrechnungskurs EUR→USD (ca.)“ (Standard 1,10) umgerechnet. Pro Entwurf steht
+z. B. „Claude Sonnet 5.5 · DeutschlandGPT · 2,1 ct (€) ≈ 2,3 ct ($)“, im Telegram-Entwurf ebenso.
+
 ## Fredy verbinden
 
 Im Fredy-Job unter *Notification Adapter* **zusätzlich** zum Telegram-Adapter den **HTTP**-Adapter hinzufügen:
@@ -82,8 +108,12 @@ Nur immobot darf Updates abholen.
 ## Sicherheit
 
 - Env-Variablen sind nur noch `DASHBOARD_PASSWORD` und `SESSION_SECRET`.
-- API-Key und Tokens werden unter Zugänge eingetragen und nur verschlüsselt gespeichert (AES-256-GCM, Schlüssel aus
-  `SESSION_SECRET`, Name als Associated Data). Eine Kopie der Datenbank allein verrät sie nicht.
+- API-Keys und Tokens werden unter Zugänge (der KI-Key auch unter Einstellungen) eingetragen und nur verschlüsselt
+  gespeichert (AES-256-GCM, Schlüssel aus `SESSION_SECRET`, Name als Associated Data). Eine Kopie der Datenbank allein
+  verrät sie nicht.
+- Zum Wiedererkennen zeigt das Dashboard nur einen kurzen Hinweis: `sk-ant-…A1B2` (Anthropic), `123456:…A1B2` (Bot-Token)
+  oder die ersten und letzten 4 Zeichen (`abcd…wxyz`), bei Werten unter 16 Zeichen nur `…` und die letzten 2. Dieser
+  Hinweis wird beim Speichern mit abgelegt, damit er auch nach einem `SESSION_SECRET`-Wechsel noch zeigt, welcher Key es war.
 - Kein Wert wird je wieder angezeigt oder geloggt; die Eingabefelder sind immer leer (und keine Passwortfelder, damit der
   Passwort-Manager den API-Key nicht als Website-Passwort speichert). Ausnahme: ein neu erzeugter Webhook-Token erscheint
   genau einmal, auf der Seite nach der Weiterleitung. Bis dahin liegt er nur im Arbeitsspeicher, unter einer zufälligen
