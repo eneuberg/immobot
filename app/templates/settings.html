@@ -143,7 +143,7 @@
 
   <article id="verhalten" class="setting-card">
     <h2>Budget &amp; Verhalten</h2>
-    <p class="help">Kostenbremse und wie sich der Telegram-Bot verhält.</p>
+    <p class="help">Kostenbremse, wie viele Bilder die KI sieht, und wie sich der Telegram-Bot verhält.</p>
     <h3>Kosten</h3>
     <div class="form-grid">
       <label>Monatsbudget in USD <small>0 = kein Limit; ist es erreicht, entstehen keine neuen Entwürfe mehr</small>
@@ -159,7 +159,12 @@
     </div>
     <label class="check">
       <input type="checkbox" role="switch" name="send_image" value="1" {% if values.send_image|as_bool %}checked{% endif %}>
-      <span>Bild des Inserats an Claude mitschicken <small>Die KI sieht dann auch das Titelbild (kostet ein paar Tokens mehr).</small></span>
+      <span>Bilder des Inserats an Claude mitschicken <small>Die KI sieht dann die Fotos und kann darauf eingehen (kostet Tokens, siehe unten).</small></span>
+    </label>
+    <label>Höchstens so viele Bilder <small>ImmoScout24, 0–20 – ≈ 1.000 Tokens pro Bild</small>
+      <input type="number" name="llm_max_images" min="0" max="20" step="1" value="{{ values.llm_max_images }}"
+        {% if errors.llm_max_images %}aria-invalid="true"{% endif %}>
+      {{ field_error("llm_max_images") }}
     </label>
 
     <h3>Telegram</h3>
@@ -172,6 +177,13 @@
       <input type="checkbox" role="switch" name="paused" value="1" {% if values.paused|as_bool %}checked{% endif %}>
       <span>Pause <small>Der Bot meldet sich nicht zu neuen Inseraten.</small></span>
     </label>
+    <div class="callout {{ 'info' if public_url[0] else 'warn' }}">
+      <span><strong>Adresse für die „🔗 Dashboard“-Links:</strong>
+        {% if public_url[0] %}<code>{{ public_url[0] }}</code>
+          ({{ "aus IMMOBOT_PUBLIC_URL" if public_url[1] == "env" else "gemerkt aus deinen Dashboard-Aufrufen" }})
+        {% else %}noch unbekannt – wird beim nächsten Dashboard-Aufruf über die öffentliche Domain gemerkt{% endif %}.
+        Fest einstellen mit der Env-Variable <code>IMMOBOT_PUBLIC_URL</code> (z. B. <code>https://immobot.example.de</code>).</span>
+    </div>
   </article>
 
   <article id="prompt" class="setting-card">

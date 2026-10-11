@@ -2,13 +2,12 @@
 
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import bot, db, vault, web
+from . import bot, db, is24, vault, web
 from .config import load_config
 from .web import router, security_headers
 
@@ -24,6 +23,9 @@ config = load_config()
 async def lifespan(app: FastAPI):
     db.init_db(config.data_dir)
     vault.init(config.session_secret, config.env_credentials())  # before anything reads a credential
+    is24.init(config.data_dir)
+    is24.cleanup_old_media()  # pictures of listings older than 60 days
+    bot.init_public_url(config.public_url)
     if not config.disable_bot:
         await bot.start()
     yield
@@ -42,6 +44,18 @@ app.add_middleware(
     same_site="strict",
     https_only=config.cookie_secure,
 )
+
+
+class StaticAssets(StaticFiles):
+    """Stylesheet and script of the dashboard: public, no secrets (CSP allows 'self'). Cacheable for a day;
+    base.html adds a content hash to the URLs, so a deploy is picked up at once. The security middleware
+    keeps this Cache-Control and adds its other headers."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "public, max-age=86400"
+        return response
+
+
 app.include_router(router)
-# Stylesheet and script of the dashboard (public, no secrets; CSP allows 'self').
-app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+app.mount("/static", StaticAssets(directory=web.STATIC_DIR), name="static")

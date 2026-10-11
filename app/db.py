@@ -2,7 +2,8 @@
 FastAPI threadpool and the Telegram bot's event loop.
 
 Tables:
-  listings         one row per listing received from Fredy
+  listings         one row per listing received from Fredy (+ ImmoScout24 details, see is24.py)
+  listing_media    pictures of a listing downloaded from ImmoScout24 (files under DATA_DIR/media/<listing id>/)
   drafts           every generated message, with provider, model, tokens and cost (native currency + USD)
   settings         user-editable, non-secret settings (key/value strings)
   meta             internal state such as last_webhook_at and a pending Telegram pairing
@@ -37,7 +38,21 @@ CREATE TABLE IF NOT EXISTS listings (
     status TEXT NOT NULL DEFAULT 'new',
     tg_message_id INTEGER,
     received_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    details TEXT,
+    contact_name TEXT,
+    media_fetched_at TEXT,
+    media_error TEXT,
+    album_message_id INTEGER,
+    album_sent_at TEXT
+);
+CREATE TABLE IF NOT EXISTS listing_media (
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    position INTEGER NOT NULL,
+    caption TEXT,
+    source_url TEXT NOT NULL,
+    file TEXT NOT NULL,
+    PRIMARY KEY (listing_id, position)
 );
 CREATE TABLE IF NOT EXISTS drafts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,6 +100,14 @@ CREATE TABLE IF NOT EXISTS credential_events (
 # Columns added after the first deployment. CREATE TABLE IF NOT EXISTS doesn't touch existing tables,
 # so init_db adds whatever is missing. Old drafts thereby count as Anthropic / USD.
 ADDED_COLUMNS = {
+    "listings": [
+        ("details", "TEXT"),
+        ("contact_name", "TEXT"),
+        ("media_fetched_at", "TEXT"),
+        ("media_error", "TEXT"),
+        ("album_message_id", "INTEGER"),
+        ("album_sent_at", "TEXT"),
+    ],
     "drafts": [
         ("provider", "TEXT NOT NULL DEFAULT 'anthropic'"),
         ("currency", "TEXT NOT NULL DEFAULT 'USD'"),
@@ -205,6 +228,77 @@ def set_listing_status(listing_id: int, status: str) -> None:
 def set_listing_tg_message(listing_id: int, message_id: int) -> None:
     with connect() as conn:
         conn.execute("UPDATE listings SET tg_message_id = ?, updated_at = ? WHERE id = ?", (message_id, now_iso(), listing_id))
+
+
+# --- ImmoScout24 details & pictures (see is24.py) ---------------------------
+
+def set_listing_details(listing_id: int, details: str | None, contact_name: str | None) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE listings SET details = ?, contact_name = ? WHERE id = ?", (details, contact_name, listing_id))
+
+
+def set_media_state(listing_id: int, fetched_at: str | None, error: str | None) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE listings SET media_fetched_at = ?, media_error = ? WHERE id = ?", (fetched_at, error, listing_id))
+
+
+def replace_media(listing_id: int, rows: list[dict]) -> None:
+    """Rows: position, caption, source_url, file."""
+    with connect() as conn:
+        conn.execute("DELETE FROM listing_media WHERE listing_id = ?", (listing_id,))
+        conn.executemany(
+            "INSERT INTO listing_media (listing_id, position, caption, source_url, file) VALUES (?, ?, ?, ?, ?)",
+            [(listing_id, r["position"], r["caption"], r["source_url"], r["file"]) for r in rows],
+        )
+
+
+def list_media(listing_id: int) -> list[dict]:
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM listing_media WHERE listing_id = ? ORDER BY position", (listing_id,))]
+
+
+def thumb_positions() -> dict[int, int]:
+    """listing id -> picture for the overview thumbnail: the first one that isn't a floor plan (is24.py sorts
+    floor plans first; same words as is24.FLOORPLAN_WORDS), else the first one."""
+    sql = """
+        SELECT listing_id, COALESCE(MIN(CASE WHEN lower(COALESCE(caption, '')) NOT LIKE '%grundriss%'
+                                              AND lower(COALESCE(caption, '')) NOT LIKE '%floorplan%'
+                                              AND lower(COALESCE(caption, '')) NOT LIKE '%floor plan%'
+                                         THEN position END), MIN(position)) AS position
+        FROM listing_media GROUP BY listing_id
+    """
+    with connect() as conn:
+        return {r["listing_id"]: r["position"] for r in conn.execute(sql)}
+
+
+def get_media(listing_id: int, position: int) -> dict | None:
+    with connect() as conn:
+        return _row(conn.execute(
+            "SELECT * FROM listing_media WHERE listing_id = ? AND position = ?", (listing_id, position)).fetchone())
+
+
+def clear_media(listing_id: int) -> None:
+    """Forget the pictures (rows and fetch state); the details text stays."""
+    with connect() as conn:
+        conn.execute("DELETE FROM listing_media WHERE listing_id = ?", (listing_id,))
+        conn.execute("UPDATE listings SET media_fetched_at = NULL, media_error = NULL WHERE id = ?", (listing_id,))
+
+
+def listings_with_media_received_before(cutoff_iso: str) -> list[int]:
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT id FROM listings WHERE received_at < ?
+               AND (media_fetched_at IS NOT NULL OR id IN (SELECT listing_id FROM listing_media))""",
+            (cutoff_iso,),
+        ).fetchall()
+        return [r["id"] for r in rows]
+
+
+def set_album_sent(listing_id: int, message_id: int) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE listings SET album_message_id = ?, album_sent_at = ? WHERE id = ?",
+                     (message_id, now_iso(), listing_id))
 
 
 # --- drafts -----------------------------------------------------------------

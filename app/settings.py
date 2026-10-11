@@ -134,6 +134,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "monthly_budget_usd": "15",
     "eur_usd_rate": "1.10",
     "send_image": "1",
+    "llm_max_images": "10",
     "followup_delay_s": "4",
     "paused": "0",
 }

@@ -11,7 +11,7 @@ import httpx2
 import pytest
 from PIL import Image
 
-from app import llm
+from app import is24, llm
 from app.settings import DEFAULT_MODEL, DEFAULT_SETTINGS, PRICES, PROVIDERS, cost
 
 
@@ -478,7 +478,12 @@ def test_failed_image_still_generates_draft(monkeypatch, fake_client):
 # --- create_and_store_draft -------------------------------------------------
 
 @pytest.fixture
-def listing_id(fresh_db):
+def listing_id(fresh_db, monkeypatch):
+    """An ImmoScout24 listing; the exposé/picture fetch is stubbed (no pictures) unless a test says otherwise."""
+    async def no_media(listing_id, retry=False):
+        return []
+
+    monkeypatch.setattr(is24, "ensure_media", no_media)
     lid, created = fresh_db.insert_listing(LISTING)
     assert created
     return lid
@@ -488,7 +493,7 @@ def listing_id(fresh_db):
 def fake_generate(monkeypatch):
     calls = []
 
-    async def generate(listing, settings, kind, previous_text=None, instruction=None):
+    async def generate(listing, settings, kind, previous_text=None, instruction=None, pictures=None):
         calls.append({"listing": listing, "kind": kind, "previous_text": previous_text, "instruction": instruction})
         return llm.DraftResult(
             text="Entwurf " + str(len(calls)), hint="Codewort" if kind == "initial" else None, model="claude-opus-5-5",
@@ -760,7 +765,7 @@ def test_unexpected_model_list_failure_is_cached_generically(fresh_db, monkeypat
 def test_create_and_store_draft_records_provider_and_currency(fresh_db, listing_id, monkeypatch):
     fresh_db.update_settings(DGPT_SETTINGS)
 
-    async def generate(listing, settings, kind, previous_text=None, instruction=None):
+    async def generate(listing, settings, kind, previous_text=None, instruction=None, pictures=None):
         return llm.DraftResult(text="Hallo", hint=None, model="claude-haiku-5.5", input_tokens=10, output_tokens=5,
                                cache_read_tokens=0, cache_write_tokens=0, cost_usd=0.024, provider="deutschlandgpt",
                                currency="EUR", cost_native=0.02)
@@ -780,3 +785,99 @@ def test_anthropic_fallbacks_for_all_four_models(fake_client):
     asyncio.run(llm.generate_draft(LISTING, settings_with(model="claude-opus-4-8"), "initial"))
     (call,) = fake_client.messages.calls  # no fallback beta for other models
     assert call["output_config"]["format"]["type"] == "json_schema"
+
+
+# --- ImmoScout24 details and pictures ---------------------------------------------
+
+def jpeg_bytes(seed=0) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGB", (20, 10), (seed, 0, 0)).save(out, format="JPEG")
+    return out.getvalue()
+
+
+def pictures(n):
+    return [({"position": i, "caption": c}, jpeg_bytes(i)) for i, c in
+            enumerate((["Grundriss", "Balkon", "", "Bad"] + [f"Raum {k}" for k in range(20)])[:n], start=1)]
+
+
+def test_user_text_uses_is24_details_and_contact():
+    listing = {**LISTING, "details": "Zimmer: 3\n\n## Objektbeschreibung\nVoller Exposé-Text", "contact_name": "Frau Erika Mustermann"}
+    text = llm.build_user_text(listing, "initial")
+    assert "Ansprechperson: Frau Erika Mustermann" in text
+    assert "Beschreibung:\nZimmer: 3\n\n## Objektbeschreibung\nVoller Exposé-Text" in text
+    assert "Bitte Codewort {Linde}" not in text  # Fredy's short description replaced by the full text
+    assert "Bitte Codewort {Linde}" in llm.build_user_text(LISTING, "initial")  # without details: Fredy's text
+
+
+def test_picture_blocks_are_labelled():
+    blocks = llm.picture_blocks(pictures(3))
+    assert [b["type"] for b in blocks] == ["text", "image"] * 3
+    assert [b["text"] for b in blocks if b["type"] == "text"] == ["Bild 1: Grundriss", "Bild 2: Balkon", "Bild 3"]
+    assert blocks[1]["source"]["media_type"] == "image/jpeg"
+    assert base64.standard_b64decode(blocks[1]["source"]["data"])[:2] == b"\xff\xd8"
+
+
+@pytest.mark.parametrize("limit,expected", [("10", 10), ("3", 3), ("0", 0), ("99", 20), ("x", 10)])
+def test_generate_draft_sends_stored_pictures_up_to_the_limit(fake_client, monkeypatch, limit, expected):
+    def no_fredy_image(url):
+        raise AssertionError("Fredy's image must not be used when IS24 pictures exist")
+
+    monkeypatch.setattr(llm, "fetch_image_block", no_fredy_image)
+    asyncio.run(llm.generate_draft(LISTING, settings_with(send_image="1", llm_max_images=limit), "initial",
+                                   pictures=pictures(24)))
+    (call,) = fake_client.beta.messages.calls
+    content = call["messages"][0]["content"]
+    assert sum(b["type"] == "image" for b in content) == expected
+    assert content[-1]["type"] == "text" and content[-1]["text"].startswith("<inserat>")
+    if expected:
+        assert content[0] == {"type": "text", "text": "Bild 1: Grundriss"}
+
+
+def test_generate_draft_without_is24_pictures_uses_fredys_image(fake_client, monkeypatch):
+    async def fredy_image(url):
+        return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "eA=="}}
+
+    monkeypatch.setattr(llm, "fetch_image_block", fredy_image)
+    asyncio.run(llm.generate_draft(LISTING, settings_with(send_image="1"), "initial", pictures=None))
+    content = fake_client.beta.messages.calls[0]["messages"][0]["content"]
+    assert [b["type"] for b in content] == ["image", "text"]
+    asyncio.run(llm.generate_draft(LISTING, settings_with(send_image="0"), "initial", pictures=pictures(3)))
+    content = fake_client.beta.messages.calls[1]["messages"][0]["content"]
+    assert [b["type"] for b in content] == ["text"]  # pictures switched off entirely
+
+
+def test_create_and_store_draft_fetches_is24_media_first(fresh_db, fake_generate, monkeypatch):
+    lid, _ = fresh_db.insert_listing(LISTING)
+    fresh_db.update_settings({"llm_max_images": "2"})
+    calls = []
+
+    async def ensure_media(listing_id, retry=False):
+        calls.append((listing_id, retry))
+        fresh_db.set_listing_details(listing_id, "Voller Exposé-Text", "Frau Erika Mustermann")
+        return [{"position": i, "caption": f"Bild {i}", "source_url": "x", "file": f"{i}.jpg"} for i in (1, 2, 3)]
+
+    read = []
+
+    def read_pictures(listing_id, rows):
+        read.append([r["position"] for r in rows])
+        return [(r, jpeg_bytes(r["position"])) for r in rows]
+
+    monkeypatch.setattr(is24, "ensure_media", ensure_media)
+    monkeypatch.setattr(is24, "read_pictures", read_pictures)
+    asyncio.run(llm.create_and_store_draft(lid, "initial"))
+    assert calls == [(lid, False)]  # drafts never force a retry of a failed fetch
+    assert read == [[1, 2]]  # only as many files as will be sent are read
+    assert fake_generate[0]["listing"]["details"] == "Voller Exposé-Text"  # re-read after the fetch
+
+
+def test_create_and_store_draft_without_media_passes_none(fresh_db, listing_id, monkeypatch):
+    seen = []
+
+    async def generate(listing, settings, kind, previous_text=None, instruction=None, pictures=None):
+        seen.append(pictures)
+        return llm.DraftResult(text="x", hint=None, model="claude-opus-5-5", input_tokens=1, output_tokens=1,
+                               cache_read_tokens=0, cache_write_tokens=0, cost_usd=0.0)
+
+    monkeypatch.setattr(llm, "generate_draft", generate)
+    asyncio.run(llm.create_and_store_draft(listing_id, "initial"))
+    assert seen == [None]  # no IS24 pictures -> Fredy's single image will be used

@@ -12,6 +12,10 @@ undecryptable one means nobody may. "/pair CODE" is handled completely inside th
 _pair) and never reaches the other handlers; strangers with a wrong code get no answer at all.
 All listing and draft text is HTML-escaped. The bot token is never logged.
 
+ImmoScout24 listings get a "🖼 Bilder" button: it sends the pictures stored by is24.py as one album
+(uploaded bytes, max 10) under the listing's message. Every listing gets a "🔗 Dashboard" link when the
+dashboard's public address is known (IMMOBOT_PUBLIC_URL, else remembered from dashboard requests).
+
 Token and chat id come from vault.py. Without a token the bot stays off ("nicht konfiguriert"); without
 a chat id it polls anyway so that "/pair" can connect a chat. reload() restarts it after a change.
 
@@ -21,11 +25,15 @@ unit-tested without Telegram.
 
 import asyncio
 import html
+import ipaddress
 import logging
 import re
 from datetime import datetime, timedelta
+from urllib.parse import urlsplit
 
-from telegram import Bot, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions, Update
+from telegram import (
+    Bot, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, LinkPreviewOptions, ReplyParameters, Update,
+)
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden, InvalidToken, RetryAfter, TelegramError
 from telegram.ext import (
@@ -39,7 +47,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import db, llm, portals, settings, vault
+from . import db, is24, llm, portals, settings, vault
 
 log = logging.getLogger(__name__)
 
@@ -63,11 +71,16 @@ PAIR_FAILED = "❌ Code ungültig oder abgelaufen."
 PAIR_NEEDS_USER = ("⚠️ Bitte von einem normalen Telegram-Konto aus koppeln (nicht anonym, nicht als Kanal oder Bot). "
                    "Der Code bleibt gültig.")
 NOT_OWNER = "Nur für den Besitzer dieses Bots."
+LOADING_PICTURES = "⏳ lade Bilder …"
+PICTURES_ALREADY_SENT = "Bilder sind schon oben ↑"
+NO_PICTURES_HERE = "Bilder gibt es nur für ImmoScout24-Inserate."
+ALBUM_MAX = 10  # Telegram's limit per album
+CAPTION_MAX = 1024  # Telegram's limit per caption
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 # Button action -> drafts.kind
 GENERATE_KINDS = {"gen": "initial", "new": "regenerate", "short": "shorter", "formal": "formal"}
-ACTIONS = set(GENERATE_KINDS) | {"edit", "sent", "skip", "undo"}
+ACTIONS = set(GENERATE_KINDS) | {"edit", "sent", "skip", "undo", "img"}
 KIND_LABELS = {
     "initial": "Entwurf",
     "regenerate": "Neu geschrieben",
@@ -86,6 +99,9 @@ _start_retry: asyncio.Task | None = None
 _tasks: set[asyncio.Task] = set()  # running announce tasks (strong refs so they aren't GC'd)
 _locks: dict[int, asyncio.Lock] = {}  # one per listing, so a double tap can't generate twice
 _announcing: set[int] = set()  # listings whose follow-up is being sent right now
+_sending_albums: set[int] = set()  # listings whose picture album is being prepared right now
+_public_base: str | None = None  # dashboard base URL for "🔗 Dashboard" buttons, see init_public_url()
+_public_base_from_env = False
 _state: dict[str, str | None] = {"last_update_at": None, "last_error": None}
 
 
@@ -128,12 +144,22 @@ def header(listing: dict) -> str:
     return "\n".join(lines)
 
 
+def _links_row(listing: dict) -> list[InlineKeyboardButton]:
+    """"🖼 Bilder" (ImmoScout24 only) and "🔗 Dashboard" (if the public address is known)."""
+    row = []
+    if is24.is_supported(listing):
+        row.append(_button("🖼 Bilder", "img", listing["id"]))
+    url = dashboard_url(listing["id"])
+    if url:
+        row.append(InlineKeyboardButton("🔗 Dashboard", url=url))
+    return row
+
+
 def followup_view(listing: dict, note: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
-    keyboard = InlineKeyboardMarkup([[
-        _button("✍️ Anschreiben", "gen", listing["id"]),
-        _button("❌ Uninteressant", "skip", listing["id"]),
-    ]])
-    return header(listing) + _note(note), keyboard
+    rows = [[_button("✍️ Anschreiben", "gen", listing["id"]), _button("❌ Uninteressant", "skip", listing["id"])]]
+    if _links_row(listing):
+        rows.append(_links_row(listing))
+    return header(listing) + _note(note), InlineKeyboardMarkup(rows)
 
 
 def generating_text(listing: dict) -> str:
@@ -146,11 +172,14 @@ def draft_keyboard(listing: dict) -> InlineKeyboardMarkup:
     link = portals.contact_url(listing.get("provider"), listing.get("url"))
     if link:
         row2.append(InlineKeyboardButton("📨 Inserat öffnen ↗", url=link))
-    return InlineKeyboardMarkup([
+    rows = [
         [_button("🔁 Neu", "new", lid), _button("✂️ Kürzer", "short", lid), _button("🎩 Förmlicher", "formal", lid)],
         row2,
         [_button("✅ Gesendet", "sent", lid), _button("❌ Uninteressant", "skip", lid)],
-    ])
+    ]
+    if _links_row(listing):
+        rows.append(_links_row(listing))
+    return InlineKeyboardMarkup(rows)
 
 
 def _fit_escaped(text: str, budget: int) -> str:
@@ -196,6 +225,77 @@ def current_view(listing: dict, note: str | None = None) -> tuple[str, InlineKey
         return collapsed_view(listing, note)
     draft = db.latest_draft(listing["id"])
     return draft_view(listing, draft, note) if draft else followup_view(listing, note)
+
+
+def album_caption(rows: list[dict], total: int, link: str | None) -> str:
+    """'📷 11 Fotos · Grundriss, Balkon, … (+1 weitere)' plus a dashboard link line; ≤ 1024 characters."""
+    head = f"📷 {total} Foto{'' if total == 1 else 's'}"
+    more = f" (+{total - len(rows)} weitere)" if total > len(rows) else ""
+    tail = more + (f"\n🔗 {link}" if link else "")
+    names = ""
+    for caption in dict.fromkeys(_shorten(r["caption"], 60) for r in rows if r.get("caption")):
+        candidate = f"{names}, {caption}" if names else caption
+        if _tg_len(f"{head} · {candidate}, …{tail}") > CAPTION_MAX:
+            names += ", …"
+            break
+        names = candidate
+    return f"{head} · {names}{tail}" if names else head + tail
+
+
+def album_media(pictures: list[tuple[dict, bytes]], caption: str) -> list[InputMediaPhoto]:
+    """Up to ALBUM_MAX photos from JPEG bytes (uploaded, never URLs); the caption goes on the first one."""
+    return [InputMediaPhoto(media=jpeg, caption=caption if index == 0 else None)
+            for index, (row, jpeg) in enumerate(pictures[:ALBUM_MAX])]
+
+
+# --- dashboard links ---------------------------------------------------------
+
+def valid_public_url(url) -> str | None:
+    """'https://immobot.example.de' (scheme://host[:port]) if Telegram accepts it as a button link, else None.
+    Telegram rejects links to localhost and bare IP addresses, which would make the whole message fail."""
+    url = portals.safe_url(url)
+    if url is None:
+        return None
+    parts = urlsplit(url)
+    host = parts.hostname
+    try:
+        ipaddress.ip_address(host)
+        return None
+    except ValueError:
+        pass
+    if "." not in host or host.endswith(".localhost"):
+        return None
+    return f"{parts.scheme.lower()}://{parts.netloc.lower()}"
+
+
+def init_public_url(env_url: str | None) -> None:
+    """At startup: IMMOBOT_PUBLIC_URL if set and usable (fixed), else the address remembered earlier."""
+    global _public_base, _public_base_from_env
+    fixed = valid_public_url(env_url)
+    if env_url and not fixed:
+        log.warning("IMMOBOT_PUBLIC_URL is not a usable public http(s) address - ignored")
+    _public_base_from_env = fixed is not None
+    _public_base = fixed or valid_public_url(db.get_meta("public_base_url"))
+
+
+def remember_public_url(url) -> None:
+    """The dashboard calls this with scheme://host of authenticated requests (and the webhook's)."""
+    global _public_base
+    url = valid_public_url(url)
+    if url and not _public_base_from_env and url != _public_base:
+        _public_base = url
+        db.set_meta("public_base_url", url)
+
+
+def public_url_info() -> tuple[str | None, str]:
+    """(base URL or None, where it comes from) for the settings page."""
+    if _public_base is None:
+        return None, "unknown"
+    return _public_base, "env" if _public_base_from_env else "remembered"
+
+
+def dashboard_url(listing_id: int) -> str | None:
+    return f"{_public_base}/listing/{int(listing_id)}" if _public_base else None
 
 
 # --- input checks (pure) -----------------------------------------------------
@@ -445,6 +545,9 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if listing is None or not listing.get("tg_message_id"):
         await _answer(query, NOT_FOUND)
         return
+    if action == "img":  # not under the generation lock: pictures may be sent while a draft is being written
+        await _send_pictures(context.bot, listing, query)
+        return
 
     lock = _lock(listing_id)
     if lock.locked():
@@ -463,6 +566,43 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         elif action == "undo":
             db.set_listing_status(listing_id, "drafted" if db.latest_draft(listing_id) else "new")
             await _show(tg_bot, db.get_listing(listing_id))
+
+
+async def _send_pictures(tg_bot, listing: dict, query) -> None:
+    """"🖼 Bilder": the stored pictures (fetched on first use) as one album, as a reply to the listing's message."""
+    listing_id = listing["id"]
+    if not is24.is_supported(listing):
+        await _answer(query, NO_PICTURES_HERE)
+        return
+    if listing.get("album_message_id"):
+        await _answer(query, PICTURES_ALREADY_SENT)
+        return
+    if listing_id in _sending_albums:
+        await _answer(query, BUSY)
+        return
+    _sending_albums.add(listing_id)
+    try:
+        await _answer(query, LOADING_PICTURES)
+        pictures = is24.read_pictures(listing_id, await is24.ensure_media(listing_id, retry=True))
+        fresh = db.get_listing(listing_id) or listing
+        if not pictures:
+            await _show(tg_bot, fresh, note="Bilder: " + (fresh.get("media_error") or "keine gefunden."))
+            return
+        caption = album_caption([row for row, _ in pictures[:ALBUM_MAX]], len(pictures), dashboard_url(listing_id))
+        reply = ReplyParameters(message_id=listing["tg_message_id"], allow_sending_without_reply=True)
+        chat = configured_chat_id()
+        if len(pictures) == 1:
+            message = await tg_bot.send_photo(chat_id=chat, photo=pictures[0][1], caption=caption, reply_parameters=reply)
+        else:
+            messages = await tg_bot.send_media_group(chat_id=chat, media=album_media(pictures, caption),
+                                                     reply_parameters=reply)
+            message = messages[0]
+        db.set_album_sent(listing_id, message.message_id)
+    except TelegramError as exc:
+        _record_error(exc)
+        await _show(tg_bot, db.get_listing(listing_id) or listing, note="Bilder konnten nicht gesendet werden – bitte nochmal.")
+    finally:
+        _sending_albums.discard(listing_id)
 
 
 async def _on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

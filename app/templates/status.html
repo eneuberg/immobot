@@ -50,6 +50,20 @@
     <p><a href="#fredy">Einrichten ↓</a></p>
   {% endcall %}
 
+  {# is24_last_error: "<ISO time> Inserat <id>: <message>" (is24.py) #}
+  {% set is24_parts = (is24_last_error or "").split(" ", 1) %}
+  {% call tile("warn" if is24_last_error else "ok", "ImmoScout24-Bilder & Details") %}
+    {% if is24_last_error and is24_parts|length == 2 %}
+    <p>Letzter ImmoScout24-Fehler am {{ is24_parts[0]|local_time }}:</p>
+    <p class="pre-wrap">{{ is24_parts[1] }}</p>
+    {% elif is24_last_error %}
+    <p>Letzter ImmoScout24-Fehler:</p>
+    <p class="pre-wrap">{{ is24_last_error }}</p>
+    {% else %}
+    <p>Letzter ImmoScout24-Fehler: keiner</p>
+    {% endif %}
+  {% endcall %}
+
   {% if bot_last_error %}
   {% call tile("warn", "Letzter Bot-Fehler") %}
     <p class="pre-wrap">{{ bot_last_error }}</p>

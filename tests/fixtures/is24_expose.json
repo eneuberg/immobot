@@ -1,0 +1,400 @@
+{
+ "header": {
+  "id": "123456789",
+  "title": "Beschreibung",
+  "realEstateType": "APARTMENT_RENT"
+ },
+ "sections": [
+  {
+   "type": "MEDIA",
+   "media": [
+    {
+     "type": "PICTURE",
+     "caption": "Balkon",
+     "previewImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000001-1000000001.jpg/ORIG/resize/800x600/format/webp/quality/80",
+     "imageUrlForWeb": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000001-1000000001.jpg/ORIG/legacy_thumbnail/%WIDTH%x%HEIGHT%/format/jpg",
+     "fullImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000001-1000000001.jpg/ORIG/resize/1500x1000/format/webp/quality/80"
+    },
+    {
+     "type": "PICTURE",
+     "caption": "Außenansicht",
+     "previewImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000002-1000000002.jpg/ORIG/resize/800x600/format/webp/quality/80",
+     "imageUrlForWeb": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000002-1000000002.jpg/ORIG/legacy_thumbnail/%WIDTH%x%HEIGHT%/format/jpg",
+     "fullImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000002-1000000002.jpg/ORIG/resize/1500x1000/format/webp/quality/80"
+    },
+    {
+     "type": "PICTURE",
+     "caption": "Wohnzmmer",
+     "previewImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000003-1000000003.jpg/ORIG/resize/800x600/format/webp/quality/80",
+     "imageUrlForWeb": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000003-1000000003.jpg/ORIG/legacy_thumbnail/%WIDTH%x%HEIGHT%/format/jpg",
+     "fullImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000003-1000000003.jpg/ORIG/resize/1500x1000/format/webp/quality/80"
+    },
+    {
+     "type": "PICTURE",
+     "caption": "AZ",
+     "previewImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000004-1000000004.jpg/ORIG/resize/800x600/format/webp/quality/80",
+     "imageUrlForWeb": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000004-1000000004.jpg/ORIG/legacy_thumbnail/%WIDTH%x%HEIGHT%/format/jpg",
+     "fullImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000004-1000000004.jpg/ORIG/resize/1500x1000/format/webp/quality/80"
+    },
+    {
+     "type": "PICTURE",
+     "caption": "Bad",
+     "previewImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000005-1000000005.jpg/ORIG/resize/800x600/format/webp/quality/80",
+     "imageUrlForWeb": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000005-1000000005.jpg/ORIG/legacy_thumbnail/%WIDTH%x%HEIGHT%/format/jpg",
+     "fullImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000005-1000000005.jpg/ORIG/resize/1500x1000/format/webp/quality/80"
+    },
+    {
+     "type": "PICTURE",
+     "caption": "Flur",
+     "previewImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000006-1000000006.jpg/ORIG/resize/800x600/format/webp/quality/80",
+     "imageUrlForWeb": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000006-1000000006.jpg/ORIG/legacy_thumbnail/%WIDTH%x%HEIGHT%/format/jpg",
+     "fullImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000006-1000000006.jpg/ORIG/resize/1500x1000/format/webp/quality/80"
+    },
+    {
+     "type": "PICTURE",
+     "caption": "Gäste WC",
+     "previewImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000007-1000000007.jpg/ORIG/resize/800x600/format/webp/quality/80",
+     "imageUrlForWeb": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000007-1000000007.jpg/ORIG/legacy_thumbnail/%WIDTH%x%HEIGHT%/format/jpg",
+     "fullImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000007-1000000007.jpg/ORIG/resize/1500x1000/format/webp/quality/80"
+    },
+    {
+     "type": "PICTURE",
+     "caption": "Kamin",
+     "previewImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000008-1000000008.jpg/ORIG/resize/800x600/format/webp/quality/80",
+     "imageUrlForWeb": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000008-1000000008.jpg/ORIG/legacy_thumbnail/%WIDTH%x%HEIGHT%/format/jpg",
+     "fullImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000008-1000000008.jpg/ORIG/resize/1500x1000/format/webp/quality/80"
+    },
+    {
+     "type": "PICTURE",
+     "caption": "Küche",
+     "previewImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000009-1000000009.jpg/ORIG/resize/800x600/format/webp/quality/80",
+     "imageUrlForWeb": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000009-1000000009.jpg/ORIG/legacy_thumbnail/%WIDTH%x%HEIGHT%/format/jpg",
+     "fullImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000009-1000000009.jpg/ORIG/resize/1500x1000/format/webp/quality/80"
+    },
+    {
+     "type": "PICTURE",
+     "caption": "SZ",
+     "previewImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000010-1000000010.jpg/ORIG/resize/800x600/format/webp/quality/80",
+     "imageUrlForWeb": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000010-1000000010.jpg/ORIG/legacy_thumbnail/%WIDTH%x%HEIGHT%/format/jpg",
+     "fullImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000010-1000000010.jpg/ORIG/resize/1500x1000/format/webp/quality/80"
+    },
+    {
+     "type": "PICTURE",
+     "caption": "SZ2",
+     "previewImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000011-1000000011.jpg/ORIG/resize/800x600/format/webp/quality/80",
+     "imageUrlForWeb": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000011-1000000011.jpg/ORIG/legacy_thumbnail/%WIDTH%x%HEIGHT%/format/jpg",
+     "fullImageUrl": "https://pictures.immobilienscout24.de/listings/00000000-0000-4000-8000-000000000011-1000000011.jpg/ORIG/resize/1500x1000/format/webp/quality/80"
+    },
+    {
+     "type": "AD",
+     "caption": "Gesponsert",
+     "ad": {
+      "id": "/0000/TEST/gallery_ad"
+     }
+    }
+   ]
+  },
+  {
+   "type": "TOP_ATTRIBUTES",
+   "attributes": [
+    {
+     "label": "Kaltmiete 12,94 €/m²",
+     "highlighted": true,
+     "text": "1.100 €",
+     "type": "TEXT"
+    },
+    {
+     "label": "Zimmer",
+     "text": "3",
+     "type": "TEXT"
+    },
+    {
+     "label": "Wohnfläche",
+     "text": "85 m²",
+     "type": "TEXT"
+    },
+    {
+     "label": "Warmmiete",
+     "text": "1.400 €",
+     "type": "TEXT"
+    }
+   ]
+  },
+  {
+   "type": "TITLE",
+   "title": "Handwerklich geschickte Mieter gesucht"
+  },
+  {
+   "type": "MAP",
+   "title": "Karte",
+   "location": {
+    "lat": 52.52,
+    "lng": 13.405
+   },
+   "addressLine1": "Musterstraße 1",
+   "addressLine2": "12345 Musterstadt",
+   "zipCodeShapes": []
+  },
+  {
+   "type": "ATTRIBUTE_LIST",
+   "title": "Hauptkriterien",
+   "attributes": [
+    {
+     "type": "TEXT",
+     "label": "Wohnungstyp:",
+     "text": "Penthouse"
+    },
+    {
+     "type": "TEXT",
+     "label": "Wohnfläche ca.:",
+     "text": "85 m²"
+    },
+    {
+     "type": "TEXT",
+     "label": "Nutzfläche ca.:",
+     "text": "4 m²"
+    },
+    {
+     "type": "TEXT",
+     "label": "Etage:",
+     "text": "4 von 4"
+    },
+    {
+     "type": "TEXT",
+     "label": "Schlafzimmer:",
+     "text": "2"
+    },
+    {
+     "type": "TEXT",
+     "label": "Badezimmer:",
+     "text": "1"
+    },
+    {
+     "type": "TEXT",
+     "label": "Bezugsfrei ab:",
+     "text": "15.12.2026"
+    },
+    {
+     "type": "TEXT",
+     "label": "Haustiere:",
+     "text": "Nein"
+    },
+    {
+     "type": "TEXT",
+     "label": "Garage/Stellplatz:",
+     "text": "Carport"
+    },
+    {
+     "type": "TEXT",
+     "label": "Anzahl Garage/Stellplatz:",
+     "text": "1"
+    },
+    {
+     "type": "CHECK",
+     "label": "Balkon/Terrasse:"
+    },
+    {
+     "type": "CHECK",
+     "label": "Personenaufzug:"
+    },
+    {
+     "type": "CHECK",
+     "label": "Gäste-WC:"
+    },
+    {
+     "type": "LINK",
+     "label": "SCHUFA-BonitätsCheck:",
+     "reference": {
+      "type": "URL_LINK",
+      "label": "Online anfordern",
+      "url": "https://bonitaetscheck.immobilienscout24.de/?utm_medium=app&utm_source=ios&utm_campaign=solvency_check&utm_content=residential_expose_criteria",
+      "target": "WEB_INTERNAL",
+      "trackingConfig": {
+       "category": "expose",
+       "action": "consumerservices",
+       "label": "solvencycheck_criteria",
+       "event_name": "productintegration_click",
+       "event_product": "search",
+       "parameters": {
+        "event_parameter_1": "solvencycheck_criteria"
+       }
+      }
+     }
+    },
+    {
+     "type": "LINK",
+     "label": "Internet:",
+     "reference": {
+      "type": "URL_LINK",
+      "label": "Verfügbarkeit prüfen",
+      "iconUrl": "https://www.immobilienscout24.de/content/dam/is24/expose-snippets/services/powered-by-telekom-new.png",
+      "url": "https://rebrand.ly/anodsl",
+      "target": "WEB_INTERNAL",
+      "trackingConfig": {
+       "category": "clickout",
+       "action": "relocation",
+       "label": "internet_checkavailability_criteria",
+       "event_name": "expose_clickout",
+       "event_product": "search",
+       "parameters": {
+        "event_parameter_1": "internet_checkavailability_criteria"
+       }
+      },
+      "additionalInfoForIcon": {
+       "title": "Warum diese Werbung?",
+       "text": "Für die Bereitstellung von Informationen zur Internet-Verfügbarkeit am Standort des Inserats arbeiten wir mit der Telekom Deutschland GmbH zusammen.",
+       "buttonText": "Weitere Informationen",
+       "buttonUrl": "https://www.immobilienscout24.de/anbieten/dsa-info/telekom.html"
+      },
+      "onClickTrackingTag": "INTERNET_AVAILABILITY_CHECK"
+     }
+    }
+   ]
+  },
+  {
+   "type": "ATTRIBUTE_LIST",
+   "title": "Kosten",
+   "attributes": [
+    {
+     "type": "TEXT",
+     "label": "Kaltmiete (zzgl. Nebenkosten):",
+     "text": "1.100 €"
+    },
+    {
+     "type": "TEXT",
+     "label": "Preis/m²:",
+     "text": "12,94 €/m²",
+     "additionalInfoText": "Kalkuliert von ImmoScout24"
+    },
+    {
+     "type": "TEXT",
+     "label": "Nebenkosten:",
+     "text": "300 €"
+    },
+    {
+     "type": "TEXT",
+     "label": "Heizkosten in Nebenkosten enthalten:",
+     "text": "Ja"
+    },
+    {
+     "type": "TEXT",
+     "label": "Gesamtmiete:",
+     "text": "1.400 €"
+    },
+    {
+     "type": "TEXT",
+     "label": "Kaution oder Genossenschaftsanteile:",
+     "text": "2 KM"
+    },
+    {
+     "type": "TEXT",
+     "label": "Preis pro Parkfläche:",
+     "text": "80 €"
+    }
+   ]
+  },
+  {
+   "type": "COST_CHECK",
+   "totalRent": 1400,
+   "expenses": []
+  },
+  {
+   "type": "ATTRIBUTE_LIST",
+   "title": "Bausubstanz & Energieausweis",
+   "attributes": [
+    {
+     "type": "TEXT",
+     "label": "Objektzustand:",
+     "text": "Renovierungsbedürftig"
+    },
+    {
+     "type": "TEXT",
+     "label": "Heizungsart:",
+     "text": "Zentralheizung"
+    },
+    {
+     "type": "TEXT",
+     "label": "Energieausweistyp:",
+     "text": "Verbrauchsausweis"
+    },
+    {
+     "type": "TEXT",
+     "label": "Energieausweis:",
+     "text": "liegt vor"
+    },
+    {
+     "type": "TEXT",
+     "label": "Endenergieverbrauch:",
+     "text": "152 kWh/(m²∙a)"
+    }
+   ]
+  },
+  {
+   "type": "AD",
+   "ad": {
+    "id": "/0000/TEST/expose"
+   }
+  },
+  {
+   "type": "TEXT_AREA",
+   "title": "Objektbeschreibung",
+   "collapseAfterLines": 5,
+   "text": "Helle Dachgeschosswohnung in einem gepflegten Mehrfamilienhaus.\n\nDrei Balkone, offene Küche, zwei Schlafzimmer. Das Bad hat eine Wanne, dazu ein Gäste-WC. Ein Stellplatz kann angemietet werden."
+  },
+  {
+   "type": "TEXT_AREA",
+   "title": "Ausstattung",
+   "collapseAfterLines": 5,
+   "text": "einfach"
+  },
+  {
+   "type": "TEXT_AREA",
+   "title": "Sonstiges",
+   "collapseAfterLines": 5,
+   "text": "Bitte lesen Sie die Anzeige aufmerksam und schreiben Sie uns, sofern Sie ernsthaftes Interesse haben."
+  },
+  {
+   "type": "AGENTS_INFO",
+   "title": "Anbieter Informationen",
+   "company": "Beispiel Hausverwaltung GmbH",
+   "name": "Frau Erika Mustermann",
+   "logoUrl": "https://pictures.immobilienscout24.de/usercontent/test.JPG/ORIG",
+   "agentProfileUrl": "https://www.immobilienscout24.de/anbieter/beispiel",
+   "address": "Beispielweg 2\n12345 Musterstadt",
+   "references": [
+    {
+     "label": "Homepage des Anbieters",
+     "url": "https://example.org",
+     "type": "URL_LINK"
+    }
+   ]
+  },
+  {
+   "type": "CONTACT",
+   "callButtonLabel": "Anruf",
+   "phoneNumbers": [
+    {
+     "type": "TEXT",
+     "label": "Festnetznummer",
+     "text": "+49 30 0000000"
+    }
+   ],
+   "contactData": {
+    "agent": {
+     "name": "Frau Erika Mustermann",
+     "company": "Beispiel Hausverwaltung GmbH"
+    }
+   }
+  },
+  {
+   "type": "OBJECT_INFO",
+   "text": "Scout-ID: 123456789 | Objekt-Nr.: 123456789"
+  },
+  {
+   "type": "AD",
+   "ad": {
+    "id": "/0000/TEST/expose"
+   }
+  }
+ ]
+}

@@ -111,6 +111,12 @@ def test_migration_of_a_database_from_the_previous_version(tmp_path):
         draft_columns = {r["name"] for r in conn.execute("PRAGMA table_info(drafts)")}
         credential_columns = {r["name"] for r in conn.execute("PRAGMA table_info(credentials)")}
     assert {"provider", "currency", "cost_native"} <= draft_columns and "hint" in credential_columns
+    with db.connect() as conn:
+        listing_columns = {r["name"] for r in conn.execute("PRAGMA table_info(listings)")}
+        media_columns = {r["name"] for r in conn.execute("PRAGMA table_info(listing_media)")}
+    assert {"details", "contact_name", "media_fetched_at", "media_error", "album_message_id", "album_sent_at"} <= listing_columns
+    assert media_columns == {"listing_id", "position", "caption", "source_url", "file"}
+    assert db.get_listing(1)["media_fetched_at"] is None and db.list_media(1) == []
     (old,) = db.list_drafts(1)
     assert (old["provider"], old["currency"], old["cost_native"], old["cost_usd"]) == ("anthropic", "USD", 0.042, 0.042)
     assert old["text"] == "Alter Entwurf" and db.get_credential("anthropic_api_key")["hint"] is None

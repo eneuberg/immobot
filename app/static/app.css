@@ -399,6 +399,28 @@ details.howto p { font-size: .88rem; margin: .4rem 0 0; color: var(--pico-muted-
 }
 .description { font-size: .95rem; line-height: 1.6; }
 
+/* exposé details (ImmoScout24): key facts, label/value lists, text sections */
+.details { display: grid; gap: 0 1.75rem; }
+.details > .facts { margin-bottom: 1.25rem; }
+.facts > div.wide { grid-column: span 2; }
+.details-section { margin-bottom: 1.15rem; min-width: 0; }
+.details-section:last-child { margin-bottom: 0; }
+.details-section h3 { margin: 0 0 .4rem; font-size: .78rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--pico-muted-color); }
+.details-section .description { margin: 0; }
+details.details-section { margin-bottom: .75rem; align-self: start; }
+details.details-section > summary { font-weight: 600; }
+details.details-section + .details-section:not(details) { margin-top: 1.4rem; }
+.kvlist.disclosure-body { padding-top: .3rem; padding-bottom: .45rem; }
+.kvlist { margin: 0; font-size: .9rem; }
+.kvlist > div { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; padding: .32rem 0; border-bottom: 1px solid var(--pico-muted-border-color); }
+.kvlist > div:last-child { border-bottom: 0; }
+.kvlist dt { margin: 0; color: var(--pico-muted-color); font-weight: 400; }
+.kvlist dd { margin: 0; flex-shrink: 0; max-width: 55%; font-weight: 600; text-align: right; overflow-wrap: anywhere; }
+@media (min-width: 900px) {
+  .kvlist { columns: 2; column-gap: 2rem; }  /* open lists: two columns of label/value rows */
+  .kvlist > div { break-inside: avoid; }
+}
+
 /* drafts */
 .draft-card > header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding-top: .7rem; padding-bottom: .7rem; }
 .draft-card > header .when { font-size: .82rem; color: var(--pico-muted-color); }
@@ -557,3 +579,4 @@ pre.draft {
 .login h1 { --pico-font-size: 1.25rem; margin-bottom: .25rem; }
 .login p { color: var(--pico-muted-color); font-size: .92rem; }
 .login button { width: 100%; margin-bottom: 0; }
+.setting-card input[type=number] { max-width: 14rem; }

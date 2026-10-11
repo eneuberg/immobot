@@ -1,13 +1,23 @@
 {% extends "base.html" %}
 {% from "macros.html" import status_badge, draft_meta, icon %}
 {% block title %}{{ listing.title or "Inserat" }}{% endblock %}
+
+{# "3 · Balkon": the number is the one Claude and the Telegram album use for this picture. #}
+{% macro media_label(m) %}{{ m.position }}{% if m.caption %} · {{ m.caption }}{% endif %}{% endmacro %}
+
 {% block content %}
 <p class="backlink"><a href="/">← Inserate</a></p>
 {% if error %}<div class="flash err" role="alert">{{ error }}</div>{% endif %}
 
 <article class="listing-head">
-  <div class="lh-grid{% if image_url %} has-image{% endif %}">
-    {% if image_url %}
+  <div class="lh-grid{% if hero or image_url %} has-image{% endif %}">
+    {% if hero %}
+    {# A stored picture (served behind login); opens the gallery below in the lightbox. #}
+    <a class="hero" href="/listing/{{ listing.id }}/media/{{ hero.position }}" target="_blank" rel="noopener"
+      data-lightbox data-gallery="#bilder .gallery" data-caption="{{ media_label(hero) }}">
+      <img src="/listing/{{ listing.id }}/media/{{ hero.position }}" alt="{{ hero.caption or 'Bild zum Inserat' }}" decoding="async">
+    </a>
+    {% elif image_url %}
     <a class="hero" href="{{ image_url }}" target="_blank" rel="noopener noreferrer" data-lightbox data-caption="Titelbild">
       <img src="{{ image_url }}" alt="Bild zum Inserat" referrerpolicy="no-referrer" loading="lazy" decoding="async">
     </a>
@@ -38,24 +48,72 @@
   </div>
 </article>
 
-{# GALLERY: Fotos & Exposé-Details – wird vom Galerie-Feature befüllt.
-   Fertige CSS-Klassen in static/app.css (".gallery", ".gallery-item", ".gallery-caption", Lightbox per data-lightbox in
-   static/app.js). Vorgesehenes Markup:
-   <section id="fotos">
-     <div class="section-head"><h2>Fotos <span class="count">N</span></h2></div>
-     <div class="gallery">
-       <a class="gallery-item" href="/listing/{id}/media/{position}" data-lightbox data-caption="Wohnzimmer">
-         <img src="/listing/{id}/media/{position}" alt="Wohnzimmer" loading="lazy" decoding="async">
-         <span class="gallery-caption">Wohnzimmer</span>
-       </a>
-     </div>
-   </section>
-   Exposé-Details / Ansprechpartner als <article> mit <dl class="facts"> o. ä. #}
+{% if is24 %}
+{# ImmoScout24 pictures: stored under DATA_DIR/media, served by /listing/{id}/media/{position} behind login. #}
+<section id="bilder">
+  <div class="section-head">
+    <h2>Bilder <span class="count">{{ media|length }}</span></h2>
+    {% if not listing.media_fetched_at or listing.media_error %}
+    <form method="post" action="/listing/{{ listing.id }}/media" data-once>
+      <button type="submit" class="secondary">{{ "Erneut versuchen" if listing.media_error else "Bilder & Details laden" }}</button>
+    </form>
+    {% endif %}
+  </div>
+  {% if listing.media_error %}<div class="flash err bare" role="alert">⚠ {{ listing.media_error }}</div>{% endif %}
+  {% if media %}
+  <div class="gallery">
+    {% for m in media %}
+    <a class="gallery-item" href="/listing/{{ listing.id }}/media/{{ m.position }}" target="_blank" rel="noopener"
+      data-lightbox data-caption="{{ media_label(m) }}">
+      <img src="/listing/{{ listing.id }}/media/{{ m.position }}" alt="{{ m.caption or 'Bild ' ~ m.position }}" loading="lazy" decoding="async">
+      <span class="gallery-caption">{{ media_label(m) }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if not listing.media_fetched_at or listing.media_error %}
+  <p class="help">Holt das Exposé und alle Bilder von ImmoScout24 (einige Sekunden).</p>
+  {% endif %}
+</section>
+{% endif %}
 
+{% if listing.details %}
+{# Full exposé text from ImmoScout24 (replaces Fredy's short description). #}
+<section id="beschreibung">
+  <div class="section-head"><h2>Details</h2><span class="chip">aus dem ImmoScout24-Exposé</span></div>
+  <article class="details">
+    {# Key facts first (with the contact person), then the titled sections: lists as label/value rows, texts as text. #}
+    {% set top = details|selectattr("title", "none")|selectattr("facts")|first %}
+    {% if listing.contact_name or top %}
+    <dl class="facts">
+      {% if listing.contact_name %}<div class="wide"><dt>Ansprechperson</dt><dd>{{ listing.contact_name }}</dd></div>{% endif %}
+      {% if top %}{% for label, value in top.facts %}<div{% if value|length > 24 %} class="wide"{% endif %}><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endfor %}{% endif %}
+    </dl>
+    {% endif %}
+    {% for s in details if s is not sameas top %}
+    {% if s.facts %}
+    {# Label/value lists (Hauptkriterien, Kosten, …) are collapsed, except the costs. #}
+    <details class="disclosure details-section is-list" {% if "kosten" in (s.title or "")|lower %}open{% endif %}>
+      <summary>{{ s.title or "Weitere Angaben" }} <span class="count">{{ s.facts|length }}</span></summary>
+      <dl class="kvlist disclosure-body">
+        {% for label, value in s.facts %}<div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endfor %}
+      </dl>
+    </details>
+    {% else %}
+    <div class="details-section">
+      {% if s.title %}<h3>{{ s.title }}</h3>{% endif %}
+      <p class="description pre-wrap">{{ s.text }}</p>
+    </div>
+    {% endif %}
+    {% endfor %}
+  </article>
+</section>
+{% else %}
 <section id="beschreibung">
   <div class="section-head"><h2>Beschreibung</h2></div>
   <article class="description pre-wrap">{{ listing.description or "–" }}</article>
 </section>
+{% endif %}
 
 <section>
   <div class="section-head">

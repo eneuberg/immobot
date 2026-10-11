@@ -131,9 +131,13 @@
   function openLightbox(link) {
     if (typeof HTMLDialogElement !== "function") { window.open(link.href, "_blank", "noopener"); return; }
     if (!box) buildLightbox();
-    var scope = link.closest(".gallery");
+    // Group: the link's own .gallery, or the one named in data-gallery (the big picture at the top).
+    var scope = link.closest(".gallery") || (link.dataset.gallery ? document.querySelector(link.dataset.gallery) : null);
     group = scope ? Array.prototype.slice.call(scope.querySelectorAll("a[data-lightbox]")) : [link];
-    show(group.indexOf(link));
+    var i = group.indexOf(link);
+    if (i < 0) i = group.map(function (a) { return a.href; }).indexOf(link.href);
+    if (i < 0) { group = [link]; i = 0; }
+    show(i);
     box.showModal();
   }
 })();
