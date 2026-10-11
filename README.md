@@ -92,6 +92,27 @@ Kosten: Jeder Entwurf speichert Anbieter, Modell, Tokens und die Kosten in der W
 bleiben in USD; Euro-Beträge werden mit dem „Umrechnungskurs EUR→USD (ca.)“ (Standard 1,10) umgerechnet. Pro Entwurf steht
 z. B. „Claude Sonnet 5.5 · DeutschlandGPT · 2,1 ct (€) ≈ 2,3 ct ($)“, im Telegram-Entwurf ebenso.
 
+## ImmoScout24: alle Bilder und Details
+
+Fredy liefert pro Inserat nur ein Bild und einen kurzen Text. Bei ImmoScout24-Inseraten (nicht Österreich) holt immobot
+beim ersten Bedarf einmal das Exposé (dieselbe App-API, die Fredy nutzt) und lädt alle Bilder herunter: nacheinander über
+eine Verbindung mit kurzer Pause, nur in der Größe, die ImmoScout24 selbst ausliefert, nur von `*.immobilienscout24.de`.
+Bei der ersten Ablehnung (403/429/kein Bild) wird abgebrochen; was da ist, bleibt. Gespeichert wird als JPEG (max.
+1024 px) unter `/data/media/<Inserat>/`; nach 60 Tagen löscht immobot die Bilder beim Start wieder.
+
+- **Entwürfe** bekommen den vollen Exposé-Text, die Ansprechperson und bis zu „Höchstens so viele Bilder“ (Einstellungen,
+  Standard 10, ≈ 1.000 Tokens pro Bild), jedes beschriftet („Bild 1: Grundriss“). Grundrisse kommen zuerst. Andere
+  Portale bekommen wie bisher Fredys Einzelbild.
+- **Telegram:** „🖼 Bilder“ schickt bis zu 10 Bilder als Album unter die immobot-Nachricht (einmal pro Inserat).
+  „🔗 Dashboard“ öffnet die Inseratseite.
+- **Dashboard:** Die Inseratseite zeigt alle Bilder, Details und Ansprechperson. Wurde noch nichts geladen oder ist
+  etwas schiefgegangen, gibt es „Bilder & Details laden“ bzw. „Erneut versuchen“. Fehlversuche wiederholt immobot
+  nicht selbst; der letzte Fehler steht unter Status.
+
+Die Adresse für „🔗 Dashboard“ merkt sich immobot aus deinen Dashboard-Aufrufen und aus Fredys Webhook. Fest einstellen
+lässt sie sich mit der optionalen Env-Variable `IMMOBOT_PUBLIC_URL` (z. B. `https://immobot.example.de`). Adressen wie
+`localhost` oder reine IP-Adressen nutzt immobot nicht, weil Telegram solche Links ablehnt.
+
 ## Fredy verbinden
 
 Im Fredy-Job unter *Notification Adapter* **zusätzlich** zum Telegram-Adapter den **HTTP**-Adapter hinzufügen:

@@ -185,7 +185,7 @@ def test_followup_generating_and_collapsed_views():
     listing = listing_dict(id=12)
     text, markup = bot.followup_view(listing)
     assert text == bot.header(listing)
-    assert callback_data(markup) == [["gen:12", "skip:12"]]
+    assert callback_data(markup) == [["gen:12", "skip:12"], ["img:12"]]  # IS24 listing: pictures button
     assert bot.generating_text(listing).endswith("\n\n⏳ schreibe Entwurf …")
 
     text, markup = bot.collapsed_view(listing_dict(id=12, status="sent", title="A & B"))
@@ -209,8 +209,9 @@ def test_draft_keyboard_layout_with_contact_url(monkeypatch):
 def test_draft_keyboard_omits_url_button_without_contact_url(monkeypatch):
     monkeypatch.setattr(portals, "contact_url", lambda provider, url: None)
     rows = bot.draft_keyboard(listing_dict(id=12)).inline_keyboard
-    assert len(rows) == 3
+    assert len(rows) == 4
     assert [b.callback_data for b in rows[1]] == ["edit:12"]
+    assert [b.callback_data for b in rows[3]] == ["img:12"]
 
 
 def test_all_callback_data_fits_telegram_limit():
@@ -953,3 +954,209 @@ def test_username(monkeypatch):
     assert bot.username() is None
     monkeypatch.setattr(bot, "_app", SimpleNamespace(bot=FakeBot(), running=True))
     assert bot.username() == "immo_test_bot"
+
+
+# --- pictures album & dashboard links ----------------------------------------------
+
+class AlbumBot(FakeBot):
+    """FakeBot that also records photo/album uploads."""
+
+    def __init__(self, fail=None):
+        super().__init__()
+        self.albums: list[dict] = []
+        self.photos: list[dict] = []
+        self.fail = fail
+
+    async def send_media_group(self, **kwargs):
+        if self.fail:
+            raise self.fail
+        self.albums.append(kwargs)
+        return [SimpleNamespace(message_id=700 + i) for i in range(len(kwargs["media"]))]
+
+    async def send_photo(self, **kwargs):
+        if self.fail:
+            raise self.fail
+        self.photos.append(kwargs)
+        return SimpleNamespace(message_id=800)
+
+
+IS24_URL = "https://www.immobilienscout24.de/expose/123456789"
+
+
+def store_pictures(db, listing_id, captions):
+    """Pretend is24 already stored these pictures (rows + JPEG files)."""
+    import io
+
+    from PIL import Image
+
+    folder = bot.is24.media_root() / str(listing_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for position, caption in enumerate(captions, start=1):
+        out = io.BytesIO()
+        Image.new("RGB", (40, 30), (position * 10, 100, 100)).save(out, format="JPEG")
+        (folder / f"{position}.jpg").write_bytes(out.getvalue())
+        rows.append({"position": position, "caption": caption, "source_url": f"https://pictures.immobilienscout24.de/{position}",
+                     "file": f"{position}.jpg"})
+    db.replace_media(listing_id, rows)
+    db.set_media_state(listing_id, db.now_iso(), None)
+
+
+@pytest.fixture
+def album_listing(tg, monkeypatch):
+    """An IS24 listing with an immobot message; ensure_media never goes to the network."""
+    db = bot.db
+    listing_id = add_listing(db, "is1", url=IS24_URL)
+    calls = []
+
+    async def ensure_media(lid, retry=False):
+        calls.append((lid, retry))
+        return db.list_media(lid)
+
+    monkeypatch.setattr(bot.is24, "ensure_media", ensure_media)
+    return listing_id, calls
+
+
+def press_on(tg_bot, data):
+    query = FakeQuery(data)
+    asyncio.run(bot._on_callback(callback_update(query), SimpleNamespace(bot=tg_bot)))
+    return query
+
+
+def test_album_caption():
+    rows = [{"caption": c} for c in ["Grundriss", "Balkon", "", "Balkon", "Bad"]]
+    assert bot.album_caption(rows, 5, None) == "📷 5 Fotos · Grundriss, Balkon, Bad"
+    assert bot.album_caption(rows[:2], 11, "https://immobot.example.de/listing/7") == (
+        "📷 11 Fotos · Grundriss, Balkon (+9 weitere)\n🔗 https://immobot.example.de/listing/7")
+    assert bot.album_caption([{"caption": ""}], 1, None) == "📷 1 Foto"
+    long_rows = [{"caption": f"Zimmer {i} " + "ü" * 50} for i in range(30)]  # more than ever fit
+    caption = bot.album_caption(long_rows, 40, "https://immobot.example.de/listing/7")
+    assert bot._tg_len(caption) <= bot.CAPTION_MAX and ", …" in caption and caption.endswith("/listing/7")
+
+
+def test_album_media_max_ten_caption_on_first():
+    pictures = [({"caption": str(i)}, b"\xff\xd8jpeg" + bytes([i])) for i in range(14)]
+    media = bot.album_media(pictures, "📷 14 Fotos")
+    assert len(media) == 10
+    assert media[0].caption == "📷 14 Fotos" and all(m.caption is None for m in media[1:])
+    assert all(not isinstance(m.media, str) for m in media)  # uploaded bytes, never URLs
+
+
+def test_pictures_button_sends_one_album_as_reply(tg, album_listing):
+    listing_id, calls = album_listing
+    store_pictures(bot.db, listing_id, ["Grundriss", "Balkon"] + [f"Raum {i}" for i in range(10)])
+    album_bot = AlbumBot()
+    query = press_on(album_bot, f"img:{listing_id}")
+    assert query.answers == ["⏳ lade Bilder …"]
+    assert calls == [(listing_id, True)]  # a user action may retry a failed fetch
+    (album,) = album_bot.albums
+    assert album["chat_id"] == CHAT and album["reply_parameters"].message_id == 555
+    assert len(album["media"]) == 10
+    assert album["media"][0].caption.startswith("📷 12 Fotos · Grundriss, Balkon, Raum 0") and "(+2 weitere)" in album["media"][0].caption
+    assert bot.db.get_listing(listing_id)["album_message_id"] == 700
+    again = press_on(album_bot, f"img:{listing_id}")  # pressed again: no second album
+    assert again.answers == ["Bilder sind schon oben ↑"] and len(album_bot.albums) == 1
+
+
+def test_pictures_button_single_picture_uses_send_photo(tg, album_listing):
+    listing_id, _ = album_listing
+    store_pictures(bot.db, listing_id, ["Außenansicht"])
+    album_bot = AlbumBot()
+    press_on(album_bot, f"img:{listing_id}")
+    assert album_bot.albums == [] and len(album_bot.photos) == 1
+    photo = album_bot.photos[0]
+    assert photo["caption"] == "📷 1 Foto · Außenansicht" and photo["photo"][:2] == b"\xff\xd8"
+    assert bot.db.get_listing(listing_id)["album_message_id"] == 800
+
+
+def test_pictures_button_with_dashboard_link(tg, album_listing, monkeypatch):
+    listing_id, _ = album_listing
+    monkeypatch.setattr(bot, "_public_base", "https://immobot.example.de")
+    store_pictures(bot.db, listing_id, ["Balkon", "Bad"])
+    album_bot = AlbumBot()
+    press_on(album_bot, f"img:{listing_id}")
+    assert album_bot.albums[0]["media"][0].caption.endswith(f"\n🔗 https://immobot.example.de/listing/{listing_id}")
+
+
+def test_pictures_button_without_pictures_shows_error_and_keeps_buttons(tg, album_listing):
+    listing_id, _ = album_listing
+    bot.db.set_media_state(listing_id, bot.db.now_iso(), "Exposé nicht abrufbar (HTTP 404).")
+    album_bot = AlbumBot()
+    press_on(album_bot, f"img:{listing_id}")
+    assert album_bot.albums == [] and album_bot.photos == []
+    edit = album_bot.edits[-1]
+    assert edit["text"].endswith("⚠️ Bilder: Exposé nicht abrufbar (HTTP 404).")
+    assert callback_data(edit["reply_markup"]) == [[f"gen:{listing_id}", f"skip:{listing_id}"], [f"img:{listing_id}"]]
+    assert bot.db.get_listing(listing_id)["album_message_id"] is None
+
+
+def test_pictures_button_telegram_error(tg, album_listing, monkeypatch):
+    listing_id, _ = album_listing
+    store_pictures(bot.db, listing_id, ["Balkon", "Bad"])
+    monkeypatch.setitem(bot._state, "last_error", None)
+    album_bot = AlbumBot(fail=NetworkError("upload failed"))
+    press_on(album_bot, f"img:{listing_id}")
+    assert "nicht gesendet" in album_bot.edits[-1]["text"] and "NetworkError" in bot.status()["last_error"]
+    assert bot.db.get_listing(listing_id)["album_message_id"] is None  # can be pressed again
+    assert bot._sending_albums == set()
+
+
+def test_pictures_button_for_other_portals(tg, monkeypatch):
+    listing_id = add_listing(bot.db)  # https://example.org/expose/1, provider immoscout -> not an IS24 URL
+    album_bot = AlbumBot()
+    query = press_on(album_bot, f"img:{listing_id}")
+    assert query.answers == ["Bilder gibt es nur für ImmoScout24-Inserate."] and album_bot.albums == []
+
+
+def test_pictures_button_works_while_a_draft_is_generated(tg, album_listing):
+    listing_id, _ = album_listing
+    store_pictures(bot.db, listing_id, ["Balkon", "Bad"])
+    album_bot = AlbumBot()
+
+    async def main():
+        async with bot._lock(listing_id):  # a generation is running for this listing
+            await bot._on_callback(callback_update(FakeQuery(f"img:{listing_id}")), SimpleNamespace(bot=album_bot))
+
+    asyncio.run(main())
+    assert len(album_bot.albums) == 1
+
+
+def test_keyboards_have_pictures_and_dashboard_buttons(monkeypatch):
+    is24_listing = listing_dict(id=12, url=IS24_URL)
+    other = listing_dict(id=13, provider="immowelt", url="https://www.immowelt.de/expose/x")
+    assert bot.followup_view(other)[1].inline_keyboard[-1][-1].callback_data == "skip:13"  # no extra row
+    monkeypatch.setattr(bot, "_public_base", "https://immobot.example.de")
+    for markup, extra in [(bot.followup_view(is24_listing)[1], ["img:12"]), (bot.draft_keyboard(is24_listing), ["img:12"]),
+                          (bot.followup_view(other)[1], [])]:
+        row = markup.inline_keyboard[-1]
+        assert [b.callback_data for b in row if b.callback_data] == extra
+        assert row[-1].text == "🔗 Dashboard" and row[-1].url.endswith("/listing/" + str(row[-1].url.split("/")[-1]))
+        assert all(len(r) <= 3 for r in markup.inline_keyboard)
+    assert bot.followup_view(is24_listing)[1].inline_keyboard[-1][-1].url == "https://immobot.example.de/listing/12"
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://immobot.example.de", "https://immobot.example.de"),
+    ("https://Immobot.Example.de/listing/3?x=1", "https://immobot.example.de"),
+    ("http://immobot.example.de:8080", "http://immobot.example.de:8080"),
+    ("http://localhost:8000", None), ("http://127.0.0.1:8000", None), ("http://[::1]:8000", None),
+    ("http://testserver", None), ("https://app.localhost", None), ("ftp://immobot.example.de", None), ("", None), (None, None),
+])
+def test_valid_public_url(url, expected):
+    assert bot.valid_public_url(url) == expected
+
+
+def test_public_url_remembered_unless_fixed_by_env(fresh_db):
+    bot.init_public_url("")
+    assert bot.public_url_info() == (None, "unknown") and bot.dashboard_url(5) is None
+    bot.remember_public_url("https://immobot.example.de")
+    assert bot.dashboard_url(5) == "https://immobot.example.de/listing/5"
+    assert fresh_db.get_meta("public_base_url") == "https://immobot.example.de"
+    bot.remember_public_url("http://localhost:8000")  # unusable for Telegram: ignored
+    bot.init_public_url("")  # after a restart: remembered
+    assert bot.public_url_info() == ("https://immobot.example.de", "remembered")
+    bot.init_public_url("https://fixed.example.de/")
+    bot.remember_public_url("https://other.example.de")
+    assert bot.public_url_info() == ("https://fixed.example.de", "env")
+    bot.init_public_url("http://localhost")  # unusable env value: ignored, remembered one used
+    assert bot.public_url_info() == ("https://immobot.example.de", "remembered")

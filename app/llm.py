@@ -10,7 +10,6 @@ API keys come from vault.py and are read on every call, so a new key works witho
 """
 
 import base64
-import io
 import json
 import logging
 import re
@@ -19,9 +18,8 @@ from urllib.parse import urlsplit
 
 import anthropic
 import httpx
-from PIL import Image
 
-from . import db, vault
+from . import db, images, is24, vault
 from .portals import provider_label, safe_url
 from .settings import (
     DEFAULT_SYSTEM_PROMPT, DRAFT_KINDS, EFFORTS, PRICES, PROVIDERS, as_bool, as_float, as_int, cost, fmt_money, fmt_usd,
@@ -37,6 +35,7 @@ DEFAULT_EFFORT = "low"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"}
 MODEL_LIST_MAX = 500
+MAX_IMAGES_LIMIT = 20  # upper bound of the llm_max_images setting
 
 # Kinds that rework the latest stored draft.
 VARIANT_KINDS = ("regenerate", "shorter", "formal", "custom")
@@ -44,8 +43,6 @@ INSTRUCTION_MAX_CHARS = 500
 DESCRIPTION_MAX_CHARS = 12000
 
 IMAGE_MAX_BYTES = 10 * 1024 * 1024
-IMAGE_MAX_PIXELS = 40_000_000  # refuse decompression bombs before decoding
-IMAGE_MAX_SIDE = 1024
 IMAGE_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 )
@@ -92,6 +89,11 @@ class DraftResult:
     provider: str = "anthropic"
     currency: str = "USD"
     cost_native: float = 0.0  # what the provider bills, in `currency`
+
+
+def max_images(settings: dict) -> int:
+    """How many stored listing pictures go to the model (setting llm_max_images, 0-20)."""
+    return min(max(as_int(settings.get("llm_max_images"), 10), 0), MAX_IMAGES_LIMIT)
 
 
 def no_key_message(provider: str) -> str:
@@ -219,8 +221,11 @@ def build_user_text(listing: dict, kind: str, previous_text: str | None = None, 
         ("Portal", provider_label(listing.get("provider")) if listing.get("provider") else None),
         ("Link", listing.get("url")),
     ]
+    if listing.get("contact_name"):
+        fields.append(("Ansprechperson", listing["contact_name"]))
     lines = [name + ": " + str(value).strip() for name, value in fields if value and str(value).strip()]
-    description = (listing.get("description") or "").strip()[:DESCRIPTION_MAX_CHARS]
+    # The full ImmoScout24 exposé text when we have it (is24.py), else Fredy's description.
+    description = (listing.get("details") or listing.get("description") or "").strip()[:DESCRIPTION_MAX_CHARS]
     lines.append("Beschreibung:\n" + (description or "(keine Beschreibung)"))
     parts = ["<inserat>\n" + "\n".join(lines) + "\n</inserat>"]
 
@@ -273,7 +278,7 @@ async def fetch_image_block(image_url: str | None) -> dict | None:
     if url is None:
         return None
     try:
-        jpeg = _shrink_to_jpeg(await _download(url))
+        jpeg = images.to_jpeg(await _download(url))
     except Exception as exc:  # the image is optional; never fail the draft because of it
         if isinstance(exc, httpx.HTTPStatusError):
             reason = "HTTP " + str(exc.response.status_code)
@@ -302,24 +307,26 @@ async def _download(url: str) -> bytes:
     return b"".join(chunks)
 
 
-def _shrink_to_jpeg(data: bytes) -> bytes:
-    with Image.open(io.BytesIO(data)) as src:
-        if src.width * src.height > IMAGE_MAX_PIXELS:
-            raise ValueError("image has too many pixels")
-        src.draft("RGB", (IMAGE_MAX_SIDE, IMAGE_MAX_SIDE))  # cheap downscale while decoding JPEGs
-        img = src.convert("RGB")
-    img.thumbnail((IMAGE_MAX_SIDE, IMAGE_MAX_SIDE))
-    out = io.BytesIO()
-    img.save(out, format="JPEG", quality=85)
-    return out.getvalue()
-
-
 # --- Claude call ------------------------------------------------------------
 
+def picture_blocks(pictures: list[tuple[dict, bytes]]) -> list[dict]:
+    """Stored listing pictures as content blocks, each labelled "Bild 1: Balkon" right before the image."""
+    blocks = []
+    for number, (row, jpeg) in enumerate(pictures, start=1):
+        label = "Bild " + str(number) + (": " + row["caption"] if row.get("caption") else "")
+        blocks.append({"type": "text", "text": label})
+        blocks.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                   "data": base64.standard_b64encode(jpeg).decode("ascii")}})
+    return blocks
+
+
 async def generate_draft(
-    listing: dict, settings: dict, kind: str, previous_text: str | None = None, instruction: str | None = None
+    listing: dict, settings: dict, kind: str, previous_text: str | None = None, instruction: str | None = None,
+    pictures: list[tuple[dict, bytes]] | None = None,
 ) -> DraftResult:
-    """Ask Claude (through the configured provider) for one draft. No database writes."""
+    """Ask Claude (through the configured provider) for one draft. No database writes.
+    `pictures`: the stored ImmoScout24 pictures (row, JPEG), already limited to llm_max_images (may be empty).
+    None means there are none for this listing, and Fredy's single image is used instead."""
     provider = provider_of(settings)
     client = _get_client(provider)
     model = model_of(settings)
@@ -327,9 +334,12 @@ async def generate_draft(
 
     content = []
     if as_bool(settings.get("send_image")):
-        image = await fetch_image_block(listing.get("image_url"))
-        if image:
-            content.append(image)
+        if pictures is not None:
+            content += picture_blocks(pictures[:max_images(settings)])
+        else:
+            image = await fetch_image_block(listing.get("image_url"))
+            if image:
+                content.append(image)
     content.append({"type": "text", "text": build_user_text(listing, kind, previous_text, instruction)})
 
     structured = provider == "anthropic"  # DeutschlandGPT ignores output_config.format on most models
@@ -506,7 +516,13 @@ async def create_and_store_draft(listing_id: int, kind: str, instruction: str | 
         previous = db.latest_draft(listing_id)
         previous_text = previous["text"] if previous else None
 
-    result = await generate_draft(listing, settings, kind, previous_text, instruction)
+    # ImmoScout24: exposé details and pictures, fetched once, then from the local copies. [] for other portals
+    # or when nothing could be fetched - then Fredy's single image is used (pictures=None).
+    rows = await is24.ensure_media(listing_id)
+    listing = db.get_listing(listing_id) or listing
+    pictures = is24.read_pictures(listing_id, rows[:max_images(settings)]) if rows else None
+
+    result = await generate_draft(listing, settings, kind, previous_text, instruction, pictures)
     draft_id = db.add_draft(
         listing_id,
         kind,

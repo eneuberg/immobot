@@ -1223,3 +1223,128 @@ def test_listing_shows_provider_and_both_currencies(client):
     assert "Claude Sonnet 5.5 · DeutschlandGPT · " in page and "2,1 ct (€) ≈ 2,3 ct ($)" in page
     assert "Claude Opus 5.5 · Anthropic · " in page and "4,2 ct ($)" in page
     assert "6,5 ct" in client.get("/").text  # listing total in USD: 2,31 + 4,2 ct
+
+
+# --- ImmoScout24 gallery & media route --------------------------------------------------
+
+IS24_URL = "https://www.immobilienscout24.de/expose/123456789"
+
+
+def store_listing_pictures(listing_id, captions):
+    import io
+
+    from PIL import Image
+
+    from app import is24
+
+    folder = is24.media_root() / str(listing_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for position, caption in enumerate(captions, start=1):
+        out = io.BytesIO()
+        Image.new("RGB", (30, 20), (200, 100, position)).save(out, format="JPEG")
+        (folder / f"{position}.jpg").write_bytes(out.getvalue())
+        rows.append({"position": position, "caption": caption, "source_url": "https://pictures.immobilienscout24.de/x",
+                     "file": f"{position}.jpg"})
+    db.replace_media(listing_id, rows)
+    db.set_media_state(listing_id, db.now_iso(), None)
+
+
+def test_listing_page_shows_gallery_and_details(client):
+    login(client)
+    lid = add_listing(provider="immoscout", url=IS24_URL, description="Kurzer Fredy-Text")
+    page = client.get(f"/listing/{lid}").text
+    assert "Bilder (0)" in page and "Bilder &amp; Details laden" in page and "Kurzer Fredy-Text" in page
+    store_listing_pictures(lid, ["Grundriss", "<b>Balkon</b>"])
+    db.set_listing_details(lid, "Zimmer: 3\n## Objektbeschreibung\nVoller Text", "Frau Erika Mustermann")
+    page = client.get(f"/listing/{lid}").text
+    assert "Bilder (2)" in page and "Bilder &amp; Details laden" not in page
+    assert f'<img src="/listing/{lid}/media/1"' in page and f'href="/listing/{lid}/media/2"' in page
+    assert "1 · Grundriss" in page and "&lt;b&gt;Balkon&lt;/b&gt;" in page and "<b>Balkon</b>" not in page
+    assert "Ansprechperson: <strong>Frau Erika Mustermann</strong>" in page and "Voller Text" in page
+    assert "Kurzer Fredy-Text" not in page  # the full exposé text replaces Fredy's
+    db.set_media_state(lid, db.now_iso(), "Bilder-Server lehnt ab (HTTP 429) – abgebrochen.")
+    page = client.get(f"/listing/{lid}").text
+    assert "⚠ Bilder-Server lehnt ab (HTTP 429)" in page and "Erneut versuchen" in page
+
+
+def test_listing_page_without_is24_has_no_gallery(client):
+    login(client)
+    lid = add_listing()  # immowelt
+    page = client.get(f"/listing/{lid}").text
+    assert 'id="bilder"' not in page and "Bilder &amp; Details laden" not in page
+
+
+def test_media_route(client):
+    lid = add_listing(provider="immoscout", url=IS24_URL)
+    store_listing_pictures(lid, ["Balkon"])
+    r = client.get(f"/listing/{lid}/media/1")
+    assert r.status_code == 303 and r.headers["location"] == "/login"  # login required
+    login(client)
+    r = client.get(f"/listing/{lid}/media/1")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg" and r.content[:2] == b"\xff\xd8"
+    assert r.headers["cache-control"] == "private, max-age=86400"  # the one exception to no-store
+    assert r.headers["x-content-type-options"] == "nosniff" and "frame-ancestors" in r.headers["content-security-policy"]
+    assert client.get(f"/listing/{lid}").headers["cache-control"] == "no-store"
+    for path in [f"/listing/{lid}/media/2", f"/listing/{lid}/media/0", f"/listing/{lid}/media/-1", "/listing/999/media/1"]:
+        assert client.get(path).status_code == 404, path
+    for path in [f"/listing/{lid}/media/abc", f"/listing/{lid}/media/..%2F..%2Fimmobot.db", f"/listing/{lid}/media/1.jpg"]:
+        assert client.get(path).status_code in (404, 422), path
+    db.replace_media(lid, [{"position": 1, "caption": "", "source_url": "x", "file": "../../immobot.db"}])
+    assert client.get(f"/listing/{lid}/media/1").status_code == 404  # never outside the listing's folder
+
+
+def test_load_media_button(client, monkeypatch):
+    calls = []
+
+    async def ensure_media(listing_id, retry=False):
+        calls.append((listing_id, retry))
+        return []
+
+    monkeypatch.setattr(web.is24, "ensure_media", ensure_media)
+    lid = add_listing(provider="immoscout", url=IS24_URL)
+    assert client.post(f"/listing/{lid}/media").headers["location"] == "/login"
+    login(client)
+    assert client.post(f"/listing/{lid}/media", headers={"Origin": "https://evil.example"}).status_code == 403
+    r = client.post(f"/listing/{lid}/media")
+    assert r.status_code == 303 and r.headers["location"] == f"/listing/{lid}#bilder"
+    assert calls == [(lid, True)]
+    assert client.post("/listing/999/media").status_code == 404
+
+
+def test_public_url_remembered_from_trusted_requests(client):
+    client.get("/login", headers={"host": "immobot.example.de"})  # not logged in: ignored
+    assert db.get_meta("public_base_url") is None
+    login(client)
+    client.get("/", headers={"host": "immobot.example.de"})
+    assert db.get_meta("public_base_url") == "http://immobot.example.de"  # TestClient speaks http
+    assert bot.dashboard_url(3) == "http://immobot.example.de/listing/3"
+    client.get("/", headers={"host": "localhost:8000"})  # unusable for Telegram: kept the old one
+    assert db.get_meta("public_base_url") == "http://immobot.example.de"
+    page = client.get("/settings").text
+    assert "<code>http://immobot.example.de</code>" in page and "gemerkt aus deinen Dashboard-Aufrufen" in page
+    assert "IMMOBOT_PUBLIC_URL" in page
+
+
+def test_public_url_from_webhook(client):
+    hook(client, {"listings": []}, token="wrong")
+    assert db.get_meta("public_base_url") is None
+    client.post("/hook/fredy", json={"listings": []}, headers={"Authorization": f"Bearer {TOKEN}", "host": "bot.example.de"})
+    assert db.get_meta("public_base_url") == "http://bot.example.de"
+
+
+def test_settings_llm_max_images(client):
+    login(client)
+    assert 'name="llm_max_images" min="0" max="20" step="1" value="10"' in client.get("/settings").text
+    assert "≈ 1.000 Tokens pro Bild" in client.get("/settings").text
+    assert client.post("/settings", data=valid_settings(llm_max_images="4")).status_code == 303
+    assert db.get_settings()["llm_max_images"] == "4"
+    for bad in ["21", "-1", "x"]:
+        assert client.post("/settings", data=valid_settings(llm_max_images=bad)).status_code == 400
+
+
+def test_status_shows_last_is24_error(client):
+    login(client)
+    assert "Letzter ImmoScout24-Fehler" in client.get("/status").text
+    db.set_meta("is24_last_error", "2026-10-12T10:00:00+00:00 Inserat 7: Exposé nicht abrufbar (HTTP 404).")
+    assert "Inserat 7: Exposé nicht abrufbar (HTTP 404)." in client.get("/status").text

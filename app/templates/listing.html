@@ -25,8 +25,37 @@
   {% endif %}
 </div>
 
+{% if is24 %}
+<h2 id="bilder">Bilder ({{ media|length }})</h2>
+{% if listing.media_error %}<p class="error">⚠ {{ listing.media_error }}</p>{% endif %}
+{% if media %}
+<div class="gallery">
+  {% for m in media %}
+  <figure>
+    <a href="/listing/{{ listing.id }}/media/{{ m.position }}" target="_blank" rel="noopener">
+      <img src="/listing/{{ listing.id }}/media/{{ m.position }}" alt="{{ m.caption or 'Bild ' ~ m.position }}" loading="lazy">
+    </a>
+    <figcaption>{{ m.position }}{% if m.caption %} · {{ m.caption }}{% endif %}</figcaption>
+  </figure>
+  {% endfor %}
+</div>
+{% endif %}
+{% if not listing.media_fetched_at or listing.media_error %}
+<form method="post" action="/listing/{{ listing.id }}/media" data-once>
+  <button type="submit" class="secondary">{{ "Erneut versuchen" if listing.media_error else "Bilder & Details laden" }}</button>
+  <small class="muted">Holt das Exposé und alle Bilder von ImmoScout24 (einige Sekunden).</small>
+</form>
+{% endif %}
+{% endif %}
+
+{% if listing.details %}
+<h2>Details (ImmoScout24)</h2>
+{% if listing.contact_name %}<p>Ansprechperson: <strong>{{ listing.contact_name }}</strong></p>{% endif %}
+<p class="pre-wrap">{{ listing.details }}</p>
+{% else %}
 <h2>Beschreibung</h2>
 <p class="pre-wrap">{{ listing.description or "–" }}</p>
+{% endif %}
 
 <h2>Status</h2>
 <form method="post" action="/listing/{{ listing.id }}/status">

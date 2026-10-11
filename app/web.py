@@ -27,10 +27,10 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import bot, db, llm, portals, settings, vault
+from . import bot, db, is24, llm, portals, settings, vault
 
 log = logging.getLogger(__name__)
 
@@ -136,9 +136,12 @@ SECURITY_HEADERS = {
 
 
 async def security_headers(request: Request, call_next):
-    """HTTP middleware; registered in main.py via app.middleware("http")(security_headers)."""
+    """HTTP middleware; registered in main.py via app.middleware("http")(security_headers).
+    A route that sets its own Cache-Control (the listing pictures) keeps it; everything else is no-store."""
     response = await call_next(request)
     for name, value in SECURITY_HEADERS.items():
+        if name == "Cache-Control" and name in response.headers:
+            continue
         response.headers[name] = value
     return response
 
@@ -171,9 +174,16 @@ def is_logged_in(request: Request) -> bool:
     return True
 
 
+def _remember_base_url(request: Request) -> None:
+    """Scheme and host of a trusted request (logged in, or the authenticated webhook) become the address of
+    the "🔗 Dashboard" buttons in Telegram, unless IMMOBOT_PUBLIC_URL fixes it."""
+    bot.remember_public_url(f"{request.url.scheme}://{request.url.netloc}")
+
+
 async def require_login(request: Request) -> None:
     if not is_logged_in(request):
         raise HTTPException(status_code=303, headers={"Location": "/login"})
+    _remember_base_url(request)
 
 
 async def same_origin(request: Request) -> None:
@@ -283,6 +293,7 @@ async def fredy_webhook(request: Request):
     given = request.headers.get("authorization", "").encode()
     if not hmac.compare_digest(given, expected):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
+    _remember_base_url(request)
 
     try:
         payload = await request.json()
@@ -386,6 +397,8 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
     return {
         "active": "listings",
         "listing": listing,
+        "is24": is24.is_supported(listing),
+        "media": db.list_media(listing["id"]),
         "portal": portals.provider_label(listing["provider"]),
         # Only http(s) URLs become links/images; contact_url's output is checked as well.
         "image_url": portals.safe_url(listing["image_url"]),
@@ -412,6 +425,25 @@ def listings_page(request: Request, status: str | None = None):
 @router.get("/listing/{listing_id}", dependencies=PAGE)
 def listing_page(request: Request, listing_id: int):
     return render(request, "listing.html", _listing_context(_listing_or_404(listing_id)))
+
+
+@router.get("/listing/{listing_id}/media/{position}", dependencies=PAGE)
+def listing_media(listing_id: int, position: int):
+    """A stored ImmoScout24 picture. Only files recorded in listing_media and lying inside
+    DATA_DIR/media/<listing id>/ are served; the browser may cache them privately for a day."""
+    path = is24.media_file(listing_id, position) if listing_id > 0 and position > 0 else None
+    if path is None:
+        raise HTTPException(status_code=404, detail="Bild nicht gefunden")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.post("/listing/{listing_id}/media", dependencies=ACTION)
+async def listing_load_media(listing_id: int):
+    """"Bilder & Details laden" (also retries after a failure). Takes a few seconds: one exposé request,
+    then the pictures one at a time."""
+    _listing_or_404(listing_id)
+    await is24.ensure_media(listing_id, retry=True)
+    return RedirectResponse(f"/listing/{listing_id}#bilder", status_code=303)
 
 
 @router.post("/listing/{listing_id}/status", dependencies=ACTION)
@@ -457,7 +489,7 @@ def validate_settings(form: dict[str, str], current: dict[str, str]) -> tuple[di
     if "system_prompt" in values and not values["system_prompt"].strip():
         errors["system_prompt"] = "Darf nicht leer sein (oder auf Standard zurücksetzen)."
 
-    for key, low, high in [("target_words", 30, 600), ("followup_delay_s", 0, 60)]:
+    for key, low, high in [("target_words", 30, 600), ("followup_delay_s", 0, 60), ("llm_max_images", 0, 20)]:
         if key in form:
             raw = form[key].strip()
             try:
@@ -569,6 +601,7 @@ def _render_settings(request: Request, values: dict, *, errors=None, message=Non
         "test": test,
         "ai": {**_ai_status(current), **_model_choices(request, current)},
         "providers": [(key, p["label"]) for key, p in settings.PROVIDERS.items()],
+        "public_url": bot.public_url_info(),
         "effort_options": [(e, EFFORT_LABELS.get(e, e)) for e in settings.EFFORTS],
     }, status_code=status_code)
 
@@ -893,6 +926,7 @@ def status_page(request: Request):
         # Names, sources and dates only - never any part of a secret.
         "credentials": vault.status(),
         "ai": _ai_status(db.get_settings()),
+        "is24_last_error": db.get_meta("is24_last_error"),
         "events": _credential_events(),
         "version": settings.APP_VERSION,
         "stats": db.stats(),

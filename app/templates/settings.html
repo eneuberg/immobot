@@ -124,10 +124,20 @@
   </label>
   <label>
     <input type="checkbox" name="send_image" value="1" {% if values.send_image|as_bool %}checked{% endif %}>
-    Bild des Inserats an Claude mitschicken
+    Bilder des Inserats an Claude mitschicken
+  </label>
+  <label>Höchstens so viele Bilder (ImmoScout24, 0–20) <small class="muted">– ≈ 1.000 Tokens pro Bild</small>
+    <input type="number" name="llm_max_images" min="0" max="20" step="1" value="{{ values.llm_max_images }}"
+      {% if errors.llm_max_images %}aria-invalid="true"{% endif %}>
+    {{ field_error("llm_max_images") }}
   </label>
 
   <h2>Telegram</h2>
+  <p><small class="muted">Adresse für die „🔗 Dashboard“-Links:
+    {% if public_url[0] %}<code>{{ public_url[0] }}</code>
+      ({{ "aus IMMOBOT_PUBLIC_URL" if public_url[1] == "env" else "gemerkt aus deinen Dashboard-Aufrufen" }})
+    {% else %}noch unbekannt – wird beim nächsten Dashboard-Aufruf über die öffentliche Domain gemerkt{% endif %}.
+    Fest einstellen mit der Env-Variable <code>IMMOBOT_PUBLIC_URL</code> (z. B. <code>https://immobot.example.de</code>).</small></p>
   <label>Verzögerung nach Fredys Nachricht (Sekunden, 0–60)
     <input type="number" name="followup_delay_s" min="0" max="60" step="1" value="{{ values.followup_delay_s }}"
       {% if errors.followup_delay_s %}aria-invalid="true"{% endif %}>

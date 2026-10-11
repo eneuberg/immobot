@@ -25,6 +25,7 @@ class Config:
     data_dir: str
     cookie_secure: bool
     disable_bot: bool
+    public_url: str = ""  # optional IMMOBOT_PUBLIC_URL for Telegram's "🔗 Dashboard" links (else remembered)
     # Optional env fallbacks; a value saved in the dashboard takes precedence (see vault.py).
     anthropic_api_key: str = field(default="", repr=False)
     telegram_bot_token: str = field(default="", repr=False)
@@ -81,6 +82,7 @@ def load_config() -> Config:
         data_dir=_env("DATA_DIR") or "/data",
         cookie_secure=_flag("COOKIE_SECURE", True),
         disable_bot=_flag("IMMOBOT_DISABLE_BOT", False),
+        public_url=_env("IMMOBOT_PUBLIC_URL"),
         anthropic_api_key=_env("ANTHROPIC_API_KEY"),
         telegram_bot_token=_env("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=chat_id,
