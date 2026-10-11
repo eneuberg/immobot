@@ -9,16 +9,41 @@
     <th>Telegram-Bot</th>
     <td>
       {% if bot_disabled %}deaktiviert (IMMOBOT_DISABLE_BOT)
-      {% elif bot_running %}<span class="success">läuft</span>
+      {% elif not bot_configured %}<span class="error">nicht konfiguriert</span> – Bot-Token unter <a href="/credentials">Zugänge</a> eintragen
+      {% elif bot_running %}<span class="success">läuft</span>{% if not chat_connected %} – noch kein Chat verbunden{% endif %}
       {% else %}<span class="error">läuft nicht</span>{% endif %}
+    </td>
+  </tr>
+  <tr>
+    <th>Erlaubte Telegram-User</th>
+    <td>
+      {% if allowlist_warning %}<span class="error">⚠ {{ allowlist_warning }}</span>
+      {% else %}{{ allowed_user_ids|join(", ") }}{% endif %}
     </td>
   </tr>
   <tr><th>Letztes Telegram-Update</th><td>{{ bot_last_update_at|local_time }}</td></tr>
   <tr><th>Letzter Bot-Fehler</th><td class="pre-wrap">{{ bot_last_error or "–" }}</td></tr>
-  <tr><th>Telegram-Chat konfiguriert</th><td>{{ "ja" if chat_configured else "nein" }}</td></tr>
-  <tr><th>Anthropic API-Key gesetzt</th><td>{{ "ja" if api_key_set else "nein" }}</td></tr>
   <tr><th>Version</th><td>{{ version }}</td></tr>
 </table>
+
+<h2>Zugänge</h2>
+<table>
+  {% for c in credentials %}
+  <tr>
+    <th>{{ c.label }}</th>
+    <td>
+      {% if c.source == "dashboard" %}gesetzt (Dashboard)
+      {% elif c.source == "env" %}gesetzt (Env-Variable)
+      {% else %}<span class="error">nicht gesetzt</span>{% endif %}
+      {% if c.undecryptable %} · <span class="error">⚠ nicht entschlüsselbar</span>{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+<p><a href="/credentials">Zugänge verwalten →</a></p>
+
+<h3>Protokoll (Zugänge und fehlgeschlagene Logins)</h3>
+{% include "credential_events.html" %}
 
 <h2>Datenbank</h2>
 <table>
@@ -35,7 +60,7 @@
 <p>In Fredy beim Job zusätzlich den <strong>HTTP-Adapter</strong> eintragen (Fredys Telegram-Adapter bleibt):</p>
 <ul>
   <li>URL: <code>{{ hook_url }}</code> (Pfad <code>/hook/fredy</code>)</li>
-  <li>Token = <code>FREDY_WEBHOOK_TOKEN</code> aus Coolify (wird als <code>Authorization: Bearer …</code> gesendet)</li>
+  <li>Auth Token = der Fredy-Webhook-Token von <a href="/credentials">Zugänge</a> (wird als <code>Authorization: Bearer …</code> gesendet)</li>
 </ul>
-<p class="muted">Secrets (API-Key, Tokens, Passwort) werden nur als Env-Variablen in Coolify gepflegt und hier nie angezeigt.</p>
+<p class="muted">API-Key und Tokens werden unter <a href="/credentials">Zugänge</a> gepflegt und nirgends im Dashboard angezeigt.</p>
 {% endblock %}

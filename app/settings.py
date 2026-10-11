@@ -4,7 +4,15 @@ Values are stored as strings in the `settings` table (see db.py); use the typed 
 to read them.
 """
 
+from datetime import timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 APP_VERSION = "0.1.0"
+
+try:
+    LOCAL_TZ = ZoneInfo("Europe/Berlin")  # for times shown in the dashboard and in Telegram notices
+except ZoneInfoNotFoundError:  # container without tz database
+    LOCAL_TZ = timezone.utc
 
 # USD per million tokens, from the Anthropic pricing table (as of 2026-10).
 # cache_write = 5-minute cache write (1.25x input). Haiku cache_read assumed 0.1x input.

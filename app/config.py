@@ -1,11 +1,16 @@
 """Runtime configuration from environment variables.
 
-Secrets live only here (loaded from env, set in Coolify). They are never written to the
-database, never rendered in templates and never logged. Fields holding secrets use
-repr=False so an accidental log of the Config object does not leak them.
+Only DASHBOARD_PASSWORD and SESSION_SECRET are required. The API key, bot token, chat id, allowed
+Telegram user ids and webhook token are normally entered in the dashboard ("Zugänge", see vault.py);
+the env variables of the same name still work as a fallback (that is how older deployments were set up).
+
+Secrets are never written to the database in plain text, never rendered in templates and never
+logged. Fields holding secrets use repr=False so an accidental log of the Config object does not
+leak them.
 """
 
 import os
+import re
 from dataclasses import dataclass, field
 
 
@@ -15,15 +20,27 @@ class ConfigError(RuntimeError):
 
 @dataclass(frozen=True)
 class Config:
-    anthropic_api_key: str = field(repr=False)
-    telegram_bot_token: str = field(repr=False)
-    fredy_webhook_token: str = field(repr=False)
     dashboard_password: str = field(repr=False)
     session_secret: str = field(repr=False)
-    telegram_chat_id: int | None
     data_dir: str
     cookie_secure: bool
     disable_bot: bool
+    # Optional env fallbacks; a value saved in the dashboard takes precedence (see vault.py).
+    anthropic_api_key: str = field(default="", repr=False)
+    telegram_bot_token: str = field(default="", repr=False)
+    telegram_chat_id: str = ""  # not secret; "" = not set
+    telegram_allowed_user_ids: str = ""  # not secret; "1,2"; "" = not set
+    fredy_webhook_token: str = field(default="", repr=False)
+
+    def env_credentials(self) -> dict[str, str]:
+        """The env fallbacks keyed by vault credential name (empty strings = not set)."""
+        return {
+            "anthropic_api_key": self.anthropic_api_key,
+            "telegram_bot_token": self.telegram_bot_token,
+            "telegram_chat_id": self.telegram_chat_id,
+            "telegram_allowed_user_ids": self.telegram_allowed_user_ids,
+            "fredy_webhook_token": self.fredy_webhook_token,
+        }
 
 
 def _flag(name: str, default: bool) -> bool:
@@ -33,35 +50,40 @@ def _flag(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-def load_config() -> Config:
-    disable_bot = _flag("IMMOBOT_DISABLE_BOT", False)
+def _env(name: str) -> str:
+    return os.environ.get(name, "").strip()
 
-    required = ["ANTHROPIC_API_KEY", "FREDY_WEBHOOK_TOKEN", "DASHBOARD_PASSWORD", "SESSION_SECRET"]
-    if not disable_bot:
-        required += ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
-    missing = [name for name in required if not os.environ.get(name, "").strip()]
+
+def load_config() -> Config:
+    missing = [name for name in ("DASHBOARD_PASSWORD", "SESSION_SECRET") if not _env(name)]
     if missing:
         # Names only, never values.
         raise ConfigError(f"Missing required environment variables: {', '.join(missing)}")
 
-    session_secret = os.environ["SESSION_SECRET"].strip()
+    session_secret = _env("SESSION_SECRET")
     if len(session_secret) < 32:
         raise ConfigError("SESSION_SECRET must be at least 32 characters (e.g. `openssl rand -hex 32`)")
 
-    chat_id_raw = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    try:
-        chat_id = int(chat_id_raw) if chat_id_raw else None
-    except ValueError as exc:
-        raise ConfigError("TELEGRAM_CHAT_ID must be a number") from exc
+    chat_id = _env("TELEGRAM_CHAT_ID")
+    if chat_id:
+        try:
+            chat_id = str(int(chat_id))
+        except ValueError as exc:
+            raise ConfigError("TELEGRAM_CHAT_ID must be a number") from exc
+
+    user_ids = "".join(_env("TELEGRAM_ALLOWED_USER_IDS").split())  # "1, 2" -> "1,2"
+    if user_ids and not re.fullmatch(r"[0-9]{1,20}(,[0-9]{1,20})*", user_ids):
+        raise ConfigError("TELEGRAM_ALLOWED_USER_IDS must be comma-separated numbers")
 
     return Config(
-        anthropic_api_key=os.environ["ANTHROPIC_API_KEY"].strip(),
-        telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
-        fredy_webhook_token=os.environ["FREDY_WEBHOOK_TOKEN"].strip(),
         dashboard_password=os.environ["DASHBOARD_PASSWORD"],
         session_secret=session_secret,
-        telegram_chat_id=chat_id,
-        data_dir=os.environ.get("DATA_DIR", "/data").strip() or "/data",
+        data_dir=_env("DATA_DIR") or "/data",
         cookie_secure=_flag("COOKIE_SECURE", True),
-        disable_bot=disable_bot,
+        disable_bot=_flag("IMMOBOT_DISABLE_BOT", False),
+        anthropic_api_key=_env("ANTHROPIC_API_KEY"),
+        telegram_bot_token=_env("TELEGRAM_BOT_TOKEN"),
+        telegram_chat_id=chat_id,
+        telegram_allowed_user_ids=user_ids,
+        fredy_webhook_token=_env("FREDY_WEBHOOK_TOKEN"),
     )

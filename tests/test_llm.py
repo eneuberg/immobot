@@ -13,6 +13,7 @@ from PIL import Image
 
 from app import llm
 from app.settings import DEFAULT_MODEL, DEFAULT_SETTINGS, MODELS, cost_usd
+from tests.conftest import TEST_SECRETS
 
 LISTING = {
     "fredy_id": "abc123",
@@ -76,7 +77,7 @@ class FakeClient:
 @pytest.fixture
 def fake_client(monkeypatch):
     client = FakeClient(fake_response())
-    monkeypatch.setattr(llm, "_client", client)
+    monkeypatch.setattr(llm, "_get_client", lambda: client)
     return client
 
 
@@ -231,10 +232,25 @@ def test_generate_draft_unknown_model_and_effort_use_defaults(fake_client):
     assert call["output_config"]["effort"] == "low"
 
 
-def test_generate_draft_without_configure(monkeypatch):
+def test_generate_draft_without_api_key(fresh_vault, monkeypatch):
     monkeypatch.setattr(llm, "_client", None)
-    with pytest.raises(llm.LLMError):
+    with pytest.raises(llm.LLMError, match="Kein Anthropic-API-Key hinterlegt – im Dashboard unter Zugänge eintragen."):
         asyncio.run(llm.generate_draft(LISTING, settings_with(), "initial"))
+    with pytest.raises(llm.LLMError, match="Kein Anthropic-API-Key"):
+        asyncio.run(llm.check_api_key())
+
+
+def test_client_follows_the_vault_key(fresh_vault, monkeypatch):
+    monkeypatch.setattr(llm, "_client", None)
+    fresh_vault.init(TEST_SECRETS["SESSION_SECRET"], {"anthropic_api_key": "sk-ant-from-env"})
+    first = llm._get_client()
+    assert first.api_key == "sk-ant-from-env"
+    assert llm._get_client() is first  # reused while the key is unchanged
+    fresh_vault.set("anthropic_api_key", "sk-ant-from-dashboard")
+    second = llm._get_client()
+    assert second is not first and second.api_key == "sk-ant-from-dashboard"
+    fresh_vault.clear("anthropic_api_key")
+    assert llm._get_client().api_key == "sk-ant-from-env"
 
 
 def _status_error(cls, status):
@@ -251,7 +267,8 @@ def _status_error(cls, status):
     (anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com")), "Verbindung"),
 ])
 def test_sdk_errors_become_llm_errors(monkeypatch, error, message):
-    monkeypatch.setattr(llm, "_client", FakeClient(error=error))
+    client = FakeClient(error=error)
+    monkeypatch.setattr(llm, "_get_client", lambda: client)
     with pytest.raises(llm.LLMError, match=message):
         asyncio.run(llm.generate_draft(LISTING, settings_with(), "initial"))
 
@@ -278,7 +295,7 @@ def test_request_through_real_sdk(monkeypatch):
     async def run():
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
             client = anthropic.AsyncAnthropic(api_key="sk-test", http_client=http_client, max_retries=0)
-            monkeypatch.setattr(llm, "_client", client)
+            monkeypatch.setattr(llm, "_get_client", lambda: client)
             return await llm.generate_draft(LISTING, settings_with(effort="low"), "initial")
 
     result = asyncio.run(run())
@@ -311,7 +328,7 @@ def test_haiku_request_through_real_sdk(monkeypatch):
     async def run():
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
             client = anthropic.AsyncAnthropic(api_key="sk-test", http_client=http_client, max_retries=0)
-            monkeypatch.setattr(llm, "_client", client)
+            monkeypatch.setattr(llm, "_get_client", lambda: client)
             return await llm.generate_draft(LISTING, settings_with(model="claude-haiku-5-5"), "initial")
 
     result = asyncio.run(run())
@@ -321,6 +338,49 @@ def test_haiku_request_through_real_sdk(monkeypatch):
     assert result.model == "claude-haiku-5-5"
     assert result.hint is None
     assert result.cost_usd == pytest.approx((900 * 0.10 + 250 * 0.50) / 1_000_000)
+
+
+@pytest.mark.parametrize("status, message", [
+    (200, None), (401, "lehnt den API-Key ab"), (403, "lehnt den API-Key ab"), (500, "HTTP 500"),
+])
+def test_check_api_key_lists_one_model(monkeypatch, status, message):
+    seen = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append((request.method, str(request.url), request.headers["x-api-key"]))
+        if status != 200:
+            return httpx2.Response(status, json={"type": "error", "error": {"type": "x", "message": "nope"}})
+        return httpx2.Response(200, json={"data": [{"id": "claude-haiku-5-5", "type": "model", "display_name": "Haiku",
+                                                    "created_at": "2026-01-01T00:00:00Z"}],
+                                          "has_more": False, "first_id": "claude-haiku-5-5", "last_id": "claude-haiku-5-5"})
+
+    async def run():
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
+            client = anthropic.AsyncAnthropic(api_key="sk-ant-check", http_client=http_client, max_retries=0)
+            monkeypatch.setattr(llm, "_get_client", lambda: client)
+            return await llm.check_api_key()
+
+    if message is None:
+        assert asyncio.run(run()) == "Anthropic-API-Key funktioniert."
+    else:
+        with pytest.raises(llm.LLMError, match=message) as exc_info:
+            asyncio.run(run())
+        assert "sk-ant-check" not in str(exc_info.value)
+    assert seen == [("GET", "https://api.anthropic.com/v1/models?limit=1", "sk-ant-check")]  # no retries
+
+
+def test_check_api_key_connection_error(monkeypatch):
+    def handler(request):
+        raise httpx2.ConnectError("unreachable", request=request)
+
+    async def run():
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
+            client = anthropic.AsyncAnthropic(api_key="sk-ant-check", http_client=http_client, max_retries=0)
+            monkeypatch.setattr(llm, "_get_client", lambda: client)
+            return await llm.check_api_key()
+
+    with pytest.raises(llm.LLMError, match="Keine Verbindung zu Anthropic"):
+        asyncio.run(run())
 
 
 # --- image ------------------------------------------------------------------

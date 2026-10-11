@@ -25,6 +25,7 @@
     td.num, th.num { text-align: right; white-space: nowrap; }
     img.listing { max-height: 22rem; object-fit: cover; border-radius: var(--pico-border-radius); }
     .login { max-width: 24rem; margin: 4rem auto; }
+    input.masked { -webkit-text-security: disc; }
   </style>
 </head>
 <body>
@@ -35,6 +36,7 @@
       <ul>
         <li><a href="/" {% if active == "listings" %}aria-current="page"{% endif %}>Inserate</a></li>
         <li><a href="/settings" {% if active == "settings" %}aria-current="page"{% endif %}>Einstellungen</a></li>
+        <li><a href="/credentials" {% if active == "credentials" %}aria-current="page"{% endif %}>Zugänge</a></li>
         <li><a href="/status" {% if active == "status" %}aria-current="page"{% endif %}>Status</a></li>
         <li><form method="post" action="/logout"><button type="submit" class="secondary outline">Logout</button></form></li>
       </ul>

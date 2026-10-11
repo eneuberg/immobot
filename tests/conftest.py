@@ -28,3 +28,12 @@ def fresh_db(tmp_path):
 
     db.init_db(str(tmp_path))
     return db
+
+
+@pytest.fixture
+def fresh_vault(fresh_db):
+    """Empty database + vault keyed with the test SESSION_SECRET and no env fallbacks."""
+    from app import vault
+
+    vault.init(TEST_SECRETS["SESSION_SECRET"], {})
+    return vault

@@ -5,13 +5,15 @@ from types import SimpleNamespace
 
 import pytest
 from telegram import ForceReply
-from telegram.error import BadRequest, InvalidToken
+from telegram.error import BadRequest, Forbidden, InvalidToken, NetworkError
 from telegram.ext import ApplicationHandlerStop
 
-from app import bot, llm, portals
+from app import bot, llm, portals, vault
 from tests.conftest import TEST_SECRETS
 
 CHAT = 42
+OWNER = 1001  # Telegram user id of the bot owner in these tests
+STRANGER = 2002
 TOKEN = TEST_SECRETS["TELEGRAM_BOT_TOKEN"]
 
 
@@ -19,6 +21,7 @@ TOKEN = TEST_SECRETS["TELEGRAM_BOT_TOKEN"]
 
 class FakeBot:
     def __init__(self):
+        self.username = "immo_test_bot"
         self.sent: list[dict] = []
         self.edits: list[dict] = []
         self.deleted: list[int] = []
@@ -37,9 +40,10 @@ class FakeBot:
 
 
 class FakeQuery:
-    def __init__(self, data, chat_id=CHAT):
+    def __init__(self, data, chat_id=CHAT, user_id=OWNER):
         self.data = data
         self.message = SimpleNamespace(chat=SimpleNamespace(id=chat_id))
+        self.from_user = SimpleNamespace(id=user_id)
         self.answers: list[str | None] = []
 
     async def answer(self, text=None, **kwargs):
@@ -47,13 +51,15 @@ class FakeQuery:
 
 
 def callback_update(query):
-    return SimpleNamespace(callback_query=query, message=None)
+    return SimpleNamespace(callback_query=query, message=None, effective_user=query.from_user)
 
 
-def text_update(text, chat_id=CHAT, message_id=900, reply_to=None):
+def text_update(text, chat_id=CHAT, message_id=900, reply_to=None, user_id=OWNER):
     reply = SimpleNamespace(message_id=reply_to) if reply_to is not None else None
-    message = SimpleNamespace(text=text, message_id=message_id, chat=SimpleNamespace(id=chat_id), reply_to_message=reply)
-    return SimpleNamespace(callback_query=None, message=message)
+    user = SimpleNamespace(id=user_id)
+    message = SimpleNamespace(text=text, message_id=message_id, chat=SimpleNamespace(id=chat_id), reply_to_message=reply,
+                              from_user=user)
+    return SimpleNamespace(callback_query=None, message=message, effective_user=user)
 
 
 def listing_dict(**overrides):
@@ -76,9 +82,9 @@ def callback_data(markup):
 
 
 @pytest.fixture
-def tg(fresh_db, monkeypatch):
-    """Fake Telegram bot + our chat id; returns the fake bot."""
-    monkeypatch.setattr(bot, "_chat_id", CHAT)
+def tg(fresh_vault, monkeypatch):
+    """Fake Telegram bot + our chat id (no allowlist); returns the fake bot."""
+    monkeypatch.setattr(bot, "configured_chat_id", lambda: CHAT)
     monkeypatch.setattr(bot, "_locks", {})
     return FakeBot()
 
@@ -242,13 +248,21 @@ def test_is_allowed_chat():
     assert not bot.is_allowed_chat(text_update("hi", chat_id=CHAT), None)
 
 
-def test_guard_drops_foreign_updates(fresh_db, monkeypatch):
-    monkeypatch.setattr(bot, "_chat_id", CHAT)
+def run_guard(update, tg=None) -> bool:
+    """Run the guard like PTB does; True if the update goes on to the other handlers."""
+    try:
+        asyncio.run(bot._guard(update, SimpleNamespace(bot=tg or FakeBot())))
+    except ApplicationHandlerStop:
+        return False
+    return True
+
+
+def test_guard_drops_foreign_updates(fresh_vault, monkeypatch):
+    monkeypatch.setattr(bot, "configured_chat_id", lambda: CHAT)
     monkeypatch.setitem(bot._state, "last_update_at", None)
-    with pytest.raises(ApplicationHandlerStop):
-        asyncio.run(bot._guard(text_update("hi", chat_id=43), None))
+    assert not run_guard(text_update("hi", chat_id=43))
     assert bot.status()["last_update_at"] is not None
-    asyncio.run(bot._guard(text_update("hi", chat_id=CHAT), None))  # passes through
+    assert run_guard(text_update("hi", chat_id=CHAT))
 
 
 # --- follow-up announcements -------------------------------------------------
@@ -497,6 +511,19 @@ def test_reply_to_other_message_is_ignored(tg, monkeypatch):
     assert calls == [] and tg.edits == [] and tg.deleted == []
 
 
+@pytest.mark.parametrize("chat_id,user_id", [(43, OWNER), (CHAT, STRANGER)])
+def test_reply_from_other_chat_or_user_does_not_touch_prompts(tg, monkeypatch, chat_id, user_id):
+    """Prompts are looked up by bare message id, so _on_reply checks chat and allowlist itself."""
+    db = bot.db
+    listing_id = add_listing(db)
+    calls = fake_llm(monkeypatch, db)
+    db.add_pending_prompt(101, listing_id)
+    bot.vault.set("telegram_allowed_user_ids", str(OWNER))
+    asyncio.run(bot._on_reply(text_update("anders", chat_id=chat_id, reply_to=101, user_id=user_id), SimpleNamespace(bot=tg)))
+    assert calls == [] and tg.deleted == []
+    assert db.pop_pending_prompt(101) == listing_id  # still waiting for the owner
+
+
 # --- lifecycle / status ------------------------------------------------------
 
 def test_describe_never_contains_token(monkeypatch):
@@ -510,11 +537,11 @@ def test_build_application_registers_handlers(monkeypatch):
     monkeypatch.setattr(bot, "_token", TOKEN)
     app = bot._build_application()  # no network
     assert app.concurrent_updates > 1
-    assert -1 in app.handlers and len(app.handlers[0]) == 3
+    assert -1 in app.handlers and len(app.handlers[0]) == 3  # /start, buttons, replies ("/pair" lives in the guard)
     assert app.error_handlers
 
 
-def test_start_failure_is_recorded_without_token_and_stop_is_tolerant(fresh_db, monkeypatch, caplog):
+def test_start_failure_is_recorded_without_token_and_stop_is_tolerant(fresh_vault, monkeypatch, caplog):
     from telegram.ext import Application
 
     async def failing_initialize(self):
@@ -522,12 +549,11 @@ def test_start_failure_is_recorded_without_token_and_stop_is_tolerant(fresh_db, 
 
     monkeypatch.setattr(Application, "initialize", failing_initialize)
     monkeypatch.setitem(bot._state, "last_error", None)
-    monkeypatch.setattr(bot, "_token", "")  # start() sets these; restore them afterwards
-    monkeypatch.setattr(bot, "_chat_id", None)
-    config = SimpleNamespace(telegram_bot_token=TOKEN, telegram_chat_id=CHAT)
+    monkeypatch.setattr(bot, "_token", "")  # start() sets it; restore it afterwards
+    vault.init(TEST_SECRETS["SESSION_SECRET"], {"telegram_bot_token": TOKEN, "telegram_chat_id": str(CHAT)})
 
     async def main():
-        await bot.start(config)  # must not raise
+        await bot.start()  # must not raise
         state = bot.status()
         await bot.stop()  # cancels the retry, must not raise
         return state
@@ -538,3 +564,385 @@ def test_start_failure_is_recorded_without_token_and_stop_is_tolerant(fresh_db, 
     assert TOKEN not in state["last_error"]
     assert TOKEN not in caplog.text
     assert bot.status()["running"] is False
+
+
+def test_start_without_token_stays_off(fresh_vault, monkeypatch):
+    monkeypatch.setattr(bot, "_token", "")
+
+    async def must_not_run():
+        raise AssertionError("no token -> no Telegram connection attempt")
+
+    monkeypatch.setattr(bot, "_try_start", must_not_run)
+    asyncio.run(bot.start())
+    assert bot.status()["running"] is False and bot._start_retry is None
+
+
+def test_start_without_chat_id_still_polls(fresh_vault, monkeypatch):
+    """Pairing needs a running bot, so a missing chat id must not keep it from starting."""
+    monkeypatch.setattr(bot, "_token", "")
+    started = []
+
+    async def fake_try_start():
+        started.append(bot._token)
+        return True
+
+    monkeypatch.setattr(bot, "_try_start", fake_try_start)
+    fresh_vault.set("telegram_bot_token", "123456:" + "A" * 35)
+    asyncio.run(bot.start())
+    assert started == ["123456:" + "A" * 35]
+
+
+def test_reload_restarts_with_current_token(fresh_vault, monkeypatch):
+    monkeypatch.setattr(bot, "_token", "")
+    calls = []
+
+    async def fake_stop():
+        calls.append("stop")
+
+    async def fake_try_start():
+        calls.append(("start", bot._token))
+        return True
+
+    monkeypatch.setattr(bot, "stop", fake_stop)
+    monkeypatch.setattr(bot, "_try_start", fake_try_start)
+    fresh_vault.set("telegram_bot_token", "111:" + "b" * 32)
+    asyncio.run(bot.reload())
+    fresh_vault.set("telegram_bot_token", "222:" + "c" * 32)
+    asyncio.run(bot.reload())
+    assert calls == ["stop", ("start", "111:" + "b" * 32), "stop", ("start", "222:" + "c" * 32)]
+
+
+def test_configured_chat_id_is_read_fresh(fresh_vault):
+    assert bot.configured_chat_id() is None
+    fresh_vault.set("telegram_chat_id", "-100123")
+    assert bot.configured_chat_id() == -100123
+    fresh_vault.clear("telegram_chat_id")
+    assert bot.configured_chat_id() is None
+
+
+def test_schedule_announce_without_chat_is_noop(fresh_vault, monkeypatch):
+    monkeypatch.setattr(bot, "_app", SimpleNamespace(bot=FakeBot(), running=True))
+    bot.schedule_announce([1])  # no chat connected: nothing scheduled, no exception
+    assert bot._tasks == set()
+
+
+# --- pairing -----------------------------------------------------------------
+
+def pair_update(text, chat_id, user_id=OWNER, *, is_bot=False, sender_chat=None, chat_type="private"):
+    replies = []
+
+    async def reply_text(reply, **kwargs):
+        replies.append(reply)
+
+    user = SimpleNamespace(id=user_id, is_bot=is_bot, full_name="Erika <b>Muster</b>", username="erika_m")
+    chat = SimpleNamespace(id=chat_id, type=chat_type, effective_name="Wohnungssuche")
+    message = SimpleNamespace(text=text, message_id=1, chat=chat, reply_to_message=None, reply_text=reply_text,
+                              from_user=user, sender_chat=sender_chat)
+    return SimpleNamespace(callback_query=None, message=message, effective_user=user), replies
+
+
+def send_pair(tg, code, chat_id, user_id=OWNER, command="/pair@immo_test_bot", **kwargs):
+    """Send "/pair CODE" through the guard. Returns the replies; asserts it never reaches other handlers."""
+    update, replies = pair_update(f"{command} {code}".strip(), chat_id, user_id, **kwargs)
+    assert run_guard(update, tg) is False
+    return replies
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("/pair abc", True), ("/pair", True), ("/pair@immo_test_bot abc", True), ("/pair@IMMO_TEST_BOT abc", True),
+    ("  /pair x", True), ("/PAIR x", True), ("/pair@other_bot abc", False),
+    ("/start", False), ("/pairing x", False), ("pair abc", False), ("hallo /pair", False), ("", False), (None, False),
+])
+def test_is_pair_command(text, expected):
+    assert bot.is_pair_command(text_update(text), "immo_test_bot") is expected
+
+
+def test_is_pair_command_ignores_button_presses():
+    assert bot.is_pair_command(callback_update(FakeQuery("gen:1")), "immo_test_bot") is False
+
+
+def test_pair_traffic_never_reaches_other_handlers(fresh_vault):
+    fresh_vault.set("telegram_chat_id", str(CHAT))
+    owner_pair, replies = pair_update("/pair 1234abcd", CHAT)
+    assert not run_guard(owner_pair) and replies == [bot.PAIR_FAILED]  # even from the owner, even with no pairing
+    assert not run_guard(text_update("/pair 1234abcd", chat_id=43, reply_to=101))  # foreign "/pair" replies too
+    fresh_vault.start_pairing("immo_test_bot")
+    assert not run_guard(text_update("/pair 1234abcd", chat_id=43, reply_to=101))
+    assert not run_guard(text_update("hallo", chat_id=43))  # everything else from a foreign chat is still dropped
+    assert not run_guard(callback_update(FakeQuery("gen:1", chat_id=43)))
+    assert run_guard(text_update("hallo", chat_id=CHAT))  # our own chat as before
+    assert not run_guard(text_update("/pair@other_bot x", chat_id=43))  # another bot's command: just dropped
+    assert fresh_vault.pairing_pending()  # ... and it didn't count as a wrong code
+
+
+def test_pair_with_valid_code_connects_chat_and_tells_both_chats(fresh_vault):
+    tg = FakeBot()
+    fresh_vault.set("telegram_chat_id", str(CHAT))
+    code = fresh_vault.start_pairing("immo_test_bot")
+    replies = send_pair(tg, code, chat_id=-100777, chat_type="group")
+    assert replies == [bot.PAIR_OK]
+    assert fresh_vault.get("telegram_chat_id") == "-100777" and bot.configured_chat_id() == -100777
+    assert not fresh_vault.pairing_pending()
+    detail = "Chat „Wohnungssuche“ (group, -100777) · User Erika <b>Muster</b> (@erika_m, 1001)"
+    assert [m["chat_id"] for m in tg.sent] == [-100777, CHAT]  # the new chat and the replaced one
+    for notice in tg.sent:
+        assert "Telegram-Chat-ID" in notice["text"] and notice["text"].endswith("\n" + detail)
+        assert "parse_mode" not in notice  # plain text: Telegram names can't inject markup
+    events = bot.db.list_credential_events()
+    assert [(e["name"], e["action"], e["detail"]) for e in events] == [
+        ("telegram_allowed_user_ids", "pair", detail), ("telegram_chat_id", "pair", detail)]
+    assert bot.allowed_user_ids() == {OWNER}
+    assert send_pair(tg, code, chat_id=666) == []  # a code works only once; strangers get no answer
+    assert fresh_vault.get("telegram_chat_id") == "-100777"
+
+
+def test_first_pairing_is_announced_in_the_new_chat(fresh_vault):
+    tg = FakeBot()
+    code = fresh_vault.start_pairing("immo_test_bot")
+    assert send_pair(tg, code.upper(), chat_id=CHAT, command="/pair") == [bot.PAIR_OK]  # case-insensitive, bare /pair
+    assert fresh_vault.get("telegram_chat_id") == str(CHAT)
+    assert [m["chat_id"] for m in tg.sent] == [CHAT]
+
+
+@pytest.mark.parametrize("kwargs", [{"sender_chat": SimpleNamespace(id=-100777)}, {"is_bot": True}])
+def test_pair_refuses_anonymous_and_bot_senders_without_using_the_code(fresh_vault, kwargs):
+    tg = FakeBot()
+    code = fresh_vault.start_pairing("immo_test_bot")
+    assert send_pair(tg, code, chat_id=-100777, **kwargs) == [bot.PAIR_NEEDS_USER]
+    assert fresh_vault.get("telegram_chat_id") is None and fresh_vault.get("telegram_allowed_user_ids") is None
+    assert fresh_vault.pairing_pending() and tg.sent == []
+    assert send_pair(tg, code, chat_id=-100777) == [bot.PAIR_OK]  # a normal account can still use it
+
+
+def test_pair_wrong_codes_silent_to_strangers_and_cancel_after_five(fresh_vault):
+    tg = FakeBot()
+    code = fresh_vault.start_pairing("immo_test_bot")
+    for _ in range(vault.PAIRING_MAX_FAILURES - 1):
+        assert send_pair(tg, "00000000", chat_id=43) == []  # no answer: doesn't reveal a pending pairing
+        assert fresh_vault.pairing_pending()
+    assert send_pair(tg, "", chat_id=43) == []  # a missing code counts too
+    assert not fresh_vault.pairing_pending()
+    assert send_pair(tg, code, chat_id=43) == []  # the right code is useless now
+    assert fresh_vault.get("telegram_chat_id") is None and tg.sent == []
+
+
+def test_pair_wrong_code_from_owner_gets_an_answer(fresh_vault):
+    fresh_vault.set("telegram_chat_id", str(CHAT))
+    fresh_vault.start_pairing("immo_test_bot")
+    assert send_pair(FakeBot(), "00000000", chat_id=CHAT) == [bot.PAIR_FAILED]
+    assert send_pair(FakeBot(), "00000000", chat_id=CHAT, user_id=STRANGER) == [bot.PAIR_FAILED]  # no allowlist yet
+    fresh_vault.set("telegram_allowed_user_ids", str(OWNER))
+    assert send_pair(FakeBot(), "00000000", chat_id=CHAT, user_id=STRANGER) == []  # not on the allowlist: silence
+
+
+def test_pair_expired_code_rejected(fresh_vault, monkeypatch):
+    tg = FakeBot()
+    code = fresh_vault.start_pairing("immo_test_bot")
+    later = vault.time.time() + vault.PAIRING_TTL_S + 1
+    monkeypatch.setattr(vault.time, "time", lambda: later)
+    assert send_pair(tg, code, chat_id=CHAT) == []
+    assert fresh_vault.get("telegram_chat_id") is None
+
+
+def test_pairing_detail_shortens_names():
+    chat = SimpleNamespace(id=-1, type="supergroup", effective_name="G" * 200)
+    user = SimpleNamespace(id=5, full_name="U" * 200, username=None)
+    text = bot.pairing_detail(chat, user)
+    assert len(text) < 200 and "(supergroup, -1)" in text and text.endswith("… (5)")
+
+
+# --- notices & connection test ------------------------------------------------
+
+def test_change_notice_names_credential_but_no_value(fresh_vault):
+    fresh_vault.set("anthropic_api_key", "sk-ant-NOTICE-SECRET")
+    text = bot.change_notice("anthropic_api_key", "set", "Dashboard")
+    assert text.startswith("🔐 Zugang geändert: Anthropic-API-Key – gespeichert (Dashboard, ")
+    assert "NOTICE-SECRET" not in text
+
+
+def test_notify_uses_running_bot_and_never_raises(monkeypatch):
+    tg = FakeBot()
+    monkeypatch.setattr(bot, "_app", None)
+    asyncio.run(bot.notify("x", CHAT))  # no bot: no-op
+    monkeypatch.setattr(bot, "_app", SimpleNamespace(bot=tg, running=True))
+    asyncio.run(bot.notify("x", None))  # no chat: no-op
+    assert tg.sent == []
+    asyncio.run(bot.notify("🔐 test", CHAT))
+    assert tg.sent[0]["chat_id"] == CHAT and tg.sent[0]["text"] == "🔐 test"
+
+    async def failing_send(**kwargs):
+        raise NetworkError("down")
+
+    tg.send_message = failing_send
+    monkeypatch.setitem(bot._state, "last_error", None)
+    asyncio.run(bot.notify("x", CHAT))  # recorded, not raised
+    assert "NetworkError" in bot.status()["last_error"]
+
+
+class FakeTelegramBot:
+    """Stands in for telegram.Bot in check_connection()."""
+    fail_enter = None
+    fail_get_chat = None
+
+    def __init__(self, token):
+        self.token = token
+        self.username = "immo_test_bot"
+
+    async def __aenter__(self):
+        if self.fail_enter:
+            raise self.fail_enter
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get_chat(self, chat_id):
+        if self.fail_get_chat:
+            raise self.fail_get_chat
+        return SimpleNamespace(id=chat_id, effective_name="Wohnungssuche")
+
+
+def test_check_connection(fresh_vault, monkeypatch):
+    monkeypatch.setattr(bot, "Bot", FakeTelegramBot)
+    with pytest.raises(bot.CheckFailed, match="Kein Bot-Token"):
+        asyncio.run(bot.check_connection())
+    fresh_vault.set("telegram_bot_token", TOKEN.split(":")[0] + ":" + "S" * 35)
+    assert asyncio.run(bot.check_connection()) == "Bot @immo_test_bot erreichbar. Noch kein Chat verbunden."
+    fresh_vault.set("telegram_chat_id", str(CHAT))
+    assert asyncio.run(bot.check_connection()) == "Bot @immo_test_bot erreichbar, Chat „Wohnungssuche“ gefunden."
+
+    monkeypatch.setattr(FakeTelegramBot, "fail_get_chat", BadRequest("Chat not found"))
+    with pytest.raises(bot.CheckFailed, match="Chat nicht erreichbar"):
+        asyncio.run(bot.check_connection())
+    monkeypatch.setattr(FakeTelegramBot, "fail_get_chat", Forbidden("bot was kicked"))
+    with pytest.raises(bot.CheckFailed, match="Chat nicht erreichbar"):
+        asyncio.run(bot.check_connection())
+    secret_token = fresh_vault.get("telegram_bot_token")
+    monkeypatch.setattr(FakeTelegramBot, "fail_enter", InvalidToken(f"The token `{secret_token}` was rejected"))
+    with pytest.raises(bot.CheckFailed) as exc_info:
+        asyncio.run(bot.check_connection())
+    assert "lehnt den Bot-Token ab" in str(exc_info.value) and secret_token not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None and exc_info.value.__suppress_context__
+    monkeypatch.setattr(FakeTelegramBot, "fail_enter", NetworkError("connect failed"))
+    with pytest.raises(bot.CheckFailed, match="nicht erreichbar"):
+        asyncio.run(bot.check_connection())
+
+
+# --- user allowlist --------------------------------------------------------------
+
+def test_is_allowed_user():
+    assert bot.is_allowed_user(text_update("hi", user_id=STRANGER), set())  # empty allowlist: everyone
+    assert bot.is_allowed_user(text_update("hi", user_id=OWNER), {OWNER})
+    assert not bot.is_allowed_user(text_update("hi", user_id=STRANGER), {OWNER})
+    assert bot.is_allowed_user(callback_update(FakeQuery("gen:1", user_id=OWNER)), {OWNER, 5})
+    assert not bot.is_allowed_user(callback_update(FakeQuery("gen:1", user_id=STRANGER)), {OWNER})
+    assert not bot.is_allowed_user(SimpleNamespace(effective_user=None), {OWNER})
+    assert not bot.is_allowed_user(text_update("hi", user_id=OWNER), None)  # undecryptable list: nobody
+
+
+def test_allowed_user_ids_from_vault_or_env(fresh_vault):
+    assert bot.allowed_user_ids() == set()
+    vault.init(TEST_SECRETS["SESSION_SECRET"], {"telegram_allowed_user_ids": "5,6"})
+    assert bot.allowed_user_ids() == {5, 6}
+    vault.set("telegram_allowed_user_ids", f"{OWNER}, 7")
+    assert vault.get("telegram_allowed_user_ids") == f"{OWNER},7" and bot.allowed_user_ids() == {OWNER, 7}
+
+
+def test_undecryptable_allowlist_fails_closed(fresh_vault):
+    fresh_vault.set("telegram_chat_id", str(CHAT))
+    fresh_vault.set("telegram_allowed_user_ids", str(OWNER))
+    vault.init("rotated-session-secret-" + "z" * 40, {"telegram_chat_id": str(CHAT)})
+    assert vault.get("telegram_allowed_user_ids") is None  # reads as unset ...
+    assert bot.allowed_user_ids() is None  # ... but the bot treats it as "nobody"
+    press = FakeQuery("gen:1", user_id=OWNER)
+    assert not run_guard(callback_update(press))
+    assert press.answers == ["Nur für den Besitzer dieses Bots."]
+    assert not run_guard(text_update("hi", user_id=OWNER))
+    # A new pairing replaces the unreadable list.
+    tg = FakeBot()
+    assert send_pair(tg, vault.start_pairing("immo_test_bot"), chat_id=CHAT) == [bot.PAIR_OK]
+    assert bot.allowed_user_ids() == {OWNER} and run_guard(text_update("hi", user_id=OWNER))
+
+
+def test_guard_with_allowlist(fresh_vault):
+    fresh_vault.set("telegram_chat_id", str(CHAT))
+    fresh_vault.set("telegram_allowed_user_ids", str(OWNER))
+    assert run_guard(text_update("hi", user_id=OWNER))
+    assert run_guard(callback_update(FakeQuery("gen:1", user_id=OWNER)))
+
+    stranger_press = FakeQuery("gen:1", user_id=STRANGER)
+    assert not run_guard(callback_update(stranger_press))
+    assert stranger_press.answers == ["Nur für den Besitzer dieses Bots."]
+    for update in [text_update("/start", user_id=STRANGER), text_update("anders bitte", reply_to=101, user_id=STRANGER)]:
+        assert not run_guard(update)  # messages, "Anpassen" replies and /start: ignored silently
+    foreign_press = FakeQuery("gen:1", chat_id=43, user_id=OWNER)  # the owner, but in another chat
+    assert not run_guard(callback_update(foreign_press))
+    assert foreign_press.answers == []
+
+
+def test_guard_without_allowlist_keeps_old_behaviour(fresh_vault):
+    fresh_vault.set("telegram_chat_id", str(CHAT))
+    assert run_guard(callback_update(FakeQuery("gen:1", user_id=STRANGER)))
+    assert run_guard(text_update("hi", user_id=STRANGER))
+
+
+def test_pair_adds_user_to_allowlist_once(fresh_vault):
+    tg = FakeBot()
+    vault.init(TEST_SECRETS["SESSION_SECRET"], {"telegram_allowed_user_ids": "5"})  # env list is kept
+    assert send_pair(tg, vault.start_pairing("immo_test_bot"), chat_id=CHAT, user_id=OWNER) == [bot.PAIR_OK]
+    assert vault.get("telegram_allowed_user_ids") == f"5,{OWNER}" and vault.source("telegram_allowed_user_ids") == "dashboard"
+    assert send_pair(tg, vault.start_pairing("immo_test_bot"), chat_id=CHAT, user_id=OWNER) == [bot.PAIR_OK]
+    assert vault.get("telegram_allowed_user_ids") == f"5,{OWNER}"  # no duplicate
+    pair_events = [e["name"] for e in bot.db.list_credential_events() if e["action"] == "pair"]
+    assert pair_events.count("telegram_allowed_user_ids") == 1 and pair_events.count("telegram_chat_id") == 2
+
+
+# --- background reload & username --------------------------------------------------
+
+def test_schedule_reload_runs_in_background_and_records_errors(fresh_vault, monkeypatch):
+    calls = []
+
+    async def slow_reload():
+        calls.append("reload")
+        await asyncio.sleep(0)
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(bot, "reload", slow_reload)
+    monkeypatch.setitem(bot._state, "last_error", None)
+
+    async def main():
+        bot.schedule_reload()
+        assert calls == [] and len(bot._reload_tasks) == 1  # returned at once, task strongly referenced
+        await asyncio.gather(*bot._reload_tasks, return_exceptions=True)
+        await asyncio.sleep(0)
+
+    asyncio.run(main())
+    assert calls == ["reload"] and bot._reload_tasks == set()
+    assert "RuntimeError: boom" in bot.status()["last_error"]
+
+
+def test_reload_tasks_survive_stop(fresh_vault, monkeypatch):
+    """stop() cancels announce tasks, but must not cancel the reload that called it."""
+    monkeypatch.setattr(bot, "_token", "")
+    order = []
+
+    async def fake_try_start():
+        order.append("started")
+        return True
+
+    monkeypatch.setattr(bot, "_try_start", fake_try_start)
+    fresh_vault.set("telegram_bot_token", "111:" + "b" * 32)
+
+    async def main():
+        bot.schedule_reload()
+        await asyncio.gather(*bot._reload_tasks)
+
+    asyncio.run(main())
+    assert order == ["started"]
+
+
+def test_username(monkeypatch):
+    monkeypatch.setattr(bot, "_app", None)
+    assert bot.username() is None
+    monkeypatch.setattr(bot, "_app", SimpleNamespace(bot=FakeBot(), running=True))
+    assert bot.username() == "immo_test_bot"

@@ -5,8 +5,10 @@ Tables:
   listings         one row per listing received from Fredy
   drafts           every generated message, with model, tokens and cost
   settings         user-editable, non-secret settings (key/value strings)
-  meta             internal state such as last_webhook_at
+  meta             internal state such as last_webhook_at and a pending Telegram pairing
   pending_prompts  Telegram "Anpassen" questions waiting for the user's reply
+  credentials      API key / tokens entered in the dashboard, AES-GCM encrypted by vault.py
+  credential_events  audit log of credential changes (never contains values)
 """
 
 import os
@@ -59,6 +61,20 @@ CREATE TABLE IF NOT EXISTS pending_prompts (
     prompt_message_id INTEGER PRIMARY KEY,
     listing_id INTEGER NOT NULL,
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS credentials (
+    name TEXT PRIMARY KEY,
+    nonce BLOB NOT NULL,
+    ciphertext BLOB NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS credential_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    name TEXT NOT NULL,
+    action TEXT NOT NULL,
+    client_ip TEXT,
+    detail TEXT
 );
 """
 
@@ -267,6 +283,11 @@ def get_meta(key: str) -> str | None:
         return row["value"] if row else None
 
 
+def delete_meta(key: str) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+
+
 # --- pending "Anpassen" prompts ---------------------------------------------
 
 def add_pending_prompt(prompt_message_id: int, listing_id: int) -> None:
@@ -285,3 +306,47 @@ def pop_pending_prompt(prompt_message_id: int) -> int | None:
             return None
         conn.execute("DELETE FROM pending_prompts WHERE prompt_message_id = ?", (prompt_message_id,))
         return row["listing_id"]
+
+
+# --- credentials (encrypted by vault.py; only bytes are stored here) ------------
+
+def get_credential(name: str) -> dict | None:
+    with connect() as conn:
+        return _row(conn.execute("SELECT * FROM credentials WHERE name = ?", (name,)).fetchone())
+
+
+def put_credential(name: str, nonce: bytes, ciphertext: bytes) -> None:
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO credentials (name, nonce, ciphertext, updated_at) VALUES (?, ?, ?, ?)
+               ON CONFLICT(name) DO UPDATE SET nonce = excluded.nonce, ciphertext = excluded.ciphertext,
+                                              updated_at = excluded.updated_at""",
+            (name, nonce, ciphertext, now_iso()),
+        )
+
+
+def delete_credential(name: str) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM credentials WHERE name = ?", (name,))
+
+
+def add_credential_event(name: str, action: str, client_ip: str | None, detail: str | None = None) -> None:
+    """`detail` is optional context such as the paired chat and user - never a secret value."""
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO credential_events (at, name, action, client_ip, detail) VALUES (?, ?, ?, ?, ?)",
+            (now_iso(), name, action, client_ip, detail),
+        )
+
+
+def last_credential_event(name: str, action: str) -> dict | None:
+    with connect() as conn:
+        return _row(conn.execute(
+            "SELECT * FROM credential_events WHERE name = ? AND action = ? ORDER BY id DESC LIMIT 1", (name, action),
+        ).fetchone())
+
+
+def list_credential_events(limit: int = 20) -> list[dict]:
+    """Newest first."""
+    with connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM credential_events ORDER BY id DESC LIMIT ?", (limit,))]

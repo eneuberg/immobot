@@ -3,7 +3,7 @@
 Kleiner Begleitdienst zu [Fredy](https://github.com/orangecoding/fredy). Unter jedes Fredy-Inserat in Telegram setzt immobot eine
 Nachricht mit **✍️ Anschreiben** / **❌ Uninteressant**. Auf Knopfdruck schreibt Claude einen Anschreiben-Entwurf, mit
 **Neu / Kürzer / Förmlicher / Anpassen**. Ein Dashboard (mit Passwort) zeigt Inserate, alle Entwürfe und die API-Kosten
-und enthält Profil, System-Prompt, Modell und Budget.
+und enthält Profil, System-Prompt, Modell, Budget und die Zugänge (API-Key, Bot-Token, Chat-ID, Webhook-Token).
 
 Gesendet wird **nie automatisch**. Du kopierst den Entwurf und schickst ihn im Portal selbst ab.
 
@@ -17,25 +17,61 @@ Fredy ──Telegram-Adapter──▶ Telegram  (Inserat wie bisher)
 
 1. **Neue Application** aus dem GitHub-Repo, Build Pack **Dockerfile**, Port **8000** (Coolify übernimmt ihn aus `EXPOSE`), Domain z. B. `https://immobot.example.com`.
 2. **Persistent Storage:** Volume `immobot-data` → `/data` (SQLite-Datenbank).
-3. **Environment Variables** (alle als Secret markieren):
+3. **Environment Variables** – nur noch zwei, beide als Secret markieren:
 
    | Variable | Wert |
    |---|---|
-   | `ANTHROPIC_API_KEY` | API-Key von console.anthropic.com |
-   | `TELEGRAM_BOT_TOKEN` | **derselbe** Token wie in Fredys Telegram-Adapter |
-   | `TELEGRAM_CHAT_ID` | **dieselbe** Chat-ID wie in Fredys Telegram-Adapter |
-   | `FREDY_WEBHOOK_TOKEN` | zufällig, `openssl rand -hex 32` |
    | `DASHBOARD_PASSWORD` | dein Dashboard-Passwort (lang) |
-   | `SESSION_SECRET` | zufällig, `openssl rand -hex 32` |
+   | `SESSION_SECRET` | zufällig, `openssl rand -hex 32` (mind. 32 Zeichen). **Nicht mehr ändern**, siehe unten. |
 
-4. Deployen. `https://immobot.<domain>/status` sollte „Telegram läuft“ zeigen.
+4. Deployen, im Dashboard anmelden und unter **Zugänge** (`/credentials`) eintragen:
+
+   | Zugang | Wert |
+   |---|---|
+   | Anthropic-API-Key | von console.anthropic.com (`sk-ant-…`) |
+   | Telegram-Bot-Token | **derselbe** Token wie in Fredys Telegram-Adapter |
+   | Telegram-Chat-ID | **dieselbe** Chat-ID wie in Fredys Telegram-Adapter – oder per Code verbinden (siehe unten) |
+   | Erlaubte Telegram-User-IDs | wer im Chat Buttons drücken darf (kommagetrennt); trägt das Pairing automatisch ein |
+   | Fredy-Webhook-Token | **Neu erzeugen** klicken, den einmal angezeigten Token in Fredys HTTP-Adapter eintragen |
+
+   Jede Änderung verlangt dein Dashboard-Passwort. Danach mit **Verbindung testen** prüfen.
+5. `https://immobot.<domain>/status` sollte „Telegram-Bot läuft“ zeigen.
+
+### Telegram-Chat per Code verbinden
+
+Statt die Chat-ID herauszusuchen: unter Zugänge **Chat per Code verbinden** klicken (Bot-Token muss gespeichert sein und der
+Bot laufen). Dann im gewünschten Chat genau den angezeigten Befehl `/pair@<dein_bot> CODE` schicken – mit `@<dein_bot>`, weil der
+Bot in Gruppen sonst (Privacy-Modus) nichts sieht. Der Code gilt 10 Minuten und nach 5 falschen Versuchen nicht mehr. Gespeichert
+wird nur ein HMAC-SHA256 des Codes (Schlüssel aus `SESSION_SECRET`).
+
+Wer den Code schickt, landet auf der Liste der erlaubten Telegram-User. Das muss ein normales Konto sein (nicht anonymer
+Gruppen-Admin, Kanal oder Bot), sonst lehnt der Bot ab und der Code bleibt gültig. Den Code also nicht in einer Gruppe stehen
+lassen, in der andere mitlesen. Nach dem Pairing meldet der Bot im neuen Chat (und im bisherigen, falls es einen gab), welcher
+Chat und welcher User verbunden wurde; dasselbe steht unter Zugänge und im Protokoll.
+
+### Umstieg von Env-Variablen (bestehende Installation)
+
+Alte Installationen mit `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` und `FREDY_WEBHOOK_TOKEN` laufen ohne
+Änderung weiter: Diese Variablen gelten als Fallback (ebenso das optionale `TELEGRAM_ALLOWED_USER_IDS`). Unter Zugänge steht dann „aus Env-Variable“. Den Wert dort eintragen
+(der Dashboard-Wert hat Vorrang), mit „Verbindung testen“ prüfen und danach die Variable in Coolify löschen und neu deployen.
+Beim Webhook-Token entweder den bisherigen Wert eintragen oder „Neu erzeugen“ und den neuen Token in Fredy hinterlegen.
+Danach einmal **Chat per Code verbinden** ausführen (im bisherigen Chat), damit deine Telegram-User-ID auf die Liste der
+erlaubten User kommt. Solange die Liste leer ist, darf jedes Mitglied des Chats Buttons drücken (Warnung unter Zugänge und Status).
+Nach dem ersten Deploy mit Session-Timeouts musst du dich einmal neu anmelden.
+
+### SESSION_SECRET nicht rotieren
+
+Die Zugänge liegen AES-256-GCM-verschlüsselt in der SQLite-Datenbank; der Schlüssel wird per HKDF aus `SESSION_SECRET`
+abgeleitet. Wird `SESSION_SECRET` geändert, sind alle im Dashboard gespeicherten Zugänge **nicht mehr entschlüsselbar**
+(Zugänge zeigt „⚠ nicht entschlüsselbar – neu eintragen“) und müssen neu eingetragen werden. Außerdem werden alle Sessions
+ungültig.
 
 ## Fredy verbinden
 
 Im Fredy-Job unter *Notification Adapter* **zusätzlich** zum Telegram-Adapter den **HTTP**-Adapter hinzufügen:
 
 - Endpoint URL: `https://immobot.<domain>/hook/fredy`
-- Auth Token: der Wert von `FREDY_WEBHOOK_TOKEN`
+- Auth Token: der Fredy-Webhook-Token (Zugänge → **Neu erzeugen**; wird nur einmal angezeigt)
 
 Empfohlen: In Fredys Einstellungen die Detailseiten (`provider_details`) für deine Portale aktivieren. Sonst bekommt Claude nur den
 kurzen Text aus der Suchliste. Nachteil: Fredy wird etwas leichter als Bot erkannt.
@@ -45,16 +81,42 @@ Nur immobot darf Updates abholen.
 
 ## Sicherheit
 
-- Die Secrets existieren nur als Env-Variablen. Sie werden nie in der DB gespeichert, nie im Dashboard angezeigt und nie geloggt.
-- Das Dashboard ist komplett hinter Login (Session-Cookie `HttpOnly`, `Secure`, `SameSite=Strict`, Login-Rate-Limit).
-- `/hook/fredy` verlangt den Bearer-Token. `/healthz` ist offen, gibt aber nichts preis.
-- Der Bot reagiert nur auf `TELEGRAM_CHAT_ID`.
+- Env-Variablen sind nur noch `DASHBOARD_PASSWORD` und `SESSION_SECRET`.
+- API-Key und Tokens werden unter Zugänge eingetragen und nur verschlüsselt gespeichert (AES-256-GCM, Schlüssel aus
+  `SESSION_SECRET`, Name als Associated Data). Eine Kopie der Datenbank allein verrät sie nicht.
+- Kein Wert wird je wieder angezeigt oder geloggt; die Eingabefelder sind immer leer (und keine Passwortfelder, damit der
+  Passwort-Manager den API-Key nicht als Website-Passwort speichert). Ausnahme: ein neu erzeugter Webhook-Token erscheint
+  genau einmal, auf der Seite nach der Weiterleitung. Bis dahin liegt er nur im Arbeitsspeicher, unter einer zufälligen
+  Einmal-ID, höchstens 5 Minuten. Neuladen zeigt ihn nicht noch einmal und erzeugt auch keinen neuen.
+- Jede Änderung braucht das Dashboard-Passwort erneut. Falsche Eingaben zählen zum Login-Limit (5 pro 5 Minuten und IP).
+  Jede Änderung landet im Protokoll (Zugänge und Status) und wird in Telegram gemeldet, und zwar an den Chat, der **vor**
+  der Änderung eingestellt war.
+- Fehlgeschlagene Logins (Login-Seite und Passwort-Abfrage unter Zugänge) werden pro IP gezählt, IPv6 pro /64. Nach 3
+  Fehlversuchen kommt eine Warnung in Telegram, nach 5 ist die IP für 5 Minuten gesperrt (ebenfalls mit Warnung). Bei 20
+  Fehlversuchen von verschiedenen IPs innerhalb von 10 Minuten kommt eine Sammelwarnung; gesperrt wird dann aber niemand
+  global, damit du dich weiter anmelden kannst. Jede Art von Warnung kommt höchstens einmal pro 10 Minuten, nie mit dem
+  eingegebenen Passwort. Alles steht im Protokoll.
+- Das Dashboard ist komplett hinter Login (Session-Cookie `HttpOnly`, `Secure`, `SameSite=Strict`, Login-Rate-Limit, HSTS).
+  Eine Session endet 7 Tage nach dem Login oder nach 24 Stunden ohne Aufruf, beim Logout (überall) und wenn
+  `DASHBOARD_PASSWORD` oder `SESSION_SECRET` geändert wird. Nur ein angemeldeter Logout beendet alle Sessions.
+- uvicorn glaubt `X-Forwarded-For` nur von privaten Adressen (dem Reverse Proxy im Docker-Netz). So kann niemand seine IP
+  fälschen, um das Login-Limit zu umgehen.
+- `/hook/fredy` verlangt den Bearer-Token (ohne gespeicherten Token: 503). `/healthz` ist offen, gibt aber nichts preis.
+- Der Bot reagiert nur auf den eingestellten Chat. Ist die Liste erlaubter Telegram-User gefüllt, dürfen dort nur diese
+  User Buttons drücken und antworten. Andere bekommen beim Button „Nur für den Besitzer dieses Bots.“, alles andere wird
+  ignoriert. Ist die gespeicherte Liste nicht entschlüsselbar (`SESSION_SECRET` geändert), darf niemand, bis sie neu
+  eingetragen oder ein Pairing gemacht wurde.
+- `/pair` wird komplett vorab geprüft und erreicht nie die übrigen Bot-Funktionen. Fremde Chats bekommen auf falsche Codes
+  keine Antwort.
+- Ein neuer Bot-Token startet den Bot im Hintergrund neu; das Speichern wartet nicht darauf. Eine neue Chat-ID gilt sofort,
+  ohne Neustart.
 
 ## Lokal entwickeln
 
 ```bash
 uv venv --python 3.13 .venv && uv pip install --python .venv/bin/python -r requirements-dev.txt
 .venv/bin/python -m pytest -q
-IMMOBOT_DISABLE_BOT=1 COOKIE_SECURE=0 DATA_DIR=./data ANTHROPIC_API_KEY=... FREDY_WEBHOOK_TOKEN=dev \
-  DASHBOARD_PASSWORD=dev SESSION_SECRET=$(openssl rand -hex 32) .venv/bin/uvicorn app.main:app --reload
+IMMOBOT_DISABLE_BOT=1 COOKIE_SECURE=0 DATA_DIR=./data DASHBOARD_PASSWORD=dev \
+  SESSION_SECRET=<fester Wert, mind. 32 Zeichen> .venv/bin/uvicorn app.main:app --reload
+# API-Key usw. dann unter http://127.0.0.1:8000/credentials eintragen.
 ```

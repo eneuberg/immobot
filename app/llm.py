@@ -1,6 +1,8 @@
 """Claude drafting: build the prompt, call the API, compute the cost and store the draft.
 
 create_and_store_draft() is the single entry point for the Telegram bot and the dashboard.
+The API key comes from vault.py (dashboard "Zugänge", else env) and is read on every call, so a new
+key works immediately without a restart.
 """
 
 import base64
@@ -14,7 +16,7 @@ import anthropic
 import httpx
 from PIL import Image
 
-from . import db
+from . import db, vault
 from .portals import provider_label, safe_url
 from .settings import (
     DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, DRAFT_KINDS, EFFORTS, MODELS, as_bool, as_float, as_int, cost_usd, fmt_usd,
@@ -52,7 +54,9 @@ DRAFT_SCHEMA = {
     "additionalProperties": False,
 }
 
-_client: anthropic.AsyncAnthropic | None = None
+NO_API_KEY = "Kein Anthropic-API-Key hinterlegt – im Dashboard unter Zugänge eintragen."
+
+_client: anthropic.AsyncAnthropic | None = None  # created lazily for the current key, see _get_client()
 
 
 class LLMError(Exception):
@@ -75,9 +79,31 @@ class DraftResult:
     cost_usd: float
 
 
-def configure(api_key: str) -> None:
+def _get_client() -> anthropic.AsyncAnthropic:
+    """Client for the current API key; recreated when the key was changed in the dashboard."""
     global _client
-    _client = anthropic.AsyncAnthropic(api_key=api_key, timeout=120.0, max_retries=2)
+    api_key = vault.get("anthropic_api_key")
+    if not api_key:
+        raise LLMError(NO_API_KEY)
+    if _client is None or _client.api_key != api_key:
+        # The old client (if any) is left to the garbage collector: a running request may still use it.
+        _client = anthropic.AsyncAnthropic(api_key=api_key, timeout=120.0, max_retries=2)
+    return _client
+
+
+async def check_api_key() -> str:
+    """Cheapest authenticated call (list one model). Returns a short German OK message, raises LLMError."""
+    client = _get_client().with_options(timeout=15.0, max_retries=0)
+    try:
+        await client.models.list(limit=1)
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
+        raise LLMError("Anthropic lehnt den API-Key ab (ungültig oder ohne Berechtigung).") from None
+    except anthropic.APIStatusError as exc:
+        log.warning("claude key check: HTTP %s (request_id=%s)", exc.status_code, exc.request_id)
+        raise LLMError("Anthropic antwortet mit HTTP " + str(exc.status_code) + " – bitte später nochmal testen.") from None
+    except anthropic.APIConnectionError:  # includes timeouts
+        raise LLMError("Keine Verbindung zu Anthropic.") from None
+    return "Anthropic-API-Key funktioniert."
 
 
 # --- prompt -----------------------------------------------------------------
@@ -208,8 +234,7 @@ async def generate_draft(
     listing: dict, settings: dict, kind: str, previous_text: str | None = None, instruction: str | None = None
 ) -> DraftResult:
     """Ask Claude for one draft. No database writes."""
-    if _client is None:
-        raise LLMError("Claude ist nicht konfiguriert.")
+    client = _get_client()
     model = settings.get("model") if settings.get("model") in MODELS else DEFAULT_MODEL
     effort = settings.get("effort") if settings.get("effort") in EFFORTS else DEFAULT_EFFORT
 
@@ -230,9 +255,9 @@ async def generate_draft(
     }
     try:
         if model in FALLBACK_MODELS:
-            response = await _client.beta.messages.create(**params, betas=[FALLBACK_BETA], fallbacks="default")
+            response = await client.beta.messages.create(**params, betas=[FALLBACK_BETA], fallbacks="default")
         else:
-            response = await _client.messages.create(**params)
+            response = await client.messages.create(**params)
     except anthropic.RateLimitError:
         log.warning("claude rate limit (model=%s)", model)
         raise LLMError("Claude-Rate-Limit erreicht – bitte in einer Minute nochmal versuchen.")

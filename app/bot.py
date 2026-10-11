@@ -4,8 +4,16 @@ Fredy posts every new listing to the chat itself. A few seconds later immobot po
 follow-up message under it with buttons, and on demand turns that message into a Claude draft.
 immobot is the only process polling updates for this bot token (long polling, no webhook).
 
-Security: only updates from config.telegram_chat_id are processed, everything else is dropped
-silently. All listing and draft text is HTML-escaped. The bot token is never logged.
+Security: only updates from the configured chat are processed (vault "telegram_chat_id", read on
+every update), everything else is dropped silently. If the allowlist "telegram_allowed_user_ids" is
+not empty, only those users may press buttons or send replies there (others get a short refusal for a
+button press, everything else is ignored); an empty allowlist means every chat member may, and an
+undecryptable one means nobody may. "/pair CODE" is handled completely inside the guard (_guard ->
+_pair) and never reaches the other handlers; strangers with a wrong code get no answer at all.
+All listing and draft text is HTML-escaped. The bot token is never logged.
+
+Token and chat id come from vault.py. Without a token the bot stays off ("nicht konfiguriert"); without
+a chat id it polls anyway so that "/pair" can connect a chat. reload() restarts it after a change.
 
 Message layout lives in pure functions (header, followup_view, draft_view, ...) so it can be
 unit-tested without Telegram.
@@ -15,11 +23,11 @@ import asyncio
 import html
 import logging
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from telegram import ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions, Update
+from telegram import Bot, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions, Update
 from telegram.constants import ParseMode
-from telegram.error import BadRequest, RetryAfter, TelegramError
+from telegram.error import BadRequest, Forbidden, InvalidToken, RetryAfter, TelegramError
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -31,7 +39,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import db, llm, portals, settings
+from . import db, llm, portals, settings, vault
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +58,11 @@ GENERIC_ERROR = "Fehler beim Generieren – bitte nochmal versuchen."
 NOT_FOUND = "Inserat nicht gefunden."
 BUSY = "⏳ läuft schon …"
 START_REPLY = "immobot läuft ✅ – unter Fredys Inseraten erscheinen meine Buttons."
+PAIR_OK = "✅ immobot ist jetzt mit diesem Chat verbunden."
+PAIR_FAILED = "❌ Code ungültig oder abgelaufen."
+PAIR_NEEDS_USER = ("⚠️ Bitte von einem normalen Telegram-Konto aus koppeln (nicht anonym, nicht als Kanal oder Bot). "
+                   "Der Code bleibt gültig.")
+NOT_OWNER = "Nur für den Besitzer dieses Bots."
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 # Button action -> drafts.kind
@@ -66,8 +79,9 @@ KIND_LABELS = {
 
 # --- module state ------------------------------------------------------------
 _app: Application | None = None  # set only while the bot is running
-_chat_id: int | None = None
-_token: str = ""  # kept only to scrub it from error messages
+_token: str = ""  # the token the bot was started with; kept to build the Application and scrub error messages
+_reload_lock = asyncio.Lock()
+_reload_tasks: set[asyncio.Task] = set()  # background reloads (strong refs; not in _tasks, which stop() cancels)
 _start_retry: asyncio.Task | None = None
 _tasks: set[asyncio.Task] = set()  # running announce tasks (strong refs so they aren't GC'd)
 _locks: dict[int, asyncio.Lock] = {}  # one per listing, so a double tap can't generate twice
@@ -199,6 +213,17 @@ def parse_callback(data) -> tuple[str, int] | None:
     return match.group(1), int(match.group(2))
 
 
+def is_pair_command(update, bot_username: str | None) -> bool:
+    """A plain message starting with "/pair" or "/pair@<this bot>" (case-insensitive like Telegram commands)."""
+    message = update.message
+    if message is None or not isinstance(message.text, str) or not message.text.strip():
+        return False
+    command, _, mention = message.text.split(maxsplit=1)[0].partition("@")
+    if mention and mention.lower() != (bot_username or "").lower():
+        return False  # addressed to another bot in the group
+    return command.lower() == "/pair"
+
+
 def is_allowed_chat(update, chat_id: int | None) -> bool:
     """True only for messages / button presses in our own chat."""
     if chat_id is None:
@@ -209,6 +234,35 @@ def is_allowed_chat(update, chat_id: int | None) -> bool:
     if update.message is not None:
         return update.message.chat.id == chat_id
     return False
+
+
+def is_allowed_user(update, allowed: set[int] | None) -> bool:
+    """None = nobody (allowlist undecryptable); empty = every chat member; else the sender / presser must be on it."""
+    if allowed is None:
+        return False
+    if not allowed:
+        return True
+    user = update.effective_user
+    return user is not None and user.id in allowed
+
+
+def allowed_user_ids() -> set[int] | None:
+    """The Telegram user allowlist (dashboard value, else env). Empty set = no restriction.
+    None = a saved list can't be decrypted (SESSION_SECRET changed): fail closed, nobody may use the bot
+    until the list is entered again or a new pairing is done."""
+    if vault.undecryptable("telegram_allowed_user_ids"):
+        return None
+    raw = vault.get("telegram_allowed_user_ids") or ""
+    return {int(part) for part in raw.split(",") if part.strip().isdigit()}
+
+
+def configured_chat_id() -> int | None:
+    """The chat immobot works in (dashboard value, else env). Read fresh, so a change applies at once."""
+    raw = vault.get("telegram_chat_id")
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        return None
 
 
 # --- errors ------------------------------------------------------------------
@@ -246,7 +300,7 @@ async def _send(tg_bot, chat_id: int, text: str, keyboard) -> object:
 async def _edit(tg_bot, listing: dict, text: str, keyboard) -> None:
     try:
         await tg_bot.edit_message_text(
-            chat_id=_chat_id,
+            chat_id=configured_chat_id(),
             message_id=listing["tg_message_id"],
             text=text,
             parse_mode=ParseMode.HTML,
@@ -271,7 +325,7 @@ async def _answer(query, text: str | None = None) -> None:
 
 async def _delete_quietly(tg_bot, message_id: int) -> None:
     try:
-        await tg_bot.delete_message(chat_id=_chat_id, message_id=message_id)
+        await tg_bot.delete_message(chat_id=configured_chat_id(), message_id=message_id)
     except TelegramError:
         pass
 
@@ -309,7 +363,7 @@ async def _generate(tg_bot, listing: dict, kind: str, instruction: str | None = 
 
 async def _ask_instruction(tg_bot, listing: dict) -> None:
     prompt = await tg_bot.send_message(
-        chat_id=_chat_id,
+        chat_id=configured_chat_id(),
         text=f"✏️ Was soll am Entwurf für „{_esc(_title(listing))}“ anders sein?",
         parse_mode=ParseMode.HTML,
         reply_markup=ForceReply(input_field_placeholder="z. B. kürzer, Homeoffice erwähnen"),
@@ -320,14 +374,64 @@ async def _ask_instruction(tg_bot, listing: dict) -> None:
 # --- handlers ----------------------------------------------------------------
 
 async def _guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Runs first for every update: note the activity, drop everything that isn't from our chat."""
+    """Runs first for every update: note the activity, handle "/pair" right here, and drop everything
+    that isn't from our chat or (with an allowlist) from an allowed user."""
     _state["last_update_at"] = db.now_iso()
-    if not is_allowed_chat(update, _chat_id):
-        raise ApplicationHandlerStop
+    in_our_chat = is_allowed_chat(update, configured_chat_id())
+    trusted = in_our_chat and is_allowed_user(update, allowed_user_ids())
+    if is_pair_command(update, context.bot.username):
+        await _pair(update, context, trusted)
+        raise ApplicationHandlerStop  # pairing traffic never reaches the other handlers
+    if trusted:
+        return
+    if in_our_chat and update.callback_query is not None:
+        await _answer(update.callback_query, NOT_OWNER)  # a chat member who isn't on the allowlist
+    raise ApplicationHandlerStop
 
 
 async def _on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(START_REPLY)
+
+
+def pairing_detail(chat, user) -> str:
+    """'Chat „Wohnung“ (group, -100123) · User Erik (@erik, 1001)' for the audit log and notices.
+    Names come from Telegram (untrusted): plain text here, escaped in the dashboard, shortened."""
+    chat_name = _shorten(chat.effective_name or "–", 60)
+    user_name = _shorten(user.full_name or "–", 60)
+    handle = f"@{user.username}, " if user.username else ""
+    return f"Chat „{chat_name}“ ({chat.type}, {chat.id}) · User {user_name} ({handle}{user.id})"
+
+
+async def _pair(update: Update, context: ContextTypes.DEFAULT_TYPE, trusted: bool) -> None:
+    """"/pair CODE" with the code from the dashboard: from now on immobot works in this chat, and the sender
+    is added to the allowlist. Called only from _guard."""
+    message = update.message
+    parts = message.text.split()
+    code = parts[1] if len(parts) > 1 else ""
+    if not vault.check_pairing_code(code):  # wrong codes count; the pairing is cancelled after too many
+        if trusted:
+            await message.reply_text(PAIR_FAILED)
+        return  # strangers get no answer: don't reveal whether a pairing is pending
+    user = message.from_user
+    if message.sender_chat is not None or user is None or user.is_bot:  # anonymous admin, channel or bot
+        await message.reply_text(PAIR_NEEDS_USER)
+        return
+    vault.cancel_pairing()  # used up (no await since the check: a second "/pair" can't use it too)
+    old_chat, chat = configured_chat_id(), message.chat
+    detail = pairing_detail(chat, user)
+    vault.set("telegram_chat_id", str(chat.id))
+    db.add_credential_event("telegram_chat_id", "pair", "Telegram", detail)
+    allowed = allowed_user_ids() or set()  # an undecryptable list is replaced
+    if user.id not in allowed:
+        vault.set("telegram_allowed_user_ids", ",".join(str(i) for i in sorted(allowed | {user.id})))
+        db.add_credential_event("telegram_allowed_user_ids", "pair", "Telegram", detail)
+    log.info("Telegram chat connected via pairing (chat %s, user %s)", chat.id, user.id)
+    await message.reply_text(PAIR_OK)
+    notice = change_notice("telegram_chat_id", "pair", "Telegram", detail)
+    await _notify_quietly(context.bot, chat.id, notice)  # the new chat sees exactly who paired what
+    if old_chat is not None and old_chat != chat.id:  # and the previous chat learns it was replaced
+        await _notify_quietly(context.bot, old_chat, notice)
+    schedule_announce(db.unannounced_listing_ids())  # listings that arrived while no chat was connected
 
 
 async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -364,6 +468,9 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def _on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """A text reply to one of our '✏️ Was soll anders sein?' prompts -> custom draft."""
     message = update.message
+    # The guard already filters; checked again because prompts are looked up by bare message id.
+    if not is_allowed_chat(update, configured_chat_id()) or not is_allowed_user(update, allowed_user_ids()):
+        return
     prompt_id = message.reply_to_message.message_id
     listing_id = db.pop_pending_prompt(prompt_id)
     if listing_id is None:
@@ -417,9 +524,64 @@ def schedule_announce(listing_ids: list[int]) -> None:
     if _app is None:
         log.warning("Telegram bot not running – no follow-up for %d listing(s)", len(listing_ids))
         return
-    task = asyncio.create_task(announce(_app.bot, _chat_id, list(listing_ids)))
+    chat = configured_chat_id()
+    if chat is None:
+        log.warning("No Telegram chat connected – no follow-up for %d listing(s)", len(listing_ids))
+        return
+    task = asyncio.create_task(announce(_app.bot, chat, list(listing_ids)))
     _tasks.add(task)
     task.add_done_callback(_task_done)
+
+
+# --- credential notices & connection test -------------------------------------
+
+def change_notice(name: str, action: str, via: str, detail: str | None = None) -> str:
+    """'🔐 Zugang geändert: Anthropic-API-Key – gespeichert (Dashboard, 11.10. 14:03)', plus an optional
+    detail line (e.g. who paired which chat). Never contains a secret value."""
+    when = datetime.now(settings.LOCAL_TZ).strftime("%d.%m. %H:%M")
+    label = vault.LABELS.get(name, name)
+    text = f"🔐 Zugang geändert: {label} – {vault.ACTION_LABELS.get(action, action)} ({via}, {when})"
+    return text + ("\n" + detail if detail else "")
+
+
+async def _notify_quietly(tg_bot, chat: int, text: str) -> None:
+    try:
+        await tg_bot.send_message(chat_id=chat, text=text, link_preview_options=NO_PREVIEW)
+    except Exception as exc:  # a notice must never break the change it reports
+        _record_error(exc)
+
+
+async def notify(text: str, chat: int | None) -> None:
+    """Send a plain-text notice with the running bot. No-op without a running bot or chat; never raises."""
+    if _app is not None and chat is not None:
+        await _notify_quietly(_app.bot, chat, text)
+
+
+class CheckFailed(Exception):
+    """str(exc) is a short German message, safe to show."""
+
+
+async def check_connection() -> str:
+    """getMe with the current token, then getChat for the configured chat. Returns a German OK message,
+    raises CheckFailed. Uses its own short-lived Bot, so it also works while polling is down."""
+    token = vault.get("telegram_bot_token")
+    if not token:
+        raise CheckFailed("Kein Bot-Token hinterlegt.")
+    chat = configured_chat_id()
+    try:
+        async with Bot(token) as tg_bot:  # entering calls getMe
+            name = "@" + str(tg_bot.username)
+            if chat is None:
+                return f"Bot {name} erreichbar. Noch kein Chat verbunden."
+            info = await tg_bot.get_chat(chat)
+    # "from None": PTB's InvalidToken message contains the token.
+    except InvalidToken:
+        raise CheckFailed("Telegram lehnt den Bot-Token ab.") from None
+    except (BadRequest, Forbidden):
+        raise CheckFailed("Chat nicht erreichbar – stimmt die Chat-ID und ist der Bot Mitglied im Chat?") from None
+    except TelegramError as exc:
+        raise CheckFailed(f"Telegram nicht erreichbar ({type(exc).__name__}).") from None
+    return f"Bot {name} erreichbar, Chat „{info.effective_name or chat}“ gefunden."
 
 
 # --- lifecycle ---------------------------------------------------------------
@@ -478,13 +640,42 @@ async def _retry_start() -> None:
             return
 
 
-async def start(config) -> None:
-    """Start long polling. Never raises: on failure the error is recorded and start is retried in the background."""
-    global _chat_id, _token, _start_retry
-    _chat_id = config.telegram_chat_id
-    _token = config.telegram_bot_token
+async def start() -> None:
+    """Start long polling with the token from the vault; without a token do nothing ("nicht konfiguriert").
+    Never raises: on failure the error is recorded and start is retried in the background."""
+    global _token, _start_retry
+    _token = vault.get("telegram_bot_token") or ""
+    if not _token:
+        log.info("No Telegram bot token configured – bot not started")
+        return
     if not await _try_start():
         _start_retry = asyncio.create_task(_retry_start())
+
+
+async def reload() -> None:
+    """Restart with the current vault values (after the bot token changed in the dashboard)."""
+    async with _reload_lock:
+        await stop()
+        await start()
+
+
+def schedule_reload() -> None:
+    """reload() in the background, so a dashboard request doesn't wait for it: stopping waits for running
+    handlers such as a Claude call. Errors end up on the status page. Call from the event loop."""
+    task = asyncio.create_task(reload())
+    _reload_tasks.add(task)
+    task.add_done_callback(_reload_done)
+
+
+def _reload_done(task: asyncio.Task) -> None:
+    _reload_tasks.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        _record_error(task.exception())
+
+
+def username() -> str | None:
+    """The bot's @username without "@" (from getMe at start), or None while the bot isn't running."""
+    return _app.bot.username if _app is not None else None
 
 
 async def stop() -> None:

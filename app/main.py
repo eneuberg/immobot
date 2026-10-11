@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import bot, db, llm
+from . import bot, db, vault, web
 from .config import load_config
 from .web import router, security_headers
 
@@ -21,9 +21,9 @@ config = load_config()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db(config.data_dir)
-    llm.configure(config.anthropic_api_key)
+    vault.init(config.session_secret, config.env_credentials())  # before anything reads a credential
     if not config.disable_bot:
-        await bot.start(config)
+        await bot.start()
     yield
     if not config.disable_bot:
         await bot.stop()
@@ -36,7 +36,7 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=config.session_secret,
     session_cookie="immobot_session",
-    max_age=60 * 60 * 24 * 30,
+    max_age=web.SESSION_MAX_AGE_S,  # the server also enforces it (and a 24 h idle timeout), see web.is_logged_in
     same_site="strict",
     https_only=config.cookie_secure,
 )
