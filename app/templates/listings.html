@@ -1,52 +1,71 @@
 {% extends "base.html" %}
+{% from "macros.html" import status_badge, icon %}
 {% block title %}Inserate{% endblock %}
 {% block content %}
-<h1>Inserate</h1>
+{% set months = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"] %}
+{% set month_no = stats.month[5:7]|int %}
+<div class="page-head">
+  <div>
+    <h1>Inserate</h1>
+    <p>Neue Inserate kommen automatisch von Fredy. Wähle ein Inserat für Details und Entwürfe.</p>
+  </div>
+</div>
 
-<article class="stats">
-  <div><small class="muted">Kosten {{ stats.month }} (USD)</small><strong>{{ stats.cost_month|usd }}</strong></div>
-  <div><small class="muted">Kosten gesamt (USD)</small><strong>{{ stats.cost_total|usd }}</strong></div>
-  <div><small class="muted">Inserate</small><strong>{{ stats.listings_total }}</strong></div>
-  <div><small class="muted">Entwürfe</small><strong>{{ stats.drafts_total }}</strong></div>
-</article>
+<section class="stats" aria-label="Überblick">
+  <div class="stat"><span class="label">Kosten {{ months[month_no - 1] if 1 <= month_no <= 12 else stats.month }}</span><span class="value">{{ stats.cost_month|usd }}</span><span class="sub">USD, dieser Monat</span></div>
+  <div class="stat"><span class="label">Kosten gesamt</span><span class="value">{{ stats.cost_total|usd }}</span><span class="sub">USD, seit Beginn</span></div>
+  <div class="stat"><span class="label">Inserate</span><span class="value">{{ stats.listings_total }}</span><span class="sub">{{ stats.by_status.get("new", 0) }} neu · {{ stats.by_status.get("sent", 0) }} gesendet</span></div>
+  <div class="stat"><span class="label">Entwürfe</span><span class="value">{{ stats.drafts_total }}</span><span class="sub">insgesamt erzeugt</span></div>
+</section>
 
-<p class="filters">
-  <a href="/" {% if not status_filter %}aria-current="page"{% endif %}>alle ({{ stats.listings_total }})</a>
+<nav class="filters" aria-label="Nach Status filtern">
+  <a href="/" {% if not status_filter %}aria-current="page"{% endif %}>Alle <span class="n">{{ stats.listings_total }}</span></a>
   {% for key, label in STATUSES.items() %}
-  <a href="/?status={{ key }}" {% if status_filter == key %}aria-current="page"{% endif %}>{{ label }} ({{ stats.by_status.get(key, 0) }})</a>
+  <a href="/?status={{ key }}" {% if status_filter == key %}aria-current="page"{% endif %}><span class="dot st-{{ key }}" aria-hidden="true"></span>{{ label }} <span class="n">{{ stats.by_status.get(key, 0) }}</span></a>
   {% endfor %}
-</p>
+</nav>
 
 {% if listings %}
-<div class="overflow-auto">
-<table class="striped">
-  <thead>
-    <tr>
-      <th>Datum</th><th>Titel</th><th class="num">Preis</th><th class="num">Größe</th><th>Portal</th><th>Status</th>
-      <th class="num">Entwürfe</th><th class="num">Kosten (USD)</th>
-    </tr>
-  </thead>
-  <tbody>
+<ul class="listing-list">
   {% for l in listings %}
-    <tr>
-      <td>{{ l.received_at|local_time }}</td>
-      <td>
-        <a href="/listing/{{ l.id }}">{{ l.title or "(ohne Titel)" }}</a>
-        {% if l.address %}<br><small class="muted">{{ l.address }}</small>{% endif %}
-      </td>
-      <td class="num">{{ l.price or "–" }}</td>
-      <td class="num">{{ l.size or "–" }}</td>
-      <td>{{ l.portal }}</td>
-      <td>{{ STATUSES.get(l.status, l.status) }}</td>
-      <td class="num">{{ l.draft_count }}</td>
-      <td class="num">{{ l.cost_usd|usd }}</td>
-    </tr>
+  {# Thumbnail: a locally cached image (thumb_url, set by the server) wins over Fredy's external title image,
+     which is only used if it is a plain http(s) URL. #}
+  {% set thumb = l.thumb_url or (l.image_url|safe_url) %}
+  <li>
+    <a class="listing-card{% if l.status == 'dismissed' %} is-dismissed{% endif %}" href="/listing/{{ l.id }}">
+      <div class="thumb">
+        <span class="thumb-ph" aria-hidden="true">{{ icon("home") }}<span>{{ l.portal }}</span></span>
+        {% if thumb %}<img src="{{ thumb }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-fallback>{% endif %}
+      </div>
+      <div class="lc-body">
+        <div class="lc-top">{{ status_badge(l.status) }}<span>{{ l.received_at|local_time }}</span></div>
+        <span class="lc-title">{{ l.title or "(ohne Titel)" }}</span>
+        {% if l.address %}<span class="lc-addr">{{ l.address }}</span>{% endif %}
+        <div class="lc-facts">
+          <span class="price">{{ l.price or "–" }}</span>
+          {% if l.size %}<span>{{ l.size }}</span>{% endif %}
+          <span class="portal">{{ l.portal }}</span>
+        </div>
+        {% if l.draft_count %}
+        <span class="lc-meta">{{ l.draft_count }} {{ "Entwurf" if l.draft_count == 1 else "Entwürfe" }} · {{ l.cost_usd|usd }}</span>
+        {% endif %}
+      </div>
+    </a>
+  </li>
   {% endfor %}
-  </tbody>
-</table>
+</ul>
+{% elif status_filter %}
+<div class="empty">
+  {{ icon("inbox") }}
+  <strong>Keine Inserate mit Status „{{ STATUSES[status_filter] }}“</strong>
+  <p><a href="/">Alle Inserate anzeigen</a></p>
 </div>
 {% else %}
-<p>Keine Inserate{% if status_filter %} mit diesem Status{% endif %}.</p>
+<div class="empty">
+  {{ icon("inbox") }}
+  <strong>Noch keine Inserate</strong>
+  <p>Sobald Fredy ein neues Inserat meldet, erscheint es hier. Klappt das nicht, unter <a href="/status">Status</a> nachsehen, wann der letzte Webhook kam.</p>
+</div>
 {% endif %}
-<p><small class="muted">Kosten in USD; „ct“ = US-Cent.</small></p>
+<p class="foot">Kosten in USD; „ct“ = US-Cent.</p>
 {% endblock %}

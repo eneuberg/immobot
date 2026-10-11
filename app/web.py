@@ -101,6 +101,7 @@ def _price(value: float) -> str:
 templates.env.filters["usd"] = settings.fmt_usd
 templates.env.filters["local_time"] = local_time
 templates.env.filters["as_bool"] = settings.as_bool
+templates.env.filters["safe_url"] = portals.safe_url  # untrusted listing URLs -> http(s) or None
 templates.env.globals["STATUSES"] = settings.STATUSES
 
 

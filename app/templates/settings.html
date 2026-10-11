@@ -1,150 +1,196 @@
 {% extends "base.html" %}
-{% from "macros.html" import key_line %}
+{% from "macros.html" import key_line, flashes, draft_meta, howto %}
 {% block title %}Einstellungen{% endblock %}
 
 {% macro field_error(key) %}{% if errors[key] %}<small class="error">{{ errors[key] }}</small>{% endif %}{% endmacro %}
 
+{% macro reset_button(key, label) -%}
+<button type="submit" form="reset-{{ key }}" class="linkish"
+  data-confirm="„{{ label }}“ auf den Standard zurücksetzen? Ungespeicherte Änderungen auf dieser Seite gehen verloren.">Standard wiederherstellen</button>
+{%- endmacro %}
+
 {% macro textarea(key, label, help, rows) %}
-<label for="{{ key }}"><strong>{{ label }}</strong>{% if help %} <small class="muted">– {{ help }}</small>{% endif %}</label>
+<div class="field-head">
+  <h2><label for="{{ key }}">{{ label }}</label></h2>
+  {{ reset_button(key, label) }}
+</div>
+{% if help %}<p class="help">{{ help }}</p>{% endif %}
 {# The newline after <textarea> is swallowed by the HTML parser, so a leading newline in the value survives. #}
 <textarea id="{{ key }}" name="{{ key }}" rows="{{ rows }}" {% if errors[key] %}aria-invalid="true"{% endif %}>
 {{ values[key] }}</textarea>
 {{ field_error(key) }}
-<p><button type="submit" form="reset-{{ key }}" class="secondary outline"
-  data-confirm="„{{ label }}“ auf den Standard zurücksetzen? Ungespeicherte Änderungen auf dieser Seite gehen verloren.">Standard wiederherstellen</button></p>
 {% endmacro %}
 
 {% block content %}
-<h1>Einstellungen</h1>
-{% if message %}<p class="success" role="status">{{ message }}</p>{% endif %}
-{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<div class="page-head">
+  <div>
+    <h1>Einstellungen</h1>
+    <p>Wer die Anschreiben schreibt, was über dich drinsteht und wie sie klingen.</p>
+  </div>
+</div>
+{{ flashes(message, error) }}
 
 {% if test %}
-<article id="test">
+<article id="test" class="draft-card draft-new">
   <header>
-    <strong>Test-Entwurf</strong> für „{{ test.listing.title or "(ohne Titel)" }}“<br>
-    <small class="muted">{{ test.draft.model_label }} · {{ test.draft.provider_label }} · {{ test.draft.input_tokens }} Tokens ein /
-      {{ test.draft.output_tokens }} aus · Kosten {{ test.draft.cost_text }}</small>
+    <div><span class="badge accent">Test-Entwurf</span><span class="when">für „{{ test.listing.title or "(ohne Titel)" }}“</span></div>
+    <button type="button" class="secondary outline copy-btn" data-copy="draft-test">Kopieren</button>
   </header>
-  {% if test.draft.hint %}<p><mark>Hinweis:</mark> <span class="pre-wrap">{{ test.draft.hint }}</span></p>{% endif %}
+  {% if test.draft.hint %}<div class="callout warn"><span><strong>Hinweis:</strong> <span class="pre-wrap">{{ test.draft.hint }}</span></span></div>{% endif %}
   <pre class="draft" id="draft-test">{{ test.draft.text }}</pre>
-  <button type="button" class="secondary outline" data-copy="draft-test">Kopieren</button>
+  <footer class="chips">{{ draft_meta(test.draft) }}</footer>
 </article>
 {% endif %}
 
-<section id="ki">
-  <h2>KI-Anbieter</h2>
-  {% if ai.no_key_warning %}<article class="error" role="alert">⚠ {{ ai.no_key_warning }}</article>{% endif %}
+<nav class="settings-nav" aria-label="Abschnitte">
+  <a href="#ki">KI-Anbieter</a><a href="#profil">Über mich</a><a href="#wuensche">Wünsche</a><a href="#stil">Schreibstil</a>
+  <a href="#verhalten">Budget &amp; Verhalten</a><a href="#prompt">System-Prompt</a><a href="#testen">Testen</a>
+</nav>
+
+<article id="ki" class="setting-card">
+  <h2>KI-Anbieter &amp; Modell</h2>
+  <p class="help">Wer die Entwürfe schreibt. Beide Anbieter nutzen Claude-Modelle; abgerechnet wird beim jeweiligen Anbieter.</p>
+  {% if ai.no_key_warning %}<div class="flash warn" role="alert">{{ ai.no_key_warning }}</div>{% endif %}
+
   <form method="post" action="/settings/provider">
+    <label for="provider">Anbieter</label>
     <fieldset role="group">
-      <select name="provider" aria-label="KI-Anbieter">
+      <select id="provider" name="provider" aria-label="KI-Anbieter">
         {% for key, label in providers %}
         <option value="{{ key }}" {% if key == ai.provider %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
-      <button type="submit" class="secondary">Anbieter wechseln</button>
+      <button type="submit" class="secondary">Wechseln</button>
     </fieldset>
   </form>
 
-  <p>{{ ai.label }}-API-Key: {{ key_line(ai.key) }}</p>
-  <form method="post" action="/settings/provider-key">
-    <div class="grid">
-      <label>{{ "Neuer" if ai.key.source else "" }} {{ ai.label }}-API-Key
-        {# type=text + CSS mask: the step-up field must stay the only password field (see credentials.html). #}
-        <input type="text" name="value" class="masked" autocomplete="off" spellcheck="false" autocapitalize="off"
-          maxlength="500" data-1p-ignore data-lpignore="true" required>
-      </label>
-      <label>Dashboard-Passwort
-        <input type="password" name="password" autocomplete="current-password" required>
-      </label>
+  <p class="key-status"><strong>{{ ai.label }}-API-Key:</strong> <span>{{ key_line(ai.key) }}</span></p>
+  <details class="disclosure">
+    <summary>{{ "Key ersetzen" if ai.key.source else "Key eintragen" }}</summary>
+    <div class="disclosure-body">
+      <form method="post" action="/settings/provider-key">
+        <div class="form-grid">
+          <label>{{ "Neuer" if ai.key.source else "" }} {{ ai.label }}-API-Key
+            {# type=text + CSS mask: the step-up field must stay the only password field (see credentials.html). #}
+            <input type="text" name="value" class="masked" autocomplete="off" spellcheck="false" autocapitalize="off"
+              maxlength="500" data-1p-ignore data-lpignore="true" required>
+          </label>
+          <label>Dashboard-Passwort
+            <input type="password" name="password" autocomplete="current-password" required>
+          </label>
+        </div>
+        <p class="step-up">Zur Sicherheit bestätigst du jede Key-Änderung mit deinem Dashboard-Passwort (dasselbe wie beim Login).</p>
+        <button type="submit">Key speichern &amp; Modelle laden</button>
+      </form>
+      {{ howto(ai.key.name) }}
     </div>
-    <button type="submit" data-once>Key speichern &amp; Modelle laden</button>
-  </form>
+  </details>
 
   {# Model and effort belong to the main settings form below (form="settings-form"). #}
-  <label>Modell (Preise in {{ ai.currency }})
-    <select name="model" form="settings-form" {% if errors.model %}aria-invalid="true"{% endif %}>
-      {% for key, label in ai.model_options %}
-      <option value="{{ key }}" {% if key == ai.current_model %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-    {{ field_error("model") }}
-  </label>
-  <p><small class="muted">
+  <div class="form-grid">
+    <label>Modell <small>Preise in {{ ai.currency }} pro 1 Mio. Tokens (Eingabe / Ausgabe)</small>
+      <select name="model" form="settings-form" {% if errors.model %}aria-invalid="true"{% endif %}>
+        {% for key, label in ai.model_options %}
+        <option value="{{ key }}" {% if key == ai.current_model %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      {{ field_error("model") }}
+    </label>
+    <label>Denkaufwand (Effort) <small>höher = gründlicher, aber langsamer und teurer</small>
+      <select name="effort" form="settings-form" {% if errors.effort %}aria-invalid="true"{% endif %}>
+        {% for key, label in effort_options %}
+        <option value="{{ key }}" {% if values.effort == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      {{ field_error("effort") }}
+    </label>
+  </div>
+  <p class="help">
     {% if ai.models_checked %}Modellliste von {{ ai.label }} geladen am {{ ai.models_fetched_at|local_time }}.
     {% else %}Modellliste nicht geprüft{% if ai.models_error %}: {{ ai.models_error }}{% endif %} – angezeigt werden alle Modelle mit hinterlegtem Preis.
     {% endif %}
-  </small></p>
+  </p>
   {% if ai.unsupported_models %}
   <details>
     <summary><small>{{ ai.unsupported_models|length }} weitere Modelle verfügbar, aber nicht unterstützt (kein Preis hinterlegt)</small></summary>
     <p><small class="muted">{{ ai.unsupported_models|join(", ") }}</small></p>
   </details>
   {% endif %}
-  <label>Effort
-    <select name="effort" form="settings-form" {% if errors.effort %}aria-invalid="true"{% endif %}>
-      {% for key, label in effort_options %}
-      <option value="{{ key }}" {% if values.effort == key %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-    {{ field_error("effort") }}
-  </label>
   <div class="actions">
     <button type="submit" form="settings-form">Modell speichern</button>
     <button type="submit" form="refresh-models" class="secondary outline">Modelle neu laden</button>
   </div>
-</section>
+</article>
 <form id="refresh-models" method="post" action="/settings/models/refresh" data-once></form>
 
 <form id="settings-form" method="post" action="/settings">
-  <h2>Über mich</h2>
-  {{ textarea("profile", "Über mich", "Person, Job/Einkommen, Haushalt, Haustiere/Raucher, Einzug, Umzugsgrund, Unterlagen, Kontakt/Signatur", 14) }}
+  <article id="profil" class="setting-card">
+    {{ textarea("profile", "Über mich", "Dein Steckbrief für die Anschreiben: Person, Job/Einkommen, Haushalt, Haustiere/Raucher, Einzug, Umzugsgrund, Unterlagen, Kontakt/Signatur. Was hier nicht steht, wird auch nicht behauptet.", 14) }}
+  </article>
 
-  <h2>Wünsche</h2>
-  {{ textarea("wishes", "Wünsche", "was dir an einer Wohnung wichtig ist", 6) }}
+  <article id="wuensche" class="setting-card">
+    {{ textarea("wishes", "Wünsche", "Was dir an einer Wohnung wichtig ist – damit der Entwurf begründen kann, warum sie passt.", 6) }}
+  </article>
 
-  <h2>Schreibstil</h2>
-  {{ textarea("style", "Schreibstil", "Ton, Sie/Du", 3) }}
-  <label>Ziellänge (Wörter, 30–600)
-    <input type="number" name="target_words" min="30" max="600" step="1" value="{{ values.target_words }}"
-      {% if errors.target_words %}aria-invalid="true"{% endif %}>
-    {{ field_error("target_words") }}
-  </label>
+  <article id="stil" class="setting-card">
+    {{ textarea("style", "Schreibstil", "Ton und Anrede (Sie/Du), z. B. „freundlich, nicht zu förmlich“.", 3) }}
+    <label>Ziellänge <small>in Wörtern, 30–600</small>
+      <input type="number" name="target_words" min="30" max="600" step="1" value="{{ values.target_words }}"
+        {% if errors.target_words %}aria-invalid="true"{% endif %}>
+      {{ field_error("target_words") }}
+    </label>
+  </article>
 
-  <h2>Kosten</h2>
-  <label>Monatsbudget in USD (0 = kein Limit)
-    <input type="text" inputmode="decimal" name="monthly_budget_usd" value="{{ values.monthly_budget_usd }}"
-      {% if errors.monthly_budget_usd %}aria-invalid="true"{% endif %}>
-    {{ field_error("monthly_budget_usd") }}
-  </label>
-  <label>Umrechnungskurs EUR→USD (ca.) <small class="muted">– für Budget und Summen, die in USD geführt werden</small>
-    <input type="text" inputmode="decimal" name="eur_usd_rate" value="{{ values.eur_usd_rate }}"
-      {% if errors.eur_usd_rate %}aria-invalid="true"{% endif %}>
-    {{ field_error("eur_usd_rate") }}
-  </label>
-  <label>
-    <input type="checkbox" name="send_image" value="1" {% if values.send_image|as_bool %}checked{% endif %}>
-    Bild des Inserats an Claude mitschicken
-  </label>
+  <article id="verhalten" class="setting-card">
+    <h2>Budget &amp; Verhalten</h2>
+    <p class="help">Kostenbremse und wie sich der Telegram-Bot verhält.</p>
+    <h3>Kosten</h3>
+    <div class="form-grid">
+      <label>Monatsbudget in USD <small>0 = kein Limit; ist es erreicht, entstehen keine neuen Entwürfe mehr</small>
+        <input type="text" inputmode="decimal" name="monthly_budget_usd" value="{{ values.monthly_budget_usd }}"
+          {% if errors.monthly_budget_usd %}aria-invalid="true"{% endif %}>
+        {{ field_error("monthly_budget_usd") }}
+      </label>
+      <label>Umrechnungskurs EUR→USD (ca.) <small>für Budget und Summen, die in USD geführt werden</small>
+        <input type="text" inputmode="decimal" name="eur_usd_rate" value="{{ values.eur_usd_rate }}"
+          {% if errors.eur_usd_rate %}aria-invalid="true"{% endif %}>
+        {{ field_error("eur_usd_rate") }}
+      </label>
+    </div>
+    <label class="check">
+      <input type="checkbox" role="switch" name="send_image" value="1" {% if values.send_image|as_bool %}checked{% endif %}>
+      <span>Bild des Inserats an Claude mitschicken <small>Die KI sieht dann auch das Titelbild (kostet ein paar Tokens mehr).</small></span>
+    </label>
 
-  <h2>Telegram</h2>
-  <label>Verzögerung nach Fredys Nachricht (Sekunden, 0–60)
-    <input type="number" name="followup_delay_s" min="0" max="60" step="1" value="{{ values.followup_delay_s }}"
-      {% if errors.followup_delay_s %}aria-invalid="true"{% endif %}>
-    {{ field_error("followup_delay_s") }}
-  </label>
-  <label>
-    <input type="checkbox" name="paused" value="1" {% if values.paused|as_bool %}checked{% endif %}>
-    Pause (der Bot meldet sich nicht zu neuen Inseraten)
-  </label>
+    <h3>Telegram</h3>
+    <label>Verzögerung nach Fredys Nachricht <small>in Sekunden, 0–60 – damit die Buttons direkt unter Fredys Inserat erscheinen</small>
+      <input type="number" name="followup_delay_s" min="0" max="60" step="1" value="{{ values.followup_delay_s }}"
+        {% if errors.followup_delay_s %}aria-invalid="true"{% endif %}>
+      {{ field_error("followup_delay_s") }}
+    </label>
+    <label class="check">
+      <input type="checkbox" role="switch" name="paused" value="1" {% if values.paused|as_bool %}checked{% endif %}>
+      <span>Pause <small>Der Bot meldet sich nicht zu neuen Inseraten.</small></span>
+    </label>
+  </article>
 
-  <h2>System-Prompt</h2>
-  <details {% if errors.system_prompt %}open{% endif %}>
-    <summary>Expertenfeld anzeigen</summary>
-    {{ textarea("system_prompt", "System-Prompt", "Grundanweisung an Claude", 18) }}
-  </details>
+  <article id="prompt" class="setting-card">
+    <details {% if errors.system_prompt %}open{% endif %}>
+      <summary><strong>System-Prompt</strong> <small class="muted">– Grundanweisung an die KI, für Fortgeschrittene</small></summary>
+      <div class="field-head">
+        <label for="system_prompt" class="muted"><small>Legt fest, wie Anschreiben grundsätzlich aufgebaut sind. Meist reicht es, „Über mich“, „Wünsche“ und „Schreibstil“ anzupassen.</small></label>
+        {{ reset_button("system_prompt", "System-Prompt") }}
+      </div>
+      <textarea id="system_prompt" name="system_prompt" rows="18" {% if errors.system_prompt %}aria-invalid="true"{% endif %}>
+{{ values.system_prompt }}</textarea>
+      {{ field_error("system_prompt") }}
+    </details>
+  </article>
 
-  <button type="submit">Speichern</button>
+  <div class="savebar">
+    <small>Gilt für alle neuen Entwürfe.</small>
+    <button type="submit">Speichern</button>
+  </div>
 </form>
 
 {# Reset forms live outside the main form; the buttons above point here via form="…". #}
@@ -152,10 +198,12 @@
 <form id="reset-{{ key }}" method="post" action="/settings/reset/{{ key }}"></form>
 {% endfor %}
 
-<h2>Testen</h2>
-<form method="post" action="/settings/test" data-once>
-  <p class="muted">Erzeugt einen Entwurf für das neueste Inserat mit den <strong>gespeicherten</strong> Einstellungen –
+<article id="testen" class="setting-card">
+  <h2>Testen</h2>
+  <p class="help">Erzeugt einen Entwurf für das neueste Inserat mit den <strong>gespeicherten</strong> Einstellungen –
     ohne Telegram. Kostet wie ein normaler Entwurf.</p>
-  <button type="submit" class="secondary">Test-Entwurf erzeugen</button>
-</form>
+  <form method="post" action="/settings/test" data-once>
+    <button type="submit" class="secondary">Test-Entwurf erzeugen</button>
+  </form>
+</article>
 {% endblock %}

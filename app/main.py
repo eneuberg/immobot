@@ -2,8 +2,10 @@
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import bot, db, vault, web
@@ -41,3 +43,5 @@ app.add_middleware(
     https_only=config.cookie_secure,
 )
 app.include_router(router)
+# Stylesheet and script of the dashboard (public, no secrets; CSP allows 'self').
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")

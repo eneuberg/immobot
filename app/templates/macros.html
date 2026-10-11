@@ -6,3 +6,95 @@
 {%- else %}<span class="error">kein Key hinterlegt</span>{% endif %}
 {%- if c.undecryptable %} · <span class="error">⚠ gespeicherter Key nicht entschlüsselbar – neu eintragen</span>{% endif %}
 {%- endmacro %}
+
+{# Success / error message at the top of a page. #}
+{% macro flashes(message=None, error=None) -%}
+{% if message %}<div class="flash ok" role="status">{{ message }}</div>{% endif %}
+{% if error %}<div class="flash err" role="alert">{{ error }}</div>{% endif %}
+{%- endmacro %}
+
+{# Colored status badge of a listing (neu / Entwurf / gesendet / uninteressant). #}
+{% macro status_badge(status) -%}
+<span class="badge dot st-{{ status }}">{{ STATUSES.get(status, status) }}</span>
+{%- endmacro %}
+
+{# Where a credential comes from, as a short badge. Never the value. #}
+{% macro cred_badge(c) -%}
+{% if c.undecryptable %}<span class="badge err">⚠ nicht lesbar</span>
+{%- elif c.source == "dashboard" %}<span class="badge ok dot">gesetzt</span>
+{%- elif c.source == "env" %}<span class="badge info dot">Env-Variable</span>
+{%- else %}<span class="badge err dot">fehlt</span>{% endif %}
+{%- endmacro %}
+
+{# Model/provider, tokens and cost of a draft (view from web._draft_view) as subtle chips. #}
+{% macro draft_meta(d) -%}
+<span class="chip" title="KI-Modell · Anbieter">{{ d.model_label }} · {{ d.provider_label }}</span>
+<span class="chip" title="Tokens: Eingabe / Ausgabe">{{ d.input_tokens }} Tokens ein / {{ d.output_tokens }} aus</span>
+<span class="chip" title="Kosten">{{ d.cost_text }}</span>
+{%- endmacro %}
+
+{# Small inline icons (decorative, currentColor). #}
+{% macro icon(name) -%}
+{% if name == "pin" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
+{%- elif name == "home" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 10.5 12 4l8.5 6.5"/><path d="M5.5 9v10.5h13V9"/><path d="M10 19.5v-5h4v5"/></svg>
+{%- elif name == "inbox" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5l1.5 2.5h5L16 13h5"/><path d="M5.5 5h13L21 13v6H3v-6z"/></svg>
+{%- elif name == "pen" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg>
+{%- endif %}
+{%- endmacro %}
+
+{# "So bekommst du …": short how-to per credential (collapsed). Links open in a new tab without referrer. #}
+{% macro howto(name, hook_url="https://<diese Adresse>/hook/fredy") -%}
+{% if name == "anthropic_api_key" %}
+<details class="howto"><summary>So bekommst du den Anthropic-API-Key</summary>
+  <ol>
+    <li><a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">Claude-Konsole → API Keys</a> öffnen und anmelden (console.anthropic.com leitet dorthin weiter).</li>
+    <li>„Create Key“ klicken, Name z. B. <em>immobot</em>.</li>
+    <li>Key sofort kopieren – er wird nur einmal angezeigt – und hier einfügen.</li>
+  </ol>
+  <p>Ohne Guthaben funktioniert der Key nicht: in derselben Konsole unter
+    <a href="https://platform.claude.com/settings/billing" target="_blank" rel="noopener noreferrer">Billing</a> Guthaben aufladen und am besten ein Limit setzen.</p>
+</details>
+{% elif name == "deutschlandgpt_api_key" %}
+<details class="howto"><summary>So bekommst du den DeutschlandGPT-API-Key</summary>
+  <ol>
+    <li><a href="https://dialog.deutschlandgpt.de/platform-api" target="_blank" rel="noopener noreferrer">DeutschlandGPT Platform-API</a> öffnen und anmelden (der Workspace wird beim ersten Aufruf angelegt).</li>
+    <li>Guthaben: unter <a href="https://dialog.deutschlandgpt.de/platform-api/organization/billing" target="_blank" rel="noopener noreferrer">Billing</a> „Purchase Credits“.</li>
+    <li>Key: unter <a href="https://dialog.deutschlandgpt.de/platform-api/dashboard/api-keys" target="_blank" rel="noopener noreferrer">API-Keys</a> „Add API key“, Name z. B. <em>immobot</em>, optional ein Ausgabenlimit.</li>
+    <li>Key sofort kopieren – er ist nur einmal sichtbar – und hier einfügen.</li>
+  </ol>
+</details>
+{% elif name == "telegram_bot_token" %}
+<details class="howto"><summary>So bekommst du den Bot-Token</summary>
+  <ol>
+    <li>In Telegram <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">@BotFather</a> öffnen.</li>
+    <li>Bestehender Bot (derselbe wie in Fredys Telegram-Adapter): <code>/mybots</code> → Bot wählen → „API Token“.<br>
+      Neuer Bot: <code>/newbot</code> senden, Name und Benutzername wählen (endet auf „bot“).</li>
+    <li>Token kopieren und hier einfügen. Für eine Gruppe: Bot in die Gruppe einladen.</li>
+  </ol>
+  <p>Wer den Token hat, steuert den Bot – nicht weitergeben. Neu erzeugen geht beim BotFather mit <code>/revoke</code>.</p>
+</details>
+{% elif name == "telegram_chat_id" %}
+<details class="howto"><summary>So bekommst du die Chat-ID</summary>
+  <ol>
+    <li>Am einfachsten: „Chat per Code verbinden“ (unter „Ändern“) – der Bot trägt Chat-ID und deine User-ID selbst ein.</li>
+    <li>Manuell: dieselbe ID wie in Fredys Telegram-Adapter. Gruppen-IDs sind negativ (z. B. <code>-100…</code>).</li>
+  </ol>
+</details>
+{% elif name == "telegram_allowed_user_ids" %}
+<details class="howto"><summary>So bekommst du deine User-ID</summary>
+  <ol>
+    <li>Wird beim Pairing („Chat per Code verbinden“) automatisch eingetragen.</li>
+    <li>Manuell: <a href="https://t.me/userinfobot" target="_blank" rel="noopener noreferrer">@userinfobot</a> öffnen und „Start“ drücken – die angezeigte Id ist deine User-ID. Mehrere IDs mit Komma trennen.</li>
+  </ol>
+</details>
+{% elif name == "fredy_webhook_token" %}
+<details class="howto"><summary>So richtest du den Webhook in Fredy ein</summary>
+  <ol>
+    <li>Hier unter „Ändern“ auf „Neu erzeugen“ klicken – der Token wird genau einmal angezeigt.</li>
+    <li>In Fredy den Job öffnen → Benachrichtigungen (Notification Adapter) → Adapter „HTTP“ hinzufügen.</li>
+    <li>Endpoint URL: <code>{{ hook_url }}</code></li>
+    <li>Auth Token: den Token einfügen und speichern.</li>
+  </ol>
+</details>
+{% endif %}
+{%- endmacro %}

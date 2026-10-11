@@ -2,41 +2,67 @@
 {% from "macros.html" import key_line %}
 {% block title %}Status{% endblock %}
 {% block content %}
-<h1>Status</h1>
+<div class="page-head">
+  <div>
+    <h1>Status</h1>
+    <p>Läuft alles? Grün heißt ja, Gelb und Rot sagen, was zu tun ist.</p>
+  </div>
+</div>
 
-{% if ai.no_key_warning %}<article class="error" role="alert">⚠ {{ ai.no_key_warning }}</article>{% endif %}
+{% if ai.no_key_warning %}<div class="flash err" role="alert">{{ ai.no_key_warning }}</div>{% endif %}
 
-<table>
-  <tr><th>KI-Anbieter</th><td>{{ ai.label }} · {{ ai.model_label }} · <a href="/settings#ki">ändern</a></td></tr>
-  <tr><th>{{ ai.label }}-API-Key</th><td>{{ key_line(ai.key) }}</td></tr>
-  <tr><th>Letzter Webhook von Fredy</th><td>{{ last_webhook_at|local_time }}</td></tr>
-  <tr>
-    <th>Telegram-Bot</th>
-    <td>
+{% macro tile(tone, title) -%}
+<div class="health-item {{ tone }}">
+  <span class="hi-icon" aria-hidden="true">{{ {"ok": "✓", "warn": "!", "err": "✕"}.get(tone, "–") }}</span>
+  <div><h3>{{ title }}</h3>{{ caller() }}</div>
+</div>
+{%- endmacro %}
+
+<section class="health" aria-label="Überblick">
+  {% call tile("err" if ai.no_key_warning else ("warn" if ai.key.undecryptable else "ok"), "KI-Anbieter") %}
+    <p>{{ ai.label }} · {{ ai.model_label }} · <a href="/settings#ki">ändern</a></p>
+    <p>{{ ai.label }}-API-Key: {{ key_line(ai.key) }}</p>
+  {% endcall %}
+
+  {% if bot_disabled %}{% set bot_tone = "" %}
+  {% elif not bot_configured %}{% set bot_tone = "err" %}
+  {% elif bot_running %}{% set bot_tone = "ok" if chat_connected else "warn" %}
+  {% else %}{% set bot_tone = "err" %}{% endif %}
+  {% call tile(bot_tone, "Telegram-Bot") %}
+    <p>
       {% if bot_disabled %}deaktiviert (IMMOBOT_DISABLE_BOT)
       {% elif not bot_configured %}<span class="error">nicht konfiguriert</span> – Bot-Token unter <a href="/credentials">Zugänge</a> eintragen
       {% elif bot_running %}<span class="success">läuft</span>{% if not chat_connected %} – noch kein Chat verbunden{% endif %}
       {% else %}<span class="error">läuft nicht</span>{% endif %}
-    </td>
-  </tr>
-  <tr>
-    <th>Erlaubte Telegram-User</th>
-    <td>
+    </p>
+    <p>Letztes Telegram-Update: {{ bot_last_update_at|local_time }}</p>
+  {% endcall %}
+
+  {% call tile("warn" if allowlist_warning else "ok", "Erlaubte Telegram-User") %}
+    <p>
       {% if allowlist_warning %}<span class="error">⚠ {{ allowlist_warning }}</span>
       {% else %}{{ allowed_user_ids|join(", ") }}{% endif %}
-    </td>
-  </tr>
-  <tr><th>Letztes Telegram-Update</th><td>{{ bot_last_update_at|local_time }}</td></tr>
-  <tr><th>Letzter Bot-Fehler</th><td class="pre-wrap">{{ bot_last_error or "–" }}</td></tr>
-  <tr><th>Version</th><td>{{ version }}</td></tr>
-</table>
+    </p>
+  {% endcall %}
 
-<h2>Zugänge</h2>
-<table>
+  {% call tile("ok" if last_webhook_at else "", "Fredy-Webhook") %}
+    <p>{% if last_webhook_at %}Letzter Aufruf: {{ last_webhook_at|local_time }}{% else %}Noch kein Aufruf von Fredy{% endif %}</p>
+    <p><a href="#fredy">Einrichten ↓</a></p>
+  {% endcall %}
+
+  {% if bot_last_error %}
+  {% call tile("warn", "Letzter Bot-Fehler") %}
+    <p class="pre-wrap">{{ bot_last_error }}</p>
+  {% endcall %}
+  {% endif %}
+</section>
+
+<div class="section-head"><h2>Zugänge</h2><a href="/credentials">Verwalten →</a></div>
+<ul class="kv">
   {% for c in credentials %}
-  <tr>
-    <th>{{ c.label }}</th>
-    <td>
+  <li>
+    <span class="k">{{ c.label }}</span>
+    <span class="v">
       {% if c.hint %}{{ key_line(c) }}
       {% else %}
         {% if c.source == "dashboard" %}gesetzt (Dashboard)
@@ -44,31 +70,37 @@
         {% else %}<span class="error">nicht gesetzt</span>{% endif %}
         {% if c.undecryptable %} · <span class="error">⚠ nicht entschlüsselbar</span>{% endif %}
       {% endif %}
-    </td>
-  </tr>
+    </span>
+  </li>
   {% endfor %}
-</table>
-<p><a href="/credentials">Zugänge verwalten →</a></p>
+</ul>
 
-<h3>Protokoll (Zugänge und fehlgeschlagene Logins)</h3>
+<div class="section-head"><h2>Protokoll</h2><small class="muted">Zugänge und fehlgeschlagene Logins</small></div>
 {% include "credential_events.html" %}
 
-<h2>Datenbank</h2>
-<table>
-  <tr><th>Inserate</th><td>{{ stats.listings_total }}</td></tr>
-  {% for key, label in STATUSES.items() %}
-  <tr><th>… davon {{ label }}</th><td>{{ stats.by_status.get(key, 0) }}</td></tr>
-  {% endfor %}
-  <tr><th>Entwürfe</th><td>{{ stats.drafts_total }}</td></tr>
-  <tr><th>Kosten {{ stats.month }} (USD)</th><td>{{ stats.cost_month|usd }}</td></tr>
-  <tr><th>Kosten gesamt (USD)</th><td>{{ stats.cost_total|usd }}</td></tr>
-</table>
+<div class="section-head"><h2>Datenbank</h2></div>
+<section class="stats" aria-label="Datenbank">
+  <div class="stat"><span class="label">Inserate</span><span class="value">{{ stats.listings_total }}</span></div>
+  <div class="stat"><span class="label">Entwürfe</span><span class="value">{{ stats.drafts_total }}</span></div>
+  <div class="stat"><span class="label">Kosten {{ stats.month }} (USD)</span><span class="value">{{ stats.cost_month|usd }}</span></div>
+  <div class="stat"><span class="label">Kosten gesamt (USD)</span><span class="value">{{ stats.cost_total|usd }}</span></div>
+</section>
+<p class="chips">
+  {% for key, label in STATUSES.items() %}<span class="badge dot st-{{ key }}">{{ label }}: {{ stats.by_status.get(key, 0) }}</span>{% endfor %}
+</p>
 
-<h2>Fredy einrichten</h2>
-<p>In Fredy beim Job zusätzlich den <strong>HTTP-Adapter</strong> eintragen (Fredys Telegram-Adapter bleibt):</p>
-<ul>
-  <li>URL: <code>{{ hook_url }}</code> (Pfad <code>/hook/fredy</code>)</li>
-  <li>Auth Token = der Fredy-Webhook-Token von <a href="/credentials">Zugänge</a> (wird als <code>Authorization: Bearer …</code> gesendet)</li>
-</ul>
-<p class="muted">API-Key und Tokens werden unter <a href="/credentials">Zugänge</a> gepflegt und nirgends im Dashboard angezeigt.</p>
+<article id="fredy">
+  <h2>Fredy einrichten</h2>
+  <p>In Fredy beim Job zusätzlich den <strong>HTTP-Adapter</strong> eintragen (Fredys Telegram-Adapter bleibt):</p>
+  <ol class="steps">
+    <li>Endpoint URL:
+      <div class="command"><code id="hook-url">{{ hook_url }}</code>
+        <button type="button" class="secondary outline copy-btn btn-sm" data-copy="hook-url">Kopieren</button></div>
+    </li>
+    <li>Auth Token = der Fredy-Webhook-Token von <a href="/credentials">Zugänge</a> (wird als <code>Authorization: Bearer …</code> gesendet; Pfad <code>/hook/fredy</code>).</li>
+  </ol>
+  <p class="muted"><small>API-Key und Tokens werden unter <a href="/credentials">Zugänge</a> gepflegt und nirgends im Dashboard angezeigt.</small></p>
+</article>
+
+<p class="foot">immobot · Version {{ version }}</p>
 {% endblock %}

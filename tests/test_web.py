@@ -252,6 +252,28 @@ def test_javascript_urls_not_rendered(client):
     assert "<img" not in r.text and "Inserat öffnen" not in r.text and "In Fredy öffnen" not in r.text
 
 
+def test_listings_overview_thumbnails(client):
+    login(client)
+    add_listing(fredy_id="ok", title="Mit Bild", image_url="https://img.example/thumb.jpg")
+    add_listing(fredy_id="bad", title="Böses Bild", image_url="javascript:alert(1)")
+    add_listing(fredy_id="none", title="Ohne Bild")
+    r = client.get("/")
+    imgs = re.findall(r"<img[^>]*>", r.text)
+    assert len(imgs) == 1  # only the plain https image; the others get the placeholder
+    tag = imgs[0]
+    assert 'src="https://img.example/thumb.jpg"' in tag and 'referrerpolicy="no-referrer"' in tag
+    assert 'loading="lazy"' in tag and 'alt=""' in tag
+    assert "javascript:" not in r.text.lower() and r.text.count('class="thumb-ph"') == 3
+
+
+def test_static_assets_served_without_login(client):
+    for path, kind in [("/static/app.css", "text/css"), ("/static/app.js", "javascript")]:
+        r = client.get(path)
+        assert r.status_code == 200 and kind in r.headers["content-type"]
+        assert "frame-ancestors 'none'" in r.headers["content-security-policy"]  # security headers apply here too
+    assert client.get("/static/../app/web.py").status_code == 404
+
+
 def test_listing_status_change(client):
     login(client)
     lid = add_listing()
@@ -1220,6 +1242,7 @@ def test_listing_shows_provider_and_both_currencies(client):
                  cost_native=0.021)
     db.add_draft(lid, "shorter", "Kurz", "claude-opus-5-5", cost_usd=0.042)
     page = client.get(f"/listing/{lid}").text
-    assert "Claude Sonnet 5.5 · DeutschlandGPT · " in page and "2,1 ct (€) ≈ 2,3 ct ($)" in page
-    assert "Claude Opus 5.5 · Anthropic · " in page and "4,2 ct ($)" in page
+    # Model · provider and the cost are separate chips under each draft.
+    assert ">Claude Sonnet 5.5 · DeutschlandGPT</span>" in page and ">2,1 ct (€) ≈ 2,3 ct ($)</span>" in page
+    assert ">Claude Opus 5.5 · Anthropic</span>" in page and ">4,2 ct ($)</span>" in page
     assert "6,5 ct" in client.get("/").text  # listing total in USD: 2,31 + 4,2 ct

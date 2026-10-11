@@ -2,70 +2,38 @@
 <html lang="de">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0e1116" media="(prefers-color-scheme: dark)">
   <meta name="robots" content="noindex, nofollow">
   <title>{% block title %}{% endblock %} · immobot</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230f766e'/%3E%3Cpath d='M6 11.5 12 7l6 4.5V18h-4v-4h-4v4H6z' fill='white'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css"
         integrity="sha384-7P0NVe9LPDbUCAF+fH2R8Egwz1uqNH83Ns/bfJY0fN2XCDBMUI2S9gGzIOIRBKsA" crossorigin="anonymous">
-  <style>
-    nav form { margin: 0; }
-    nav button { padding: .3rem .8rem; margin: 0; }
-    .pre-wrap { white-space: pre-wrap; }
-    pre.draft { white-space: pre-wrap; padding: 1rem; }
-    .error { color: var(--pico-del-color); }
-    .success { color: var(--pico-ins-color); }
-    .muted { color: var(--pico-muted-color); }
-    .stats { display: flex; flex-wrap: wrap; gap: .5rem 2.5rem; }
-    .stats div { display: flex; flex-direction: column; }
-    .filters a { margin-right: 1rem; white-space: nowrap; }
-    .filters a[aria-current] { font-weight: bold; }
-    .actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
-    .actions form { margin: 0; }
-    td.num, th.num { text-align: right; white-space: nowrap; }
-    img.listing { max-height: 22rem; object-fit: cover; border-radius: var(--pico-border-radius); }
-    .login { max-width: 24rem; margin: 4rem auto; }
-    input.masked { -webkit-text-security: disc; }
-  </style>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js"></script>
 </head>
 <body>
   {% block nav %}
-  <header class="container">
-    <nav>
-      <ul><li><strong>immobot</strong></li></ul>
-      <ul>
-        <li><a href="/" {% if active == "listings" %}aria-current="page"{% endif %}>Inserate</a></li>
-        <li><a href="/settings" {% if active == "settings" %}aria-current="page"{% endif %}>Einstellungen</a></li>
-        <li><a href="/credentials" {% if active == "credentials" %}aria-current="page"{% endif %}>Zugänge</a></li>
-        <li><a href="/status" {% if active == "status" %}aria-current="page"{% endif %}>Status</a></li>
-        <li><form method="post" action="/logout"><button type="submit" class="secondary outline">Logout</button></form></li>
-      </ul>
-    </nav>
+  <header class="site-header">
+    <div class="container bar">
+      <a class="brand" href="/">
+        <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 11 12 4.5 20 11v8.5a.5.5 0 0 1-.5.5H15v-5.5H9V20H4.5a.5.5 0 0 1-.5-.5z"/></svg></span>
+        <span>immobot</span>
+      </a>
+      <nav class="tabs" aria-label="Hauptmenü">
+        <a href="/" {% if active == "listings" %}aria-current="page"{% endif %}>Inserate</a>
+        <a href="/settings" {% if active == "settings" %}aria-current="page"{% endif %}>Einstellungen</a>
+        <a href="/credentials" {% if active == "credentials" %}aria-current="page"{% endif %}>Zugänge</a>
+        <a href="/status" {% if active == "status" %}aria-current="page"{% endif %}>Status</a>
+      </nav>
+      <form class="logout" method="post" action="/logout"><button type="submit" title="Abmelden (beendet alle Sitzungen)">Abmelden</button></form>
+    </div>
   </header>
   {% endblock %}
   <main class="container">
     {% block content %}{% endblock %}
   </main>
-  <script>
-    // Copy buttons: <button data-copy="element-id">; confirm buttons: <button data-confirm="question">.
-    document.addEventListener("click", function (e) {
-      var ask = e.target.closest("[data-confirm]");
-      if (ask && !window.confirm(ask.dataset.confirm)) { e.preventDefault(); return; }
-      var btn = e.target.closest("[data-copy]");
-      if (!btn) return;
-      navigator.clipboard.writeText(document.getElementById(btn.dataset.copy).textContent).then(function () {
-        btn.textContent = "Kopiert ✓";
-        setTimeout(function () { btn.textContent = "Kopieren"; }, 1500);
-      });
-    });
-    // Forms with data-once (slow Claude calls): show a spinner and ignore double submits.
-    document.addEventListener("submit", function (e) {
-      var form = e.target;
-      if (!form.hasAttribute("data-once")) return;
-      if (form.dataset.sent) { e.preventDefault(); return; }
-      form.dataset.sent = "1";
-      if (e.submitter) e.submitter.setAttribute("aria-busy", "true");
-    });
-  </script>
 </body>
 </html>
