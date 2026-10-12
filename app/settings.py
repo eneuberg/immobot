@@ -131,8 +131,8 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "provider": DEFAULT_PROVIDER,
     "model": DEFAULT_MODEL,
     "effort": "low",
-    "monthly_budget_usd": "15",
-    "eur_usd_rate": "1.10",
+    "monthly_budget_eur": "15",
+    "eur_usd_rate": "1.10",  # 1 € = x $
     "send_image": "1",
     "llm_max_images": "10",
     "followup_delay_s": "4",
@@ -193,31 +193,66 @@ def cost(provider: str, model: str, input_tokens: int, output_tokens: int,
     ) / 1_000_000
 
 
+DEFAULT_EUR_USD_RATE = 1.10
+
+
+def eur_usd_rate(settings: dict) -> float:
+    """The configured exchange rate, 1 € = x $ (a broken value counts as the default)."""
+    rate = as_float(settings.get("eur_usd_rate"), DEFAULT_EUR_USD_RATE)
+    return rate if 0.1 <= rate <= 10 else DEFAULT_EUR_USD_RATE
+
+
 def to_usd(amount: float, currency: str, eur_usd_rate: float) -> float:
-    """Budget and totals are kept in USD; EUR costs are converted with the configured rate."""
+    """For the legacy drafts.cost_usd column: EUR costs converted with the configured rate."""
     return amount * eur_usd_rate if currency == "EUR" else amount
 
 
-def fmt_usd(value: float | None) -> str:
-    """Human-readable USD cost, German number format: cents below one dollar, e.g. '4,2 ct' or '1,23 $'."""
+def _de(number: str) -> str:
+    return number.replace(".", ",")
+
+
+def fmt_eur(value: float | None) -> str:
+    """Costs are shown in euros: '4,2 ct' below one euro, else '1,23 €'."""
     value = value or 0.0
-    if value < 1:
-        return f"{value * 100:.1f} ct".replace(".", ",")
-    return f"{value:.2f} $".replace(".", ",")
+    return _de(f"{value * 100:.1f} ct") if value < 1 else _de(f"{value:.2f} €")
+
+
+def fmt_usd(value: float | None) -> str:
+    """A dollar amount next to its euro value: '0,042 $' below one dollar, else '1,23 $'."""
+    value = value or 0.0
+    return _de(f"{value:.3f} $") if value < 1 else _de(f"{value:.2f} $")
 
 
 def fmt_money(value: float | None, currency: str) -> str:
-    """'2,1 ct (€)', '1,23 €', '4,2 ct ($)', '1,50 $'."""
+    """'2,1 ct (€)', '1,23 €', '4,2 ct ($)', '1,50 $' (log lines)."""
     value, sign = value or 0.0, CURRENCY_SIGNS.get(currency, currency)
     if value < 1:
-        return f"{value * 100:.1f} ct ({sign})".replace(".", ",")
-    return f"{value:.2f} {sign}".replace(".", ",")
+        return _de(f"{value * 100:.1f} ct ({sign})")
+    return _de(f"{value:.2f} {sign}")
+
+
+def _native_cost(draft: dict) -> float:
+    native = draft.get("cost_native")
+    return float(native if native is not None else draft.get("cost_usd") or 0.0)
+
+
+def draft_cost_eur(draft: dict, rate: float = DEFAULT_EUR_USD_RATE) -> float:
+    """A draft's cost in euros. Rows from db carry it as `cost_eur` (converted with the configured rate);
+    otherwise it is computed here: EUR drafts as billed, USD drafts (Anthropic, old rows) / rate."""
+    if draft.get("cost_eur") is not None:
+        return float(draft["cost_eur"])
+    native = _native_cost(draft)
+    return native if (draft.get("currency") or "USD") == "EUR" else native / rate
 
 
 def draft_cost_text(draft: dict) -> str:
-    """Cost of a stored draft: '4,2 ct ($)', or '2,1 ct (€) ≈ 2,3 ct ($)' for a non-USD provider."""
-    currency = draft.get("currency") or "USD"
-    if currency == "USD":
-        return fmt_money(draft.get("cost_usd"), "USD")
-    native = draft.get("cost_native")
-    return f"{fmt_money(native, currency)} ≈ {fmt_money(draft.get('cost_usd'), 'USD')}"
+    """'3,8 ct' - the euro cost (Telegram footer, lists)."""
+    return fmt_eur(draft_cost_eur(draft))
+
+
+def draft_cost_detail(draft: dict) -> str:
+    """'3,8 ct (≈ 0,042 $)' for dollar-billed drafts (Anthropic), else just the euro cost."""
+    text = draft_cost_text(draft)
+    if (draft.get("currency") or "USD") == "USD":
+        text += f" (≈ {fmt_usd(_native_cost(draft))})"
+    return text

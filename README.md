@@ -72,25 +72,30 @@ ungültig.
 
 Unter **Einstellungen → KI-Anbieter** wählst du, wer die Entwürfe schreibt:
 
-- **Anthropic** (Abrechnung in USD): direkt über die Claude API, mit Structured Outputs (JSON-Schema) und dem
+- **Anthropic** (Abrechnung in Dollar): direkt über die Claude API, mit Structured Outputs (JSON-Schema) und dem
   serverseitigen Refusal-Fallback (Opus 5.5, Opus 5, Sonnet 5.5, Fable 5.1).
-- **DeutschlandGPT** (Abrechnung in EUR, netto): über dessen Anthropic-kompatiblen Endpunkt
+- **DeutschlandGPT** (Abrechnung in Euro, netto): über dessen Anthropic-kompatiblen Endpunkt
   `https://api.deutschlandgpt.de/anthropic`. Dort wird das JSON-Schema von den meisten Modellen ignoriert. immobot bittet
   deshalb im System-Prompt um ein festes Format (`<<<ENTWURF>>>` / `<<<HINWEIS>>>`) und liest die Antwort tolerant: zuerst
   dieses Format, dann JSON, dann Markdown („**draft**“ …), zuletzt den ganzen Text als Entwurf. Fehlerhaft ist nur eine leere
   Antwort.
 
-Im selben Abschnitt: den Key des gewählten Anbieters setzen oder ersetzen („Key speichern & Modelle laden“, mit
-Dashboard-Passwort, wie unter Zugänge) und das Modell wählen. Angeboten werden die Modelle, die der Anbieter für deinen Key
+Wählst du im Feld „Anbieter“ einen Anbieter aus, zeigt der Abschnitt sofort dessen Key-Status (mit Kurzform wie
+`sk-ant-…A1B2`), eine Warnung falls noch kein Key hinterlegt ist, das Formular zum Setzen oder Ersetzen des Keys („Key
+speichern & Modelle laden“, mit Dashboard-Passwort, wie unter Zugänge), die Anleitung und die Modellliste dieses
+Anbieters. Übernommen werden Anbieter und Modell mit einem Klick auf „Anbieter & Modell speichern“ (oder dem normalen
+„Speichern“ unten). Ohne JavaScript stehen beide Anbieter untereinander. Angeboten werden die Modelle, die der Anbieter für deinen Key
 live auflistet **und** für die immobot einen Preis kennt. Die Preistabellen stehen fest in `app/settings.py` (Anthropic:
 Listenpreise, DeutschlandGPT: Preise laut API, Stand 2026-10-12). Weitere Modelle des Anbieters werden nur als „verfügbar,
 aber nicht unterstützt“ aufgeführt. Konnte die Liste nicht geladen werden, zeigt die Seite alle Modelle mit Preis und
-„Modellliste nicht geprüft“. „Modelle neu laden“ holt die Liste erneut. Beim Anbieterwechsel wird das Standardmodell des
-neuen Anbieters gewählt, falls das bisherige dort nicht existiert (Anthropic: Opus 5.5, DeutschlandGPT: Sonnet 5.5).
+„Modellliste nicht geprüft“. „Modelle neu laden“ holt die Liste erneut. Die Preise in der Modellauswahl stehen in der
+Währung des Anbieters ($ bzw. € pro 1 Mio. Tokens). Ohne Auswahl gilt das Standardmodell des Anbieters (Anthropic: Opus 5.5,
+DeutschlandGPT: Sonnet 5.5).
 
-Kosten: Jeder Entwurf speichert Anbieter, Modell, Tokens und die Kosten in der Währung des Anbieters. Budget und Summen
-bleiben in USD; Euro-Beträge werden mit dem „Umrechnungskurs EUR→USD (ca.)“ (Standard 1,10) umgerechnet. Pro Entwurf steht
-z. B. „Claude Sonnet 5.5 · DeutschlandGPT · 2,1 ct (€) ≈ 2,3 ct ($)“, im Telegram-Entwurf ebenso.
+Kosten: Jeder Entwurf speichert Anbieter, Modell, Tokens und die Kosten in der Währung des Anbieters. Angezeigt und
+gerechnet wird in **Euro**: Monatsbudget (Einstellungen, in €), Summen, Inserate, Entwürfe, Telegram und Status.
+Dollar-Kosten (Anthropic) werden mit dem „Wechselkurs: 1 € = x $“ (Standard 1,10) umgerechnet; beim Entwurf im Dashboard
+steht dann zusätzlich der Dollarbetrag, z. B. „3,8 ct (≈ 0,042 $)“. DeutschlandGPT-Kosten sind bereits in Euro.
 
 ## ImmoScout24: alle Bilder und Details
 
@@ -100,10 +105,12 @@ eine Verbindung mit kurzer Pause, nur in der Größe, die ImmoScout24 selbst aus
 Bei der ersten Ablehnung (403/429/kein Bild) wird abgebrochen; was da ist, bleibt. Gespeichert wird als JPEG (max.
 1024 px) unter `/data/media/<Inserat>/`; nach 60 Tagen löscht immobot die Bilder beim Start wieder.
 
-- **Entwürfe** bekommen den vollen Exposé-Text, die Ansprechperson und bis zu „Höchstens so viele Bilder“ (Einstellungen,
-  Standard 10, ≈ 1.000 Tokens pro Bild), jedes beschriftet („Bild 1: Grundriss“). Grundrisse kommen zuerst. Andere
-  Portale bekommen wie bisher Fredys Einzelbild.
-- **Telegram:** „🖼 Bilder“ schickt bis zu 10 Bilder als Album unter die immobot-Nachricht (einmal pro Inserat).
+- **Entwürfe** bekommen den vollen Exposé-Text, die Ansprechperson und so viele Fotos, wie unter „Fotos für Claude pro
+  Entwurf“ eingestellt (Einstellungen, 0–20, Standard 10). Jedes Foto kostet ca. 1.000 Tokens (≈ 0,1–4 ct je nach
+  Modell) und ist beschriftet („Bild 1: Grundriss“); Grundrisse kommen zuerst. Andere Portale bekommen wie bisher Fredys
+  Einzelbild.
+- **Telegram:** „🖼 Bilder“ schickt bis zu 10 Fotos als Album unter die immobot-Nachricht (einmal pro Inserat). Das ist
+  Telegrams Grenze pro Album und hat mit der Einstellung für Claude nichts zu tun.
   „🔗 Dashboard“ öffnet die Inseratseite.
 - **Dashboard:** Die Inseratseite zeigt alle Bilder, Details und Ansprechperson. Wurde noch nichts geladen oder ist
   etwas schiefgegangen, gibt es „Bilder & Details laden“ bzw. „Erneut versuchen“. Fehlversuche wiederholt immobot

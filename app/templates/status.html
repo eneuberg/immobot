@@ -96,8 +96,8 @@
 <section class="stats" aria-label="Datenbank">
   <div class="stat"><span class="label">Inserate</span><span class="value">{{ stats.listings_total }}</span></div>
   <div class="stat"><span class="label">Entwürfe</span><span class="value">{{ stats.drafts_total }}</span></div>
-  <div class="stat"><span class="label">Kosten {{ stats.month }} (USD)</span><span class="value">{{ stats.cost_month|usd }}</span></div>
-  <div class="stat"><span class="label">Kosten gesamt (USD)</span><span class="value">{{ stats.cost_total|usd }}</span></div>
+  <div class="stat"><span class="label">Kosten {{ stats.month }}</span><span class="value">{{ stats.cost_month|eur }}</span></div>
+  <div class="stat"><span class="label">Kosten gesamt</span><span class="value">{{ stats.cost_total|eur }}</span></div>
 </section>
 <p class="chips">
   {% for key, label in STATUSES.items() %}<span class="badge dot st-{{ key }}">{{ label }}: {{ stats.by_status.get(key, 0) }}</span>{% endfor %}

@@ -3,6 +3,9 @@
 (function () {
   "use strict";
 
+  // CSS can now tell that JS runs (e.g. to show only the chosen provider panel on /settings) - before first paint.
+  document.documentElement.classList.add("js");
+
   // Confirm buttons: <button data-confirm="Frage?">. Copy buttons: <button data-copy="element-id">.
   document.addEventListener("click", function (e) {
     var ask = e.target.closest("[data-confirm]");
@@ -61,6 +64,23 @@
     document.querySelectorAll("form[data-sent]").forEach(function (f) { delete f.dataset.sent; });
     document.querySelectorAll("[aria-busy=true]").forEach(function (b) { b.removeAttribute("aria-busy"); b.removeAttribute("aria-disabled"); });
   });
+
+  // Settings → KI-Anbieter: show the panel of the provider chosen in the select (key status, key form, how-to,
+  // models) and say when the choice isn't saved yet. Provider and model are saved with the settings form.
+  function syncProviderPanels() {
+    var select = document.querySelector("select[data-provider-select]");
+    if (!select) return;
+    document.querySelectorAll("[data-provider-panel]").forEach(function (panel) {
+      panel.classList.toggle("is-active", panel.dataset.providerPanel === select.value);
+    });
+    var note = document.querySelector("[data-provider-unsaved]");
+    if (note) note.hidden = select.value === select.dataset.saved;
+  }
+  document.addEventListener("change", function (e) {
+    if (e.target.matches("select[data-provider-select]")) syncProviderPanels();
+  });
+  document.addEventListener("DOMContentLoaded", syncProviderPanels);
+  window.addEventListener("pageshow", syncProviderPanels);  // the browser may restore another selection
 
   // Thumbnails: an image that fails to load is hidden, so the placeholder underneath shows.
   function markBroken(img) { img.classList.add("is-broken"); }

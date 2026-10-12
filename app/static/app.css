@@ -112,6 +112,7 @@ h3 { --pico-font-size: 1.02rem; margin: 0 0 .5rem; }
 code { padding: .1rem .35rem; border-radius: .3rem; font-size: .86em; overflow-wrap: anywhere; }
 small, .small { font-size: .84rem; }
 .muted { color: var(--pico-muted-color); }
+[hidden] { display: none !important; }
 .pre-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
 .success { color: var(--ok); }
 .error { color: var(--err); }
@@ -490,6 +491,10 @@ pre.draft {
 .field-head { display: flex; align-items: baseline; justify-content: space-between; gap: .25rem 1rem; }
 .field-head > :first-child { min-width: 0; }
 .field-head h2 { margin-bottom: .2rem; }
+/* Settings → KI-Anbieter: one panel per provider. With JS (html.js) only the chosen one shows; without JS all do. */
+.provider-panel { border: 1px solid var(--pico-card-border-color); border-radius: var(--radius-sm); padding: .9rem .9rem .4rem; margin: 0 0 1rem; }
+.provider-panel h3 small { font-weight: 400; }
+.js .provider-panel:not(.is-active) { display: none; }
 .key-status { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .6rem; margin: 0 0 .75rem; font-size: .92rem; }
 .form-grid { display: grid; gap: 0 1rem; }
 @media (min-width: 768px) { .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -4,7 +4,8 @@ FastAPI threadpool and the Telegram bot's event loop.
 Tables:
   listings         one row per listing received from Fredy (+ ImmoScout24 details, see is24.py)
   listing_media    pictures of a listing downloaded from ImmoScout24 (files under DATA_DIR/media/<listing id>/)
-  drafts           every generated message, with provider, model, tokens and cost (native currency + USD)
+  drafts           every generated message, with provider, model, tokens and cost in the provider's currency
+                   (cost_native/currency; euro values are computed with cost_eur_sql, cost_usd is legacy)
   settings         user-editable, non-secret settings (key/value strings)
   meta             internal state such as last_webhook_at and a pending Telegram pairing
   pending_prompts  Telegram "Anpassen" questions waiting for the user's reply
@@ -17,7 +18,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-from .settings import DEFAULT_SETTINGS
+from .settings import DEFAULT_SETTINGS, eur_usd_rate
 
 _db_path: str | None = None
 
@@ -131,6 +132,24 @@ def init_db(data_dir: str) -> None:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
         _add_missing_columns(conn)
+        _rename_setting(conn, "monthly_budget_usd", "monthly_budget_eur")  # the budget is in euros now (15 stays 15)
+
+
+def _rename_setting(conn: sqlite3.Connection, old: str, new: str) -> None:
+    conn.execute("INSERT OR IGNORE INTO settings (key, value) SELECT ?, value FROM settings WHERE key = ?", (new, old))
+    conn.execute("DELETE FROM settings WHERE key = ?", (old,))
+
+
+def cost_eur_sql(table: str = "") -> str:
+    """SQL for a draft's cost in euros; needs the rate (1 € = x $) as its parameter. EUR drafts as billed,
+    dollar drafts (Anthropic, and rows from before currencies were stored) divided by the rate."""
+    t = table + "." if table else ""
+    return (f"(CASE WHEN {t}currency = 'EUR' THEN COALESCE({t}cost_native, 0) "
+            f"ELSE COALESCE({t}cost_native, {t}cost_usd) / ? END)")
+
+
+def _rate() -> float:
+    return eur_usd_rate(get_settings())
 
 
 def _add_missing_columns(conn: sqlite3.Connection) -> None:
@@ -192,21 +211,21 @@ def latest_listing() -> dict | None:
 
 
 def list_listings(status: str | None = None, limit: int = 300) -> list[dict]:
-    """Listings newest first, each with draft_count and cost_usd (sum over its drafts)."""
+    """Listings newest first, each with draft_count and cost_eur (sum over its drafts, in euros)."""
     sql = """
-        SELECT l.*, COUNT(d.id) AS draft_count, COALESCE(SUM(d.cost_usd), 0) AS cost_usd
+        SELECT l.*, COUNT(d.id) AS draft_count, COALESCE(SUM({cost}), 0) AS cost_eur
         FROM listings l LEFT JOIN drafts d ON d.listing_id = l.id
         {where}
         GROUP BY l.id ORDER BY l.id DESC LIMIT ?
     """
-    params: list = []
+    params: list = [_rate()]
     where = ""
     if status:
         where = "WHERE l.status = ?"
         params.append(status)
     params.append(limit)
     with connect() as conn:
-        return [dict(r) for r in conn.execute(sql.format(where=where), params).fetchall()]
+        return [dict(r) for r in conn.execute(sql.format(cost=cost_eur_sql("d"), where=where), params).fetchall()]
 
 
 def unannounced_listing_ids(hours: int = 24) -> list[int]:
@@ -335,30 +354,38 @@ def add_draft(
 
 
 def latest_draft(listing_id: int, include_test: bool = False) -> dict | None:
-    sql = "SELECT * FROM drafts WHERE listing_id = ?" + ("" if include_test else " AND kind != 'test'") + " ORDER BY id DESC LIMIT 1"
+    """The newest draft (with cost_eur)."""
+    sql = (f"SELECT *, {cost_eur_sql()} AS cost_eur FROM drafts WHERE listing_id = ?"
+           + ("" if include_test else " AND kind != 'test'") + " ORDER BY id DESC LIMIT 1")
+    rate = _rate()
     with connect() as conn:
-        return _row(conn.execute(sql, (listing_id,)).fetchone())
+        return _row(conn.execute(sql, (rate, listing_id)).fetchone())
 
 
 def list_drafts(listing_id: int) -> list[dict]:
+    """All drafts of a listing, oldest first (with cost_eur)."""
+    sql = f"SELECT *, {cost_eur_sql()} AS cost_eur FROM drafts WHERE listing_id = ? ORDER BY id ASC"
+    rate = _rate()
     with connect() as conn:
-        return [dict(r) for r in conn.execute("SELECT * FROM drafts WHERE listing_id = ? ORDER BY id ASC", (listing_id,)).fetchall()]
+        return [dict(r) for r in conn.execute(sql, (rate, listing_id)).fetchall()]
 
 
 def cost_this_month() -> float:
-    month_prefix = datetime.now(timezone.utc).strftime("%Y-%m")
+    """Costs of the current month in euros (the monthly budget is checked against this)."""
+    month_prefix, rate = datetime.now(timezone.utc).strftime("%Y-%m"), _rate()
     with connect() as conn:
-        row = conn.execute("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM drafts WHERE created_at LIKE ?", (month_prefix + "%",)).fetchone()
+        row = conn.execute(f"SELECT COALESCE(SUM({cost_eur_sql()}), 0) AS c FROM drafts WHERE created_at LIKE ?",
+                           (rate, month_prefix + "%")).fetchone()
         return float(row["c"])
 
 
 def stats() -> dict:
-    """Numbers for the dashboard header."""
-    month_prefix = datetime.now(timezone.utc).strftime("%Y-%m")
+    """Numbers for the dashboard header; costs in euros."""
+    month_prefix, rate = datetime.now(timezone.utc).strftime("%Y-%m"), _rate()
     with connect() as conn:
         listings_total = conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0]
         drafts_total = conn.execute("SELECT COUNT(*) FROM drafts").fetchone()[0]
-        cost_total = conn.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM drafts").fetchone()[0]
+        cost_total = conn.execute(f"SELECT COALESCE(SUM({cost_eur_sql()}), 0) FROM drafts", (rate,)).fetchone()[0]
         by_status = {r["status"]: r["n"] for r in conn.execute("SELECT status, COUNT(*) AS n FROM listings GROUP BY status")}
     return {
         "listings_total": listings_total,

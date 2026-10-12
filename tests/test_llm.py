@@ -545,18 +545,29 @@ def test_variants_get_latest_non_test_draft(fresh_db, listing_id, fake_generate)
 
 
 def test_budget_exceeded(fresh_db, listing_id, fake_generate):
-    fresh_db.update_settings({"monthly_budget_usd": "0,05"})
-    fresh_db.add_draft(listing_id, "initial", "alt", "claude-opus-5-5", cost_usd=0.05)
+    fresh_db.update_settings({"monthly_budget_eur": "0,05"})  # 5 ct (euro)
+    fresh_db.add_draft(listing_id, "initial", "alt", "claude-opus-5-5", cost_usd=0.05)  # 0,05 $ = 4,5 ct: still below
+    asyncio.run(llm.create_and_store_draft(listing_id, "regenerate"))  # 1,2 ct more -> 5,7 ct
+    assert len(fake_generate) == 1
     with pytest.raises(llm.BudgetExceeded) as exc_info:
         asyncio.run(llm.create_and_store_draft(listing_id, "regenerate"))
     assert str(exc_info.value) == "Monatsbudget von 5,0 ct erreicht – im Dashboard erhöhen."
     assert isinstance(exc_info.value, llm.LLMError)
-    assert fake_generate == []
-    assert len(fresh_db.list_drafts(listing_id)) == 1
+    assert len(fake_generate) == 1
+    assert len(fresh_db.list_drafts(listing_id)) == 2
+
+
+def test_budget_compares_euros_with_the_rate(fresh_db, listing_id, fake_generate):
+    fresh_db.update_settings({"monthly_budget_eur": "1"})
+    fresh_db.add_draft(listing_id, "initial", "alt", "claude-opus-5-5", cost_usd=1.05)  # 1,05 $ = 0,95 € at 1,10
+    asyncio.run(llm.create_and_store_draft(listing_id, "regenerate"))
+    fresh_db.update_settings({"eur_usd_rate": "1.00"})  # now the same dollars are 1,05 € plus the new draft
+    with pytest.raises(llm.BudgetExceeded, match="Monatsbudget von 1,00 € erreicht"):
+        asyncio.run(llm.create_and_store_draft(listing_id, "regenerate"))
 
 
 def test_budget_zero_means_unlimited(fresh_db, listing_id, fake_generate):
-    fresh_db.update_settings({"monthly_budget_usd": "0"})
+    fresh_db.update_settings({"monthly_budget_eur": "0"})
     fresh_db.add_draft(listing_id, "initial", "alt", "claude-opus-5-5", cost_usd=100.0)
     asyncio.run(llm.create_and_store_draft(listing_id, "initial"))
     assert len(fake_generate) == 1
@@ -774,7 +785,7 @@ def test_create_and_store_draft_records_provider_and_currency(fresh_db, listing_
     row = asyncio.run(llm.create_and_store_draft(listing_id, "initial"))
     assert (row["provider"], row["currency"]) == ("deutschlandgpt", "EUR")
     assert row["cost_native"] == pytest.approx(0.02) and row["cost_usd"] == pytest.approx(0.024)
-    assert fresh_db.cost_this_month() == pytest.approx(0.024)  # budget and totals stay in USD
+    assert fresh_db.cost_this_month() == pytest.approx(0.02)  # budget and totals in euros: the billed EUR amount
 
 
 def test_anthropic_fallbacks_for_all_four_models(fake_client):

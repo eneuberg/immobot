@@ -12,8 +12,8 @@
 </div>
 
 <section class="stats" aria-label="Überblick">
-  <div class="stat"><span class="label">Kosten {{ months[month_no - 1] if 1 <= month_no <= 12 else stats.month }}</span><span class="value">{{ stats.cost_month|usd }}</span><span class="sub">USD, dieser Monat</span></div>
-  <div class="stat"><span class="label">Kosten gesamt</span><span class="value">{{ stats.cost_total|usd }}</span><span class="sub">USD, seit Beginn</span></div>
+  <div class="stat"><span class="label">Kosten {{ months[month_no - 1] if 1 <= month_no <= 12 else stats.month }}</span><span class="value">{{ stats.cost_month|eur }}</span><span class="sub">dieser Monat</span></div>
+  <div class="stat"><span class="label">Kosten gesamt</span><span class="value">{{ stats.cost_total|eur }}</span><span class="sub">seit Beginn</span></div>
   <div class="stat"><span class="label">Inserate</span><span class="value">{{ stats.listings_total }}</span><span class="sub">{{ stats.by_status.get("new", 0) }} neu · {{ stats.by_status.get("sent", 0) }} gesendet</span></div>
   <div class="stat"><span class="label">Entwürfe</span><span class="value">{{ stats.drafts_total }}</span><span class="sub">insgesamt erzeugt</span></div>
 </section>
@@ -47,7 +47,7 @@
           <span class="portal">{{ l.portal }}</span>
         </div>
         {% if l.draft_count %}
-        <span class="lc-meta">{{ l.draft_count }} {{ "Entwurf" if l.draft_count == 1 else "Entwürfe" }} · {{ l.cost_usd|usd }}</span>
+        <span class="lc-meta">{{ l.draft_count }} {{ "Entwurf" if l.draft_count == 1 else "Entwürfe" }} · {{ l.cost_eur|eur }}</span>
         {% endif %}
       </div>
     </a>
@@ -67,5 +67,5 @@
   <p>Sobald Fredy ein neues Inserat meldet, erscheint es hier. Klappt das nicht, unter <a href="/status">Status</a> nachsehen, wann der letzte Webhook kam.</p>
 </div>
 {% endif %}
-<p class="foot">Kosten in USD; „ct“ = US-Cent.</p>
+<p class="foot">Kosten in Euro; Anthropic rechnet in Dollar ab und wird mit dem Wechselkurs aus den Einstellungen umgerechnet.</p>
 {% endblock %}

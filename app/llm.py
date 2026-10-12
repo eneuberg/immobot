@@ -22,7 +22,7 @@ import httpx
 from . import db, images, is24, vault
 from .portals import provider_label, safe_url
 from .settings import (
-    DEFAULT_SYSTEM_PROMPT, DRAFT_KINDS, EFFORTS, PRICES, PROVIDERS, as_bool, as_float, as_int, cost, fmt_money, fmt_usd,
+    DEFAULT_SYSTEM_PROMPT, DRAFT_KINDS, EFFORTS, PRICES, PROVIDERS, as_bool, as_float, as_int, cost, fmt_eur, fmt_money,
     model_of, provider_of, to_usd,
 )
 
@@ -88,7 +88,7 @@ class DraftResult:
     cost_usd: float  # counts toward budget and totals
     provider: str = "anthropic"
     currency: str = "USD"
-    cost_native: float = 0.0  # what the provider bills, in `currency`
+    cost_native: float | None = None  # what the provider bills, in `currency` (None: same as cost_usd)
 
 
 def max_images(settings: dict) -> int:
@@ -507,9 +507,9 @@ async def create_and_store_draft(listing_id: int, kind: str, instruction: str | 
         raise LLMError("Keine Anweisung angegeben.")
 
     settings = db.get_settings()
-    budget = as_float(settings.get("monthly_budget_usd"), 0.0)
+    budget = as_float(settings.get("monthly_budget_eur"), 0.0)  # euros, like db.cost_this_month()
     if budget > 0 and db.cost_this_month() >= budget:
-        raise BudgetExceeded("Monatsbudget von " + fmt_usd(budget) + " erreicht – im Dashboard erhöhen.")
+        raise BudgetExceeded("Monatsbudget von " + fmt_eur(budget) + " erreicht – im Dashboard erhöhen.")
 
     previous_text = None
     if kind in VARIANT_KINDS:
@@ -541,7 +541,7 @@ async def create_and_store_draft(listing_id: int, kind: str, instruction: str | 
     )
     log.info("draft listing=%s kind=%s provider=%s model=%s tokens=%s/%s cost=%s",
              listing_id, kind, result.provider, result.model, result.input_tokens, result.output_tokens,
-             fmt_money(result.cost_native, result.currency))
+             fmt_money(result.cost_usd if result.cost_native is None else result.cost_native, result.currency))
 
     # Re-read the status: it may have changed (e.g. "sent") while Claude was writing.
     if kind != "test":

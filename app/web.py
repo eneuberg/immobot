@@ -101,7 +101,7 @@ def _price(value: float) -> str:
     return f"{value:.2f}".replace(".", ",")
 
 
-templates.env.filters["usd"] = settings.fmt_usd
+templates.env.filters["eur"] = settings.fmt_eur
 templates.env.filters["local_time"] = local_time
 templates.env.filters["as_bool"] = settings.as_bool
 templates.env.filters["safe_url"] = portals.safe_url  # untrusted listing URLs -> http(s) or None
@@ -396,7 +396,7 @@ def _draft_view(draft: dict) -> dict:
         "kind_label": DRAFT_KIND_LABELS.get(kind, kind or "?"),
         "model_label": settings.model_label(provider, draft.get("model")),
         "provider_label": settings.provider_label(provider),
-        "cost_text": settings.draft_cost_text(draft),  # "2,1 ct (€) ≈ 2,3 ct ($)"
+        "cost_text": settings.draft_cost_detail(draft),  # "3,8 ct (≈ 0,042 $)" for Anthropic, else "2,1 ct"
     }
 
 
@@ -558,30 +558,31 @@ def validate_settings(form: dict[str, str], current: dict[str, str]) -> tuple[di
         if provider not in settings.PROVIDERS:
             errors["provider"] = "Unbekannter Anbieter."
     if provider in settings.PROVIDERS:
-        model = form.get("model", current.get("model"))
+        # Each provider panel on /settings has its own model select ("model_<provider>").
+        model = form.get(f"model_{provider}", form.get("model", current.get("model")))
         if model in settings.PRICES[provider]:
             values["model"] = model
         elif provider != settings.provider_of(current):  # switched provider: its default model
             values["model"] = settings.PROVIDERS[provider]["default_model"]
-        elif "model" in form:
-            values["model"] = form["model"]
+        elif "model" in form or f"model_{provider}" in form:
+            values["model"] = model
             errors["model"] = "Unbekanntes Modell."
     if "effort" in form:
         values["effort"] = form["effort"]
         if form["effort"] not in settings.EFFORTS:
             errors["effort"] = "Unbekannter Effort-Wert."
 
-    if "monthly_budget_usd" in form:
-        raw = form["monthly_budget_usd"].strip()
+    if "monthly_budget_eur" in form:
+        raw = form["monthly_budget_eur"].strip()
         try:
             budget = float(raw.replace(",", "."))
         except ValueError:
             budget = None
         if budget is None or not math.isfinite(budget) or budget < 0:
-            errors["monthly_budget_usd"] = "Zahl ≥ 0 (0 = kein Limit)."
-            values["monthly_budget_usd"] = raw
+            errors["monthly_budget_eur"] = "Zahl ≥ 0 (0 = kein Limit)."
+            values["monthly_budget_eur"] = raw
         else:
-            values["monthly_budget_usd"] = f"{budget:.10g}"
+            values["monthly_budget_eur"] = f"{budget:.10g}"
 
     if "eur_usd_rate" in form:
         raw = form["eur_usd_rate"].strip()
@@ -616,10 +617,9 @@ def _ai_status(current: dict) -> dict:
     }
 
 
-def _model_choices(request: Request, current: dict) -> dict:
-    """Models to offer: those in the provider's live list (cached) that also have a price. Without a usable
-    live list, every priced model, marked as unchecked."""
-    provider, model = settings.provider_of(current), settings.model_of(current)
+def _model_choices(request: Request, provider: str, model: str) -> dict:
+    """Models to offer for a provider: those in its live list (cached) that also have a price. Without a usable
+    live list, every priced model, marked as unchecked. `model` is preselected (and always offered)."""
     prices = settings.PRICES[provider]
     sign = settings.CURRENCY_SIGNS[settings.PROVIDERS[provider]["currency"]]
     cache = llm.cached_models(provider)
@@ -629,9 +629,10 @@ def _model_choices(request: Request, current: dict) -> dict:
     if model not in ids:
         ids.append(model)  # keep the saved choice selectable
     return {
-        "model_options": [
-            (m, f"{prices[m]['label']} – {_price(prices[m]['input'])} {sign} / {_price(prices[m]['output'])} {sign} "
-                "pro 1 Mio. Tokens (Input/Output)")
+        "sign": sign,
+        "model_options": [  # short ("Opus 5.5 – 4,00 $ / 20,00 $") so the price isn't cut off on phones
+            (m, f"{prices[m]['label'].removeprefix('Claude ')} – {_price(prices[m]['input'])} {sign} / "
+                f"{_price(prices[m]['output'])} {sign}")
             for m in ids
         ],
         "current_model": model,
@@ -642,8 +643,23 @@ def _model_choices(request: Request, current: dict) -> dict:
     }
 
 
-def _render_settings(request: Request, values: dict, *, errors=None, message=None, error=None, test=None, status_code=200):
+def _provider_panels(request: Request, current: dict) -> list[dict]:
+    """Everything /settings shows per provider (key status + hint, models, warning). Both panels are rendered;
+    app.js shows the one chosen in the select (without JS both stay visible)."""
+    saved_provider, saved_model = settings.provider_of(current), settings.model_of(current)
+    panels = []
+    for provider, info in settings.PROVIDERS.items():
+        model = saved_model if provider == saved_provider else info["default_model"]
+        panels.append({**_ai_status({**current, "provider": provider, "model": model}),
+                       **_model_choices(request, provider, model)})
+    return panels
+
+
+def _render_settings(request: Request, values: dict, *, errors=None, message=None, error=None, test=None,
+                     show: str | None = None, status_code=200):
+    """`show`: provider to preselect in the select (e.g. after saving its key); the saved one otherwise."""
     current = db.get_settings()
+    saved_provider = settings.provider_of(current)
     return render(request, "settings.html", {
         "active": "settings",
         "values": values,
@@ -651,8 +667,9 @@ def _render_settings(request: Request, values: dict, *, errors=None, message=Non
         "message": message,
         "error": error,
         "test": test,
-        "ai": {**_ai_status(current), **_model_choices(request, current)},
-        "providers": [(key, p["label"]) for key, p in settings.PROVIDERS.items()],
+        "panels": _provider_panels(request, current),
+        "saved_provider": saved_provider,
+        "shown_provider": show if show in settings.PROVIDERS else saved_provider,
         "public_url": bot.public_url_info(),
         "effort_options": [(e, EFFORT_LABELS.get(e, e)) for e in settings.EFFORTS],
     }, status_code=status_code)
@@ -660,20 +677,19 @@ def _render_settings(request: Request, values: dict, *, errors=None, message=Non
 
 SETTINGS_MESSAGES = {
     "saved": "Gespeichert.",
-    "provider": "KI-Anbieter gewechselt.",
     "key": "API-Key gespeichert.",
     "models": "Modellliste neu geladen.",
 }
 
 
 @router.get("/settings", dependencies=PAGE)
-def settings_page(request: Request, saved: str | None = None, reset: str | None = None):
+def settings_page(request: Request, saved: str | None = None, reset: str | None = None, show: str | None = None):
     message = None
     if saved:
         message = SETTINGS_MESSAGES.get(saved, SETTINGS_MESSAGES["saved"])
     elif reset in TEXT_SETTING_LABELS:
         message = f"„{TEXT_SETTING_LABELS[reset]}“ auf Standard zurückgesetzt."
-    return _render_settings(request, db.get_settings(), message=message)
+    return _render_settings(request, db.get_settings(), message=message, show=show)
 
 
 async def _refresh_models_quietly(provider: str) -> None:
@@ -684,29 +700,22 @@ async def _refresh_models_quietly(provider: str) -> None:
         pass
 
 
-@router.post("/settings/provider", dependencies=ACTION)
-async def settings_provider(provider: str = Form("")):
-    """Switch the AI provider. Keeps the model if the new provider prices it, else uses its default model."""
+def _form_provider(provider: str) -> str:
     if provider not in settings.PROVIDERS:
         raise HTTPException(status_code=400, detail="Unbekannter Anbieter")
-    current = db.get_settings()
-    values = {"provider": provider}
-    if current.get("model") not in settings.PRICES[provider]:
-        values["model"] = settings.PROVIDERS[provider]["default_model"]
-    db.update_settings(values)
-    if vault.get(settings.PROVIDERS[provider]["credential"]) and llm.cached_models(provider) is None:
-        await _refresh_models_quietly(provider)
-    return RedirectResponse("/settings?saved=provider#ki", status_code=303)
+    return provider
 
 
 @router.post("/settings/provider-key", dependencies=ACTION)
-async def settings_provider_key(request: Request, value: str = Form(""), password: str = Form("")):
-    """Save the selected provider's API key (same rules as on /credentials), then load its model list."""
-    provider = settings.provider_of(db.get_settings())
+async def settings_provider_key(request: Request, provider: str = Form(""), value: str = Form(""),
+                                password: str = Form("")):
+    """Save a provider's API key from its panel (same rules as on /credentials), then load its model list.
+    Doesn't switch the provider: that is saved with the settings form."""
+    provider = _form_provider(provider)
     name = settings.PROVIDERS[provider]["credential"]
 
     def error_page(request: Request, *, error: str, status_code: int):
-        return _render_settings(request, db.get_settings(), error=error, status_code=status_code)
+        return _render_settings(request, db.get_settings(), error=error, show=provider, status_code=status_code)
 
     denied = await _step_up(request, password, error_page)
     if denied is not None:
@@ -716,23 +725,30 @@ async def settings_provider_key(request: Request, value: str = Form(""), passwor
     except vault.InvalidValue as exc:  # the message never contains the value
         return error_page(request, error=f"{vault.LABELS[name]}: {exc}", status_code=400)
     await _refresh_models_quietly(provider)
-    return RedirectResponse("/settings?saved=key#ki", status_code=303)
+    return RedirectResponse(f"/settings?saved=key&show={provider}#ki", status_code=303)
 
 
 @router.post("/settings/models/refresh", dependencies=ACTION)
-async def settings_models_refresh():
-    await _refresh_models_quietly(settings.provider_of(db.get_settings()))
-    return RedirectResponse("/settings?saved=models#ki", status_code=303)
+async def settings_models_refresh(provider: str = Form("")):
+    provider = _form_provider(provider)
+    await _refresh_models_quietly(provider)
+    return RedirectResponse(f"/settings?saved=models&show={provider}#ki", status_code=303)
 
 
 @router.post("/settings", dependencies=ACTION)
 async def settings_save(request: Request):
     form = {key: value for key, value in (await request.form()).items() if isinstance(value, str)}
-    values, errors = validate_settings(form, db.get_settings())
+    current = db.get_settings()
+    values, errors = validate_settings(form, current)
     if errors:
-        shown = {**db.get_settings(), **values}  # keep the user's input in the form
-        return _render_settings(request, shown, errors=errors, error="Nicht gespeichert, bitte Eingaben prüfen.", status_code=400)
+        shown = {**current, **values}  # keep the user's input in the form
+        return _render_settings(request, shown, errors=errors, error="Nicht gespeichert, bitte Eingaben prüfen.",
+                                show=values.get("provider"), status_code=400)
     db.update_settings(values)
+    provider = values.get("provider")
+    if (provider and provider != settings.provider_of(current) and llm.cached_models(provider) is None
+            and vault.get(settings.PROVIDERS[provider]["credential"])):
+        await _refresh_models_quietly(provider)  # first switch to a provider: check which models its key offers
     return RedirectResponse("/settings?saved=1", status_code=303)
 
 

@@ -22,10 +22,30 @@ def test_drafts_costs_and_stats(fresh_db):
     assert fresh_db.latest_draft(lid)["kind"] == "initial"
     assert fresh_db.latest_draft(lid, include_test=True)["kind"] == "test"
     row = fresh_db.list_listings()[0]
-    assert row["draft_count"] == 2 and abs(row["cost_usd"] - 0.024) < 1e-9
+    assert row["draft_count"] == 2 and row["cost_eur"] == pytest.approx(0.024 / 1.10)  # dollars -> euros
     s = fresh_db.stats()
-    assert s["listings_total"] == 1 and abs(s["cost_month"] - 0.024) < 1e-9
+    assert s["listings_total"] == 1 and s["cost_month"] == pytest.approx(0.024 / 1.10)
+    assert s["cost_total"] == pytest.approx(0.024 / 1.10)
     assert fresh_db.list_listings(status="sent") == []
+
+
+def test_costs_in_euros_with_the_configured_rate(fresh_db):
+    lid, _ = fresh_db.insert_listing(_listing())
+    fresh_db.add_draft(lid, "initial", "A", "claude-opus-5-5", cost_usd=0.11)  # Anthropic: billed in dollars
+    fresh_db.add_draft(lid, "shorter", "B", "claude-sonnet-5.5", cost_usd=0.055, provider="deutschlandgpt",
+                       currency="EUR", cost_native=0.05)  # DeutschlandGPT: billed in euros
+    usd_draft, eur_draft = fresh_db.list_drafts(lid)
+    assert usd_draft["cost_eur"] == pytest.approx(0.10) and eur_draft["cost_eur"] == pytest.approx(0.05)
+    assert fresh_db.latest_draft(lid)["cost_eur"] == pytest.approx(0.05)
+    assert fresh_db.cost_this_month() == pytest.approx(0.15)
+    fresh_db.update_settings({"eur_usd_rate": "1.25"})  # 1 € = 1,25 $: only the dollar draft changes
+    assert fresh_db.cost_this_month() == pytest.approx(0.11 / 1.25 + 0.05)
+    assert fresh_db.list_listings()[0]["cost_eur"] == pytest.approx(0.11 / 1.25 + 0.05)
+    fresh_db.update_settings({"eur_usd_rate": "0"})  # a broken rate falls back to 1,10
+    assert fresh_db.stats()["cost_total"] == pytest.approx(0.15)
+    with fresh_db.connect() as conn:  # a row without cost_native: falls back to cost_usd / rate
+        conn.execute("UPDATE drafts SET cost_native = NULL WHERE currency = 'USD'")
+    assert fresh_db.list_drafts(lid)[0]["cost_eur"] == pytest.approx(0.10)
 
 
 def test_settings_defaults_and_unknown_keys(fresh_db):
@@ -53,12 +73,17 @@ def test_cost_and_format():
                - (0.83 + 4.13 + 0.09 + 1.04)) < 1e-9
     assert abs(settings.cost("deutschlandgpt", "unknown", 1_000_000, 0) - 3.30) < 1e-9  # DGPT default: Sonnet 5.5
     assert settings.to_usd(2.0, "EUR", 1.1) == pytest.approx(2.2) and settings.to_usd(2.0, "USD", 1.1) == 2.0
-    assert settings.fmt_usd(0.042) == "4,2 ct"
-    assert settings.fmt_usd(1.5) == "1,50 $"
-    assert settings.fmt_money(0.021, "EUR") == "2,1 ct (€)" and settings.fmt_money(3.5, "EUR") == "3,50 €"
-    assert settings.fmt_money(0.042, "USD") == "4,2 ct ($)"
-    assert settings.draft_cost_text({"currency": "EUR", "cost_native": 0.021, "cost_usd": 0.0231}) == "2,1 ct (€) ≈ 2,3 ct ($)"
-    assert settings.draft_cost_text({"cost_usd": 0.042}) == "4,2 ct ($)"  # old drafts: USD
+    assert settings.fmt_eur(0.042) == "4,2 ct" and settings.fmt_eur(1.5) == "1,50 €" and settings.fmt_eur(None) == "0,0 ct"
+    assert settings.fmt_usd(0.042) == "0,042 $" and settings.fmt_usd(1.5) == "1,50 $"
+    assert settings.fmt_money(0.021, "EUR") == "2,1 ct (€)" and settings.fmt_money(0.042, "USD") == "4,2 ct ($)"
+    eur_draft = {"currency": "EUR", "cost_native": 0.021, "cost_usd": 0.0231}
+    usd_draft = {"currency": "USD", "cost_native": 0.042, "cost_usd": 0.042}
+    assert settings.draft_cost_text(eur_draft) == "2,1 ct" and settings.draft_cost_detail(eur_draft) == "2,1 ct"
+    assert settings.draft_cost_text(usd_draft) == "3,8 ct"  # 0,042 $ / 1,10
+    assert settings.draft_cost_detail(usd_draft) == "3,8 ct (≈ 0,042 $)"  # Anthropic: the dollar amount too
+    assert settings.draft_cost_text({"cost_usd": 0.042}) == "3,8 ct"  # old rows: dollars
+    assert settings.draft_cost_detail({**usd_draft, "cost_eur": 0.04}) == "4,0 ct (≈ 0,042 $)"  # db's value wins
+    assert settings.eur_usd_rate({"eur_usd_rate": "1.25"}) == 1.25 and settings.eur_usd_rate({"eur_usd_rate": "x"}) == 1.10
 
 
 def test_config_does_not_repr_secrets():
@@ -124,7 +149,7 @@ def test_migration_of_a_database_from_the_previous_version(tmp_path):
                  cost_native=0.021)
     new = db.list_drafts(1)[-1]
     assert (new["provider"], new["currency"], new["cost_native"]) == ("deutschlandgpt", "EUR", 0.021)
-    assert db.stats()["cost_total"] == pytest.approx(0.065)  # totals in USD
+    assert db.stats()["cost_total"] == pytest.approx(0.042 / 1.10 + 0.021)  # totals in euros
 
 
 def test_fresh_database_has_the_new_columns(fresh_db):
@@ -132,3 +157,25 @@ def test_fresh_database_has_the_new_columns(fresh_db):
     fresh_db.add_draft(listing_id, "initial", "x", "claude-opus-5-5", cost_usd=0.01)
     (row,) = fresh_db.list_drafts(listing_id)
     assert (row["provider"], row["currency"], row["cost_native"]) == ("anthropic", "USD", 0.01)
+
+
+def test_budget_setting_becomes_euros_with_the_same_number(tmp_path):
+    """Before, the budget was "monthly_budget_usd"; the same number now means euros (15 stays 15 €)."""
+    import sqlite3
+
+    from app import db
+
+    conn = sqlite3.connect(tmp_path / "immobot.db")
+    conn.executescript("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+                       "INSERT INTO settings VALUES ('monthly_budget_usd', '20'), ('eur_usd_rate', '1.2');")
+    conn.close()
+    for _ in range(2):  # idempotent
+        db.init_db(str(tmp_path))
+    assert db.get_settings()["monthly_budget_eur"] == "20" and db.get_settings()["eur_usd_rate"] == "1.2"
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM settings WHERE key = 'monthly_budget_usd'").fetchone()[0] == 0
+
+
+def test_fresh_database_budget_default(fresh_db):
+    assert fresh_db.get_settings()["monthly_budget_eur"] == "15"
+    assert "monthly_budget_usd" not in fresh_db.get_settings()

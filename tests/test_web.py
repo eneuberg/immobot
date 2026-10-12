@@ -220,7 +220,7 @@ def test_listings_page_and_filter(client):
 
     r = client.get("/")
     assert r.status_code == 200 and "Altbau Nord" in r.text and "Neubau Süd" in r.text
-    assert "4,2 ct" in r.text and "USD" in r.text
+    assert "3,8 ct" in r.text and "USD" not in r.text  # 0,042 $ shown in euros (1 € = 1,10 $)
     r = client.get("/?status=sent")
     assert "Altbau Nord" in r.text and "Neubau Süd" not in r.text
     assert client.get("/?status=bogus").status_code == 200  # unknown filter = all
@@ -238,7 +238,7 @@ def test_listing_detail_escapes_and_shows_drafts(client):
     assert "<b>fett</b>" not in r.text and "<i>x</i>" not in r.text
     assert 'src="https://img.example/1.jpg"' in r.text and 'referrerpolicy="no-referrer"' in r.text
     assert 'href="https://fredy.example/l/1"' in r.text and "Inserat öffnen" in r.text
-    for text in ["Anpassung", "mit Hund", "Codewort", "Claude Sonnet 5.5", "111", "50,0 ct", "Kopieren"]:
+    for text in ["Anpassung", "mit Hund", "Codewort", "Claude Sonnet 5.5", "111", "45,5 ct (≈ 0,500 $)", "Kopieren"]:
         assert text in r.text
     assert client.get("/listing/9999").status_code == 404
 
@@ -364,7 +364,7 @@ def test_create_draft_shows_llm_error(client, monkeypatch):
 def valid_settings(**overrides):
     form = {
         "system_prompt": "Sei nett.", "profile": "Erika, 34", "wishes": "Balkon", "style": "locker",
-        "target_words": "120", "model": "claude-haiku-5-5", "effort": "medium", "monthly_budget_usd": "7,5",
+        "target_words": "120", "model": "claude-haiku-5-5", "effort": "medium", "monthly_budget_eur": "7,5",
         "send_image": "1", "followup_delay_s": "10", "paused": "1",
     }
     form.update(overrides)
@@ -376,8 +376,11 @@ def test_settings_page_renders_all_fields(client):
     r = client.get("/settings")
     assert r.status_code == 200
     for key in settings.DEFAULT_SETTINGS:
-        assert f'name="{key}"' in r.text
-    assert "Claude Opus 5.5" in r.text and "4,00 $ / 20,00 $" in r.text
+        if key == "model":  # one model select per provider panel
+            assert all(f'name="model_{provider}"' in r.text for provider in settings.PROVIDERS)
+        else:
+            assert f'name="{key}"' in r.text
+    assert "Opus 5.5 – 4,00 $ / 20,00 $" in r.text and "Sonnet 5.5 – 3,30 € / 16,50 €" in r.text
 
 
 def test_settings_save(client):
@@ -386,7 +389,7 @@ def test_settings_save(client):
     assert r.status_code == 303 and r.headers["location"] == "/settings?saved=1"
     stored = db.get_settings()
     assert stored["profile"] == "Erika, 34" and stored["target_words"] == "120" and stored["model"] == "claude-haiku-5-5"
-    assert stored["monthly_budget_usd"] == "7.5" and stored["send_image"] == "1" and stored["paused"] == "1"
+    assert stored["monthly_budget_eur"] == "7.5" and stored["send_image"] == "1" and stored["paused"] == "1"
     assert "Gespeichert" in client.get("/settings?saved=1").text
 
 
@@ -401,7 +404,7 @@ def test_settings_checkbox_off(client):
 
 @pytest.mark.parametrize("field,value", [
     ("target_words", "5"), ("target_words", "abc"), ("followup_delay_s", "61"), ("model", "gpt-4"),
-    ("effort", "max"), ("monthly_budget_usd", "-1"), ("monthly_budget_usd", "nan"), ("monthly_budget_usd", "x"),
+    ("effort", "max"), ("monthly_budget_eur", "-1"), ("monthly_budget_eur", "nan"), ("monthly_budget_eur", "x"),
     ("system_prompt", "   "),
 ])
 def test_settings_validation(client, field, value):
@@ -440,7 +443,7 @@ def test_settings_test_draft(client, fake_llm):
     newest = add_listing(fredy_id="new", title="Neueste Wohnung")
     r = client.post("/settings/test")
     assert fake_llm == [(newest, "test")]
-    for text in ["Test-Entwurf", "Neueste Wohnung", "Guten Tag, Entwurf 1", "Codewort Linde", "1,2 ct", "Claude Haiku 5.5"]:
+    for text in ["Test-Entwurf", "Neueste Wohnung", "Guten Tag, Entwurf 1", "Codewort Linde", "1,1 ct (≈ 0,012 $)", "Claude Haiku 5.5"]:
         assert text in r.text
 
 
@@ -1128,50 +1131,82 @@ def cache_models(provider, models, error=None):
     db.set_meta(f"models_cache:{provider}", json.dumps({"fetched_at": db.now_iso(), "models": models, "error": error}))
 
 
-def model_options(html):
-    select = re.search(r'<select name="model"[^>]*>(.*?)</select>', html, re.S).group(1)
+def model_options(html, provider="anthropic"):
+    select = re.search(rf'<select name="model_{provider}"[^>]*>(.*?)</select>', html, re.S).group(1)
     return re.findall(r'<option value="([^"]+)"', select)
+
+
+def provider_panel(html, provider):
+    """The HTML of one provider's panel on /settings."""
+    return re.search(rf'<section class="provider-panel[^"]*" data-provider-panel="{provider}".*?</section>', html, re.S).group(0)
+
+
+def save_provider(client, provider, model=None):
+    """Choose a provider (and optionally a model in its panel) and save, like the settings form does."""
+    form = valid_settings(provider=provider)
+    if model:
+        form[f"model_{provider}"] = model
+    return client.post("/settings", data=form)
 
 
 def test_settings_shows_provider_section(client):
     login(client)
     r = client.get("/settings")
-    assert 'id="ki"' in r.text and "KI-Anbieter" in r.text
-    assert '<option value="anthropic" selected>Anthropic</option>' in r.text and ">DeutschlandGPT</option>" in r.text
-    assert "Key: <code>sk-ant-…1234</code> · aus Env-Variable" in r.text  # conftest's env key, as a hint only
-    assert "Key speichern &amp; Modelle laden" in r.text and "Modelle neu laden" in r.text
-    assert "Modellliste nicht geprüft" in r.text
-    assert model_options(r.text) == list(settings.PRICES["anthropic"])  # unchecked: every priced model
-    assert "Umrechnungskurs EUR→USD (ca.)" in r.text and 'name="eur_usd_rate" value="1.10"' in r.text
+    page = r.text
+    assert 'id="ki"' in page and "KI-Anbieter" in page
+    assert '<select id="provider" name="provider" form="settings-form" data-provider-select data-saved="anthropic">' in page
+    assert '<option value="anthropic" selected>Anthropic</option>' in page and ">DeutschlandGPT</option>" in page
+    # Both panels are rendered (app.js shows the chosen one; without JS both are visible).
+    assert 'class="provider-panel is-active" data-provider-panel="anthropic"' in page
+    assert 'class="provider-panel" data-provider-panel="deutschlandgpt"' in page
+    anthropic, dgpt = provider_panel(page, "anthropic"), provider_panel(page, "deutschlandgpt")
+    assert "Key: <code>sk-ant-…1234</code> · aus Env-Variable" in anthropic  # conftest's env key, as a hint only
+    assert "So bekommst du den Anthropic-API-Key" in anthropic and "So bekommst du den DeutschlandGPT-API-Key" in dgpt
+    assert "Noch kein DeutschlandGPT-API-Key hinterlegt" in dgpt and "Noch kein" not in anthropic  # warning in its panel
+    for panel, provider in [(anthropic, "anthropic"), (dgpt, "deutschlandgpt")]:
+        assert f'<input type="hidden" name="provider" value="{provider}">' in panel  # key form for that provider
+        assert "Key speichern &amp; Modelle laden" in panel and 'autocomplete="current-password" required' in panel
+        assert 'class="masked" autocomplete="off"' in panel and f'form="refresh-models-{provider}"' in panel
+    assert "Preise in $ pro 1 Mio. Tokens" in anthropic and "Preise in € pro 1 Mio. Tokens" in dgpt
+    assert "Modellliste nicht geprüft" in anthropic
+    assert model_options(page, "anthropic") == list(settings.PRICES["anthropic"])  # unchecked: every priced model
+    assert model_options(page, "deutschlandgpt") == list(settings.PRICES["deutschlandgpt"])
+    assert "Anbieter &amp; Modell speichern" in page and ">Wechseln<" not in page
+    assert "data-provider-unsaved hidden" in page
+    assert "Wechselkurs: 1 € = x $" in page and 'name="eur_usd_rate" value="1.10"' in page
+    assert "Monatsbudget in €" in page and 'name="monthly_budget_eur" value="15"' in page
 
 
-def test_switch_provider_uses_its_default_model(client, model_refreshes):
+def test_switch_provider_with_the_settings_form(client, model_refreshes):
     login(client)
     client.post("/settings", data=valid_settings(model="claude-haiku-5-5"))
-    r = client.post("/settings/provider", data={"provider": "deutschlandgpt"})
-    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=provider#ki"
+    r = save_provider(client, "deutschlandgpt")  # no model chosen in its panel: its default model
+    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=1"
     stored = db.get_settings()
     assert stored["provider"] == "deutschlandgpt" and stored["model"] == "claude-sonnet-5.5"
     assert model_refreshes == []  # no DeutschlandGPT key yet: nothing to fetch
-    page = client.get("/settings?saved=provider").text
-    assert "KI-Anbieter gewechselt." in page and "Preise in EUR" in page
-    assert "Kein DeutschlandGPT-API-Key hinterlegt" in page
-    assert set(model_options(page)) == set(settings.PRICES["deutschlandgpt"])
-    assert "3,30 € / 16,50 € pro 1 Mio. Tokens" in page
-    client.post("/settings/provider", data={"provider": "anthropic"})
-    assert db.get_settings()["model"] == "claude-opus-5-5"
-    assert client.post("/settings/provider", data={"provider": "openai"}).status_code == 400
+    page = client.get("/settings").text
+    assert 'data-saved="deutschlandgpt"' in page and 'class="provider-panel is-active" data-provider-panel="deutschlandgpt"' in page
+    assert "Noch kein DeutschlandGPT-API-Key hinterlegt" in provider_panel(page, "deutschlandgpt")
+    assert "3,30 € / 16,50 €" in page
+    assert save_provider(client, "deutschlandgpt", "claude-opus-5.5").status_code == 303
+    assert db.get_settings()["model"] == "claude-opus-5.5"
+    assert save_provider(client, "anthropic", "claude-sonnet-5-5").status_code == 303  # its own panel's select
+    assert (db.get_settings()["provider"], db.get_settings()["model"]) == ("anthropic", "claude-sonnet-5-5")
+    assert save_provider(client, "openai").status_code == 400
+    assert client.post("/settings/provider", data={"provider": "deutschlandgpt"}).status_code in (404, 405)  # no 2nd step
 
 
 def test_switch_provider_fetches_models_once_when_a_key_exists(client, model_refreshes):
     login(client)
     vault.set("deutschlandgpt_api_key", DGPT_KEY)
-    client.post("/settings/provider", data={"provider": "deutschlandgpt"})
+    save_provider(client, "deutschlandgpt")
     assert model_refreshes == ["deutschlandgpt"]
     cache_models("deutschlandgpt", ["claude-sonnet-5.5"])
     cache_models("anthropic", ["claude-opus-5-5"])
-    client.post("/settings/provider", data={"provider": "anthropic"})
-    client.post("/settings/provider", data={"provider": "deutschlandgpt"})
+    save_provider(client, "anthropic")
+    save_provider(client, "deutschlandgpt")
+    client.post("/settings", data=valid_settings(provider="deutschlandgpt"))  # same provider again: nothing
     assert model_refreshes == ["deutschlandgpt"]  # cached: "Modelle neu laden" refreshes on demand
 
 
@@ -1198,60 +1233,72 @@ def test_eur_usd_rate_validation(client, rate, ok):
 
 def test_model_select_is_live_list_intersected_with_prices(client):
     login(client)
-    client.post("/settings/provider", data={"provider": "deutschlandgpt"})
+    save_provider(client, "deutschlandgpt")
     cache_models("deutschlandgpt", ["claude-sonnet-5.5", "claude-haiku-5.5", "gpt-9-turbo", "claude-opus-4.5", "mistral-x"])
     page = client.get("/settings").text
-    assert model_options(page) == ["claude-sonnet-5.5", "claude-haiku-5.5"]
-    assert "Modellliste von DeutschlandGPT geladen am" in page and "nicht geprüft" not in page
-    assert "3 weitere Modelle verfügbar, aber nicht unterstützt (kein Preis hinterlegt)" in page
-    assert "gpt-9-turbo, claude-opus-4.5, mistral-x" in page
+    dgpt = provider_panel(page, "deutschlandgpt")
+    assert model_options(page, "deutschlandgpt") == ["claude-sonnet-5.5", "claude-haiku-5.5"]
+    assert "Modellliste von DeutschlandGPT geladen am" in dgpt and "nicht geprüft" not in dgpt
+    assert "3 weitere Modelle verfügbar, aber nicht unterstützt (kein Preis hinterlegt)" in dgpt
+    assert "gpt-9-turbo, claude-opus-4.5, mistral-x" in dgpt
     db.update_settings({"model": "claude-opus-4.8"})  # saved choice not in the live list: still selectable
-    assert model_options(client.get("/settings").text)[-1] == "claude-opus-4.8"
+    assert model_options(client.get("/settings").text, "deutschlandgpt")[-1] == "claude-opus-4.8"
 
 
 def test_failed_model_list_shows_reason_and_all_priced_models(client):
     login(client)
     cache_models("anthropic", [], error="Anthropic-API-Key ungültig oder ohne Berechtigung.")
     page = client.get("/settings").text
-    assert "Modellliste nicht geprüft: Anthropic-API-Key ungültig oder ohne Berechtigung." in page
-    assert model_options(page) == list(settings.PRICES["anthropic"])
+    assert "Modellliste nicht geprüft: Anthropic-API-Key ungültig oder ohne Berechtigung." in provider_panel(page, "anthropic")
+    assert model_options(page, "anthropic") == list(settings.PRICES["anthropic"])
 
 
 def test_save_provider_key_needs_step_up_and_loads_models(client, notices, model_refreshes):
-    login(client)
-    client.post("/settings/provider", data={"provider": "deutschlandgpt"})
-    r = client.post("/settings/provider-key", data={"value": DGPT_KEY, "password": "wrong"})
+    login(client)  # Anthropic stays the saved provider: a panel's key form works for its own provider
+    form = {"provider": "deutschlandgpt", "value": DGPT_KEY}
+    r = client.post("/settings/provider-key", data={**form, "password": "wrong"})
     assert r.status_code == 403 and "Dashboard-Passwort falsch" in r.text and 'id="ki"' in r.text
+    assert '<option value="deutschlandgpt" selected>' in r.text  # the error page shows that provider's panel
     assert vault.get("deutschlandgpt_api_key") is None and model_refreshes == []
-    r = client.post("/settings/provider-key", data={"value": "too short", "password": PASSWORD})
+    r = client.post("/settings/provider-key", data={**form, "value": "too short", "password": PASSWORD})
     assert r.status_code == 400 and "DeutschlandGPT-API-Key:" in r.text
-    r = client.post("/settings/provider-key", data={"value": f"  {DGPT_KEY} ", "password": PASSWORD})
-    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=key#ki"
+    assert client.post("/settings/provider-key", data={**form, "provider": "openai", "password": PASSWORD}).status_code == 400
+    r = client.post("/settings/provider-key", data={**form, "value": f"  {DGPT_KEY} ", "password": PASSWORD})
+    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=key&show=deutschlandgpt#ki"
     assert vault.get("deutschlandgpt_api_key") == DGPT_KEY and model_refreshes == ["deutschlandgpt"]
+    assert db.get_settings()["provider"] == "anthropic"  # saving a key doesn't switch the provider
     assert events() == [("deutschlandgpt_api_key", "set", "testclient")]  # same audit + notice as on /credentials
     assert "DeutschlandGPT-API-Key – gespeichert" in notices[-1][0] and DGPT_KEY not in notices[-1][0]
-    page = client.get("/settings?saved=key").text
-    assert "API-Key gespeichert." in page and "Key: <code>dgpt…WXYZ</code> · gesetzt am" in page
-    assert "Kein DeutschlandGPT-API-Key" not in page
+    page = client.get("/settings?saved=key&show=deutschlandgpt").text
+    assert "API-Key gespeichert." in page and '<option value="deutschlandgpt" selected>' in page
+    assert 'class="provider-panel is-active" data-provider-panel="deutschlandgpt"' in page
+    assert "Noch nicht gespeichert" in page and "data-provider-unsaved hidden" not in page  # select ≠ saved provider
+    dgpt = provider_panel(page, "deutschlandgpt")
+    assert "Key: <code>dgpt…WXYZ</code> · gesetzt am" in dgpt and "Noch kein DeutschlandGPT-API-Key" not in dgpt
+    assert '<option value="bogus"' not in client.get("/settings?show=bogus").text  # unknown: the saved provider
 
 
 def test_refresh_models_needs_login_but_no_step_up(client, model_refreshes):
-    assert client.post("/settings/models/refresh").headers["location"] == "/login"
+    assert client.post("/settings/models/refresh", data={"provider": "anthropic"}).headers["location"] == "/login"
     login(client)
-    r = client.post("/settings/models/refresh")
-    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=models#ki"
-    assert model_refreshes == ["anthropic"]
-    assert client.post("/settings/models/refresh", headers={"Origin": "https://evil.example"}).status_code == 403
+    r = client.post("/settings/models/refresh", data={"provider": "anthropic"})
+    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=models&show=anthropic#ki"
+    r = client.post("/settings/models/refresh", data={"provider": "deutschlandgpt"})
+    assert r.headers["location"] == "/settings?saved=models&show=deutschlandgpt#ki"
+    assert model_refreshes == ["anthropic", "deutschlandgpt"]
+    assert client.post("/settings/models/refresh", data={"provider": "x"}).status_code == 400
+    assert client.post("/settings/models/refresh", data={"provider": "anthropic"},
+                       headers={"Origin": "https://evil.example"}).status_code == 403
 
 
 def test_no_key_warning_on_settings_and_status(client):
     login(client)
     vault.init(TEST_SECRETS["SESSION_SECRET"], {})
-    for path in ["/settings", "/status"]:
-        assert "Kein Anthropic-API-Key hinterlegt – Entwürfe schlagen fehl." in client.get(path).text, path
+    assert "Kein Anthropic-API-Key hinterlegt – Entwürfe schlagen fehl." in client.get("/status").text
+    assert "Noch kein Anthropic-API-Key hinterlegt" in provider_panel(client.get("/settings").text, "anthropic")
     vault.set("anthropic_api_key", DASHBOARD_SECRETS["anthropic_api_key"])
-    for path in ["/settings", "/status"]:
-        assert "Kein Anthropic-API-Key hinterlegt" not in client.get(path).text, path
+    assert "Kein Anthropic-API-Key hinterlegt" not in client.get("/status").text
+    assert "Noch kein Anthropic-API-Key" not in client.get("/settings").text
     db.update_settings({"provider": "deutschlandgpt"})
     status = client.get("/status").text
     assert "Kein DeutschlandGPT-API-Key hinterlegt" in status and "DeutschlandGPT · Claude Sonnet 5.5" in status
@@ -1289,17 +1336,31 @@ def test_connection_test_for_deutschlandgpt(client, monkeypatch):
     assert "DeutschlandGPT testen" in client.get("/credentials").text
 
 
-def test_listing_shows_provider_and_both_currencies(client):
+def test_listing_shows_euro_costs_and_dollars_for_anthropic(client):
     login(client)
     lid = add_listing()
     db.add_draft(lid, "initial", "Hallo", "claude-sonnet-5.5", cost_usd=0.0231, provider="deutschlandgpt", currency="EUR",
                  cost_native=0.021)
     db.add_draft(lid, "shorter", "Kurz", "claude-opus-5-5", cost_usd=0.042)
     page = client.get(f"/listing/{lid}").text
-    # Model · provider and the cost are separate chips under each draft.
-    assert ">Claude Sonnet 5.5 · DeutschlandGPT</span>" in page and ">2,1 ct (€) ≈ 2,3 ct ($)</span>" in page
-    assert ">Claude Opus 5.5 · Anthropic</span>" in page and ">4,2 ct ($)</span>" in page
-    assert "6,5 ct" in client.get("/").text  # listing total in USD: 2,31 + 4,2 ct
+    # Model · provider and the cost are separate chips under each draft; euros first, dollars only for Anthropic.
+    assert ">Claude Sonnet 5.5 · DeutschlandGPT</span>" in page and ">2,1 ct</span>" in page
+    assert ">Claude Opus 5.5 · Anthropic</span>" in page and ">3,8 ct (≈ 0,042 $)</span>" in page
+    assert "5,9 ct" in client.get("/").text  # listing total in euros: 2,1 + 3,8 ct
+    db.update_settings({"eur_usd_rate": "1.40"})  # 1 € = 1,40 $
+    assert ">3,0 ct (≈ 0,042 $)</span>" in client.get(f"/listing/{lid}").text
+
+
+def test_stat_tiles_in_euros(client):
+    login(client)
+    lid = add_listing()
+    db.add_draft(lid, "initial", "A", "claude-opus-5-5", cost_usd=2.2)  # 2,00 € at 1,10
+    db.add_draft(lid, "initial", "B", "claude-sonnet-5.5", cost_usd=1.1, provider="deutschlandgpt", currency="EUR",
+                 cost_native=1.0)
+    for path in ["/", "/status"]:
+        page = client.get(path).text
+        assert page.count(">3,00 €</span>") == 2, path  # this month and in total
+        assert "USD" not in page, path
 
 
 # --- ImmoScout24 gallery & media route --------------------------------------------------
@@ -1417,8 +1478,11 @@ def test_public_url_from_webhook(client):
 
 def test_settings_llm_max_images(client):
     login(client)
-    assert 'name="llm_max_images" min="0" max="20" step="1" value="10"' in client.get("/settings").text
-    assert "≈ 1.000 Tokens pro Bild" in client.get("/settings").text
+    page = client.get("/settings").text
+    assert 'name="llm_max_images" min="0" max="20" step="1" value="10"' in page
+    assert "Fotos für Claude pro Entwurf" in page and "Höchstens so viele Bilder" not in page
+    assert ("Wie viele Inserat-Fotos Claude beim Schreiben mitbekommt – mehr Fotos = genauer, aber je Foto ca. 1.000 Tokens "
+            "(≈ 0,1–4 ct je nach Modell). Das Telegram-Album zeigt unabhängig davon bis zu 10 Fotos (Telegram-Limit).") in page
     assert client.post("/settings", data=valid_settings(llm_max_images="4")).status_code == 303
     assert db.get_settings()["llm_max_images"] == "4"
     for bad in ["21", "-1", "x"]:

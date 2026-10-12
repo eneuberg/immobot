@@ -151,7 +151,7 @@ def test_draft_view_contents_and_escaping():
     text, _ = bot.draft_view(listing_dict(), draft)
     assert "\n⚠️ Codewort &lt;Linde&gt;" in text
     assert "\n\n<pre>Hallo &lt;Team&gt; &amp; so</pre>" in text
-    assert text.endswith("<i>Entwurf · Claude Opus 5.5 · Anthropic · 4,2 ct ($)</i>")
+    assert text.endswith("<i>Entwurf · Claude Opus 5.5 · Anthropic · 3,8 ct</i>")  # 0,042 $ / 1,10 in euros
     assert "gekürzt" not in text
 
 
@@ -159,14 +159,16 @@ def test_draft_view_unknown_model_shows_raw_name():
     draft = {"text": "x", "hint": None, "model": "claude-foo", "cost_usd": 0, "kind": "custom"}
     text, _ = bot.draft_view(listing_dict(), draft)
     assert "⚠️" not in text
-    assert "<i>Angepasst · claude-foo · Anthropic · 0,0 ct ($)</i>" in text
+    assert "<i>Angepasst · claude-foo · Anthropic · 0,0 ct</i>" in text
 
 
-def test_draft_view_shows_provider_and_both_currencies():
+def test_draft_view_shows_provider_and_euro_cost():
     draft = {"text": "x", "hint": None, "model": "claude-sonnet-5.5", "kind": "initial", "provider": "deutschlandgpt",
              "currency": "EUR", "cost_native": 0.021, "cost_usd": 0.0231}
     text, _ = bot.draft_view(listing_dict(), draft)
-    assert text.endswith("<i>Entwurf · Claude Sonnet 5.5 · DeutschlandGPT · 2,1 ct (€) ≈ 2,3 ct ($)</i>")
+    assert text.endswith("<i>Entwurf · Claude Sonnet 5.5 · DeutschlandGPT · 2,1 ct</i>")
+    text, _ = bot.draft_view(listing_dict(), {**draft, "cost_eur": 0.5})  # rows from db carry the euro value
+    assert text.endswith("· 50,0 ct</i>")
 
 
 @pytest.mark.parametrize("unit", ["a", "&", "ü", "😀"])
