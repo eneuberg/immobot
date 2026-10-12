@@ -1,0 +1,26 @@
+# Additional immobot instances for Coolify (Build Pack "Docker Compose").
+#
+# Each service is a fully separate immobot: own dashboard password, own session secret, own database
+# volume, own Telegram bot and API key (both entered later in its dashboard under "Zugänge").
+# Coolify generates the two secrets on the first deploy (magic variables) and shows them under
+# Environment Variables. Never change SESSION_SECRET afterwards: credentials stored in the dashboard
+# are encrypted with it.
+#
+# Domain: set it in Coolify under the service's domain, with the internal port, e.g.
+#   https://immobot2.example.com:8000
+#
+# Another instance: copy the block below, rename immobot2 -> immobot3 everywhere (service name,
+# variable names, volume), push, redeploy.
+
+services:
+  immobot2:
+    build: .
+    restart: unless-stopped
+    environment:
+      DASHBOARD_PASSWORD: ${SERVICE_PASSWORD_IMMOBOT2}
+      SESSION_SECRET: ${SERVICE_HEX_64_IMMOBOT2}
+    volumes:
+      - immobot2-data:/data
+
+volumes:
+  immobot2-data:

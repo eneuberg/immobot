@@ -68,6 +68,14 @@ abgeleitet. Wird `SESSION_SECRET` geändert, sind alle im Dashboard gespeicherte
 (Zugänge zeigt „⚠ nicht entschlüsselbar – neu eintragen“) und müssen neu eingetragen werden. Außerdem werden alle Sessions
 ungültig.
 
+## Weitere Instanzen (Docker Compose)
+
+Für eine zweite Person oder Suche: in Coolify **+ New → Public Repository** → dieses Repo, Build Pack **Docker Compose**
+(Datei `docker-compose.yaml`). Coolify erzeugt `DASHBOARD_PASSWORD` und `SESSION_SECRET` beim ersten Deploy selbst und zeigt
+sie unter *Environment Variables*. Unter *Domains* für den Dienst `immobot2` z. B. `https://immobot2.example.com:8000`
+eintragen, deployen, einloggen und unter **Zugänge** einen **eigenen** Telegram-Bot (nicht den von Instanz 1) und einen Key
+eintragen. Weitere Instanz: den Block in `docker-compose.yaml` kopieren und `immobot2` → `immobot3` umbenennen.
+
 ## KI-Anbieter: Anthropic oder DeutschlandGPT
 
 Unter **Einstellungen → KI-Anbieter** wählst du, wer die Entwürfe schreibt:
