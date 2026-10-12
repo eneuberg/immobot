@@ -50,17 +50,22 @@
     <p><a href="#fredy">Einrichten ↓</a></p>
   {% endcall %}
 
-  {# is24_last_error: "<ISO time> Inserat <id>: <message>" (is24.py) #}
-  {% set is24_parts = (is24_last_error or "").split(" ", 1) %}
-  {% call tile("warn" if is24_last_error else "ok", "ImmoScout24-Bilder & Details") %}
-    {% if is24_last_error and is24_parts|length == 2 %}
-    <p>Letzter ImmoScout24-Fehler am {{ is24_parts[0]|local_time }}:</p>
-    <p class="pre-wrap">{{ is24_parts[1] }}</p>
-    {% elif is24_last_error %}
-    <p>Letzter ImmoScout24-Fehler:</p>
-    <p class="pre-wrap">{{ is24_last_error }}</p>
+  {# media_last_error: "<ISO time> Inserat <id> (<Fredy-Bilder|ImmoScout24>): <message>" (media.py) #}
+  {% set media_parts = (media_last_error or "").split(" ", 1) %}
+  {% call tile("warn" if media_last_error else "ok", "Bilder & Details") %}
+    <p>Fredy schickt Bilder mit:
+      {% if fredy_images.last_webhook is none %}noch unbekannt (kein Webhook mit Inseraten)
+      {% elif fredy_images.last_webhook == "1" %}<span class="success">ja</span>
+      {% else %}nein{% endif %}
+      {%- if fredy_images.last_at %} (letztes Inserat mit Bildern am {{ fredy_images.last_at|local_time }}){% endif %}</p>
+    {% if media_last_error and media_parts|length == 2 %}
+    <p>Letzter Bilder-Fehler am {{ media_parts[0]|local_time }}:</p>
+    <p class="pre-wrap">{{ media_parts[1] }}</p>
+    {% elif media_last_error %}
+    <p>Letzter Bilder-Fehler:</p>
+    <p class="pre-wrap">{{ media_last_error }}</p>
     {% else %}
-    <p>Letzter ImmoScout24-Fehler: keiner</p>
+    <p>Letzter Bilder-Fehler: keiner</p>
     {% endif %}
   {% endcall %}
 

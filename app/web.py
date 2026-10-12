@@ -32,7 +32,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import bot, db, is24, llm, portals, settings, vault
+from . import bot, db, is24, llm, media, portals, settings, vault
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ DRAFT_KIND_LABELS = {
 EFFORT_LABELS = {"low": "niedrig", "medium": "mittel", "high": "hoch"}
 
 TEXT_SETTINGS = ["system_prompt", "profile", "wishes", "style"]  # textareas, each with a reset button
-CHECKBOX_SETTINGS = ["send_image", "paused"]
+CHECKBOX_SETTINGS = ["send_image", "paused", "is24_fetch"]
 TEXT_SETTING_LABELS = {"system_prompt": "System-Prompt", "profile": "Über mich", "wishes": "Wünsche", "style": "Schreibstil"}
 MAX_TEXT_CHARS = 20_000
 
@@ -317,7 +317,7 @@ async def fredy_webhook(request: Request):
     if not isinstance(items, list):
         return JSONResponse({"error": "listings must be a list"}, status_code=400)
 
-    received, new_ids = 0, []
+    received, new_ids, with_images = 0, [], 0
     for item in items:
         if not isinstance(item, dict) or item.get("id") in (None, ""):
             continue
@@ -337,8 +337,18 @@ async def fredy_webhook(request: Request):
         received += 1
         if created:
             new_ids.append(listing_id)
+        # Optional gallery (Fredy PR #489 / patched Fredy). Bad entries are dropped, never the whole webhook;
+        # a listing that already has pictures keeps them (no duplicates when Fredy sends it again).
+        pictures = media.parse_fredy_images(item.get("images"))
+        if pictures:
+            with_images += 1
+            media.store_fredy_images(listing_id, pictures)
 
-    log.info("Fredy webhook: %d listings, %d new", received, len(new_ids))
+    if received:  # for the status page: does this Fredy send pictures?
+        db.set_meta("last_webhook_had_images", "1" if with_images else "0")
+        if with_images:
+            db.set_meta("fredy_images_last_at", db.now_iso())
+    log.info("Fredy webhook: %d listings, %d new, %d with pictures", received, len(new_ids), with_images)
     if new_ids and not config.disable_bot:
         bot.schedule_announce(new_ids)
     return {"received": received, "new": len(new_ids)}
@@ -431,19 +441,28 @@ def details_sections(text: str | None) -> list[dict]:
     return result
 
 
-def _is_floorplan(media: dict) -> bool:
-    return any(word in (media.get("caption") or "").lower() for word in is24.FLOORPLAN_WORDS)
+def _is_floorplan(picture: dict) -> bool:
+    return bool(picture.get("floor_plan")) or any(word in (picture.get("caption") or "").lower()
+                                                   for word in is24.FLOORPLAN_WORDS)
+
+
+MEDIA_SOURCE_LABELS = {"fredy": "Bilder von Fredy", "is24": "von ImmoScout24 geladen"}
 
 
 def _listing_context(listing: dict, error: str | None = None) -> dict:
-    media = db.list_media(listing["id"])
+    pictures = media.stored_pictures(listing["id"])
+    source = media.source_of(listing)
     return {
         "active": "listings",
         "listing": listing,
-        "is24": is24.is_supported(listing),
-        "media": media,
+        "gallery": source is not None or bool(pictures),
+        "media_source": source or listing.get("media_source"),
+        "media_source_label": MEDIA_SOURCE_LABELS.get(source or listing.get("media_source")),
+        # Load/retry only where it can do something: a source, and nothing fetched yet or a failure.
+        "can_load_media": source is not None and (not listing.get("media_fetched_at") or bool(listing.get("media_error"))),
+        "media": pictures,
         # Big picture at the top: the first stored photo that isn't a floor plan (those come first).
-        "hero": next((m for m in media if not _is_floorplan(m)), media[0] if media else None),
+        "hero": next((m for m in pictures if not _is_floorplan(m)), pictures[0] if pictures else None),
         "details": details_sections(listing.get("details")),
         "portal": portals.provider_label(listing["provider"]),
         # Only http(s) URLs become links/images; contact_url's output is checked as well.
@@ -481,9 +500,9 @@ def listing_page(request: Request, listing_id: int):
 
 @router.get("/listing/{listing_id}/media/{position}", dependencies=PAGE)
 def listing_media(listing_id: int, position: int):
-    """A stored ImmoScout24 picture. Only files recorded in listing_media and lying inside
+    """A stored listing picture. Only files recorded in listing_media and lying inside
     DATA_DIR/media/<listing id>/ are served; the browser may cache them privately for a day."""
-    path = is24.media_file(listing_id, position) if listing_id > 0 and position > 0 else None
+    path = media.media_file(listing_id, position) if listing_id > 0 and position > 0 else None
     if path is None:
         raise HTTPException(status_code=404, detail="Bild nicht gefunden")
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
@@ -491,10 +510,10 @@ def listing_media(listing_id: int, position: int):
 
 @router.post("/listing/{listing_id}/media", dependencies=ACTION)
 async def listing_load_media(listing_id: int):
-    """"Bilder & Details laden" (also retries after a failure). Takes a few seconds: one exposé request,
-    then the pictures one at a time."""
+    """"Bilder laden" (also retries after a failure). Takes a few seconds: the pictures one at a time (plus one
+    exposé request for ImmoScout24). Does nothing without a source (no Fredy pictures, own fetch off)."""
     _listing_or_404(listing_id)
-    await is24.ensure_media(listing_id, retry=True)
+    await media.ensure_media(listing_id, retry=True)
     return RedirectResponse(f"/listing/{listing_id}#bilder", status_code=303)
 
 
@@ -994,7 +1013,9 @@ def status_page(request: Request):
         # Names, sources and dates only - never any part of a secret.
         "credentials": vault.status(),
         "ai": _ai_status(db.get_settings()),
-        "is24_last_error": db.get_meta("is24_last_error"),
+        "media_last_error": db.get_meta("media_last_error"),
+        "fredy_images": {"last_webhook": db.get_meta("last_webhook_had_images"),
+                         "last_at": db.get_meta("fredy_images_last_at")},
         "events": _credential_events(),
         "version": settings.APP_VERSION,
         "stats": db.stats(),

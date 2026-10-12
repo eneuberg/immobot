@@ -62,6 +62,11 @@ def text_update(text, chat_id=CHAT, message_id=900, reply_to=None, user_id=OWNER
     return SimpleNamespace(callback_query=None, message=message, effective_user=user)
 
 
+@pytest.fixture(autouse=True)
+def _database(fresh_db):
+    """Every test here gets an empty database: keyboards read the "is24_fetch" setting (media.has_gallery)."""
+
+
 def listing_dict(**overrides):
     base = {
         "id": 7,
@@ -991,7 +996,7 @@ def store_pictures(db, listing_id, captions):
 
     from PIL import Image
 
-    folder = bot.is24.media_root() / str(listing_id)
+    folder = bot.media.media_root() / str(listing_id)
     folder.mkdir(parents=True, exist_ok=True)
     rows = []
     for position, caption in enumerate(captions, start=1):
@@ -1015,7 +1020,7 @@ def album_listing(tg, monkeypatch):
         calls.append((lid, retry))
         return db.list_media(lid)
 
-    monkeypatch.setattr(bot.is24, "ensure_media", ensure_media)
+    monkeypatch.setattr(bot.media, "ensure_media", ensure_media)
     return listing_id, calls
 
 
@@ -1107,7 +1112,7 @@ def test_pictures_button_for_other_portals(tg, monkeypatch):
     listing_id = add_listing(bot.db)  # https://example.org/expose/1, provider immoscout -> not an IS24 URL
     album_bot = AlbumBot()
     query = press_on(album_bot, f"img:{listing_id}")
-    assert query.answers == ["Bilder gibt es nur für ImmoScout24-Inserate."] and album_bot.albums == []
+    assert query.answers == ["Für dieses Inserat gibt es keine Bildergalerie."] and album_bot.albums == []
 
 
 def test_pictures_button_works_while_a_draft_is_generated(tg, album_listing):

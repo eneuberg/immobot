@@ -2,8 +2,9 @@
 FastAPI threadpool and the Telegram bot's event loop.
 
 Tables:
-  listings         one row per listing received from Fredy (+ ImmoScout24 details, see is24.py)
-  listing_media    pictures of a listing downloaded from ImmoScout24 (files under DATA_DIR/media/<listing id>/)
+  listings         one row per listing received from Fredy (+ ImmoScout24 details and picture source, see media.py)
+  listing_media    pictures of a listing, from Fredy or ImmoScout24 (files under DATA_DIR/media/<listing id>/;
+                   `file` is "" until the picture is downloaded)
   drafts           every generated message, with provider, model, tokens and cost in the provider's currency
                    (cost_native/currency; euro values are computed with cost_eur_sql, cost_usd is legacy)
   settings         user-editable, non-secret settings (key/value strings)
@@ -45,7 +46,8 @@ CREATE TABLE IF NOT EXISTS listings (
     media_fetched_at TEXT,
     media_error TEXT,
     album_message_id INTEGER,
-    album_sent_at TEXT
+    album_sent_at TEXT,
+    media_source TEXT
 );
 CREATE TABLE IF NOT EXISTS listing_media (
     listing_id INTEGER NOT NULL REFERENCES listings(id),
@@ -53,6 +55,7 @@ CREATE TABLE IF NOT EXISTS listing_media (
     caption TEXT,
     source_url TEXT NOT NULL,
     file TEXT NOT NULL,
+    floor_plan INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (listing_id, position)
 );
 CREATE TABLE IF NOT EXISTS drafts (
@@ -108,7 +111,9 @@ ADDED_COLUMNS = {
         ("media_error", "TEXT"),
         ("album_message_id", "INTEGER"),
         ("album_sent_at", "TEXT"),
+        ("media_source", "TEXT"),  # "fredy" | "is24" | NULL
     ],
+    "listing_media": [("floor_plan", "INTEGER NOT NULL DEFAULT 0")],
     "drafts": [
         ("provider", "TEXT NOT NULL DEFAULT 'anthropic'"),
         ("currency", "TEXT NOT NULL DEFAULT 'USD'"),
@@ -249,7 +254,7 @@ def set_listing_tg_message(listing_id: int, message_id: int) -> None:
         conn.execute("UPDATE listings SET tg_message_id = ?, updated_at = ? WHERE id = ?", (message_id, now_iso(), listing_id))
 
 
-# --- ImmoScout24 details & pictures (see is24.py) ---------------------------
+# --- details & pictures (see media.py) -------------------------------------
 
 def set_listing_details(listing_id: int, details: str | None, contact_name: str | None) -> None:
     with connect() as conn:
@@ -262,13 +267,24 @@ def set_media_state(listing_id: int, fetched_at: str | None, error: str | None) 
 
 
 def replace_media(listing_id: int, rows: list[dict]) -> None:
-    """Rows: position, caption, source_url, file."""
+    """Rows: position, caption, source_url, file ("" = not downloaded yet), optional floor_plan."""
     with connect() as conn:
         conn.execute("DELETE FROM listing_media WHERE listing_id = ?", (listing_id,))
         conn.executemany(
-            "INSERT INTO listing_media (listing_id, position, caption, source_url, file) VALUES (?, ?, ?, ?, ?)",
-            [(listing_id, r["position"], r["caption"], r["source_url"], r["file"]) for r in rows],
+            "INSERT INTO listing_media (listing_id, position, caption, source_url, file, floor_plan) VALUES (?, ?, ?, ?, ?, ?)",
+            [(listing_id, r["position"], r["caption"], r["source_url"], r["file"], int(bool(r.get("floor_plan"))))
+             for r in rows],
         )
+
+
+def set_media_file(listing_id: int, position: int, file: str) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE listing_media SET file = ? WHERE listing_id = ? AND position = ?", (file, listing_id, position))
+
+
+def set_media_source(listing_id: int, source: str | None) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE listings SET media_source = ? WHERE id = ?", (source, listing_id))
 
 
 def list_media(listing_id: int) -> list[dict]:
@@ -278,14 +294,15 @@ def list_media(listing_id: int) -> list[dict]:
 
 
 def thumb_positions() -> dict[int, int]:
-    """listing id -> picture for the overview thumbnail: the first one that isn't a floor plan (is24.py sorts
-    floor plans first; same words as is24.FLOORPLAN_WORDS), else the first one."""
+    """listing id -> downloaded picture for the overview thumbnail: the first one that isn't a floor plan
+    (floor plans come first; flagged, or named like is24.FLOORPLAN_WORDS in older rows), else the first one."""
     sql = """
-        SELECT listing_id, COALESCE(MIN(CASE WHEN lower(COALESCE(caption, '')) NOT LIKE '%grundriss%'
+        SELECT listing_id, COALESCE(MIN(CASE WHEN floor_plan = 0
+                                              AND lower(COALESCE(caption, '')) NOT LIKE '%grundriss%'
                                               AND lower(COALESCE(caption, '')) NOT LIKE '%floorplan%'
                                               AND lower(COALESCE(caption, '')) NOT LIKE '%floor plan%'
                                          THEN position END), MIN(position)) AS position
-        FROM listing_media GROUP BY listing_id
+        FROM listing_media WHERE file != '' GROUP BY listing_id
     """
     with connect() as conn:
         return {r["listing_id"]: r["position"] for r in conn.execute(sql)}
@@ -298,10 +315,11 @@ def get_media(listing_id: int, position: int) -> dict | None:
 
 
 def clear_media(listing_id: int) -> None:
-    """Forget the pictures (rows and fetch state); the details text stays."""
+    """Forget the pictures (rows, source and fetch state); the details text stays."""
     with connect() as conn:
         conn.execute("DELETE FROM listing_media WHERE listing_id = ?", (listing_id,))
-        conn.execute("UPDATE listings SET media_fetched_at = NULL, media_error = NULL WHERE id = ?", (listing_id,))
+        conn.execute("UPDATE listings SET media_fetched_at = NULL, media_error = NULL, media_source = NULL WHERE id = ?",
+                     (listing_id,))
 
 
 def listings_with_media_received_before(cutoff_iso: str) -> list[int]:

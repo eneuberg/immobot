@@ -135,6 +135,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "eur_usd_rate": "1.10",  # 1 € = x $
     "send_image": "1",
     "llm_max_images": "10",
+    "is24_fetch": "1",  # media.py: fetch exposé + pictures from ImmoScout24 when Fredy sends no pictures
     "followup_delay_s": "4",
     "paused": "0",
 }

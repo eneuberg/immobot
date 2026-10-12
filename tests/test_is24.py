@@ -13,7 +13,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from app import is24
+from app import is24, media
 
 EXPOSE = json.loads((Path(__file__).parent / "fixtures" / "is24_expose.json").read_text())
 EXPOSE_URL = "https://www.immobilienscout24.de/expose/123456789"
@@ -48,11 +48,17 @@ class FakeIs24:
         return [str(r.url) for r in self.requests if r.url.host == "pictures.immobilienscout24.de"]
 
 
+def serve(monkeypatch, handler):
+    """One fake server for both the exposé API (is24) and the picture downloads (media)."""
+    monkeypatch.setattr(is24, "_transport", httpx.MockTransport(handler))
+    monkeypatch.setattr(media, "_transport", httpx.MockTransport(handler))
+
+
 @pytest.fixture
 def is24_server(monkeypatch):
     server = FakeIs24()
-    monkeypatch.setattr(is24, "_transport", httpx.MockTransport(server))
-    monkeypatch.setattr(is24, "DOWNLOAD_GAP_S", 0)
+    serve(monkeypatch, server)
+    monkeypatch.setattr(media, "DOWNLOAD_GAP_S", 0)
     return server
 
 
@@ -170,7 +176,7 @@ def test_fetch_expose_request(is24_server):
     (httpx.Response(301, headers={"location": "https://evil.example/"}), "HTTP 301"),  # redirects are not followed
 ])
 def test_fetch_expose_errors(monkeypatch, response, message):
-    monkeypatch.setattr(is24, "_transport", httpx.MockTransport(lambda r: response))
+    serve(monkeypatch, lambda r: response)
     with pytest.raises(is24.Is24Error, match=message):
         asyncio.run(is24.fetch_expose("123456789"))
 
@@ -179,7 +185,7 @@ def test_fetch_expose_network_error(monkeypatch):
     def down(request):
         raise httpx.ConnectError("down", request=request)
 
-    monkeypatch.setattr(is24, "_transport", httpx.MockTransport(down))
+    serve(monkeypatch, down)
     with pytest.raises(is24.Is24Error, match="nicht erreichbar"):
         asyncio.run(is24.fetch_expose("123456789"))
     with pytest.raises(is24.Is24Error, match="Ungültige"):
@@ -196,11 +202,11 @@ def test_ensure_media_downloads_sequentially_and_caches(fresh_db, is24_server, m
         sleeps.append(seconds)
         await real_sleep(0)
 
-    monkeypatch.setattr(is24, "DOWNLOAD_GAP_S", 0.25)
+    monkeypatch.setattr(media, "DOWNLOAD_GAP_S", 0.25)
     monkeypatch.setattr(asyncio, "sleep", record_sleep)
     listing_id = add_is24_listing(fresh_db)
 
-    rows = asyncio.run(is24.ensure_media(listing_id))
+    rows = asyncio.run(media.ensure_media(listing_id))
     assert [r["position"] for r in rows] == list(range(1, 12)) and rows[0]["caption"] == "Balkon"
     assert len(is24_server.requests) == 12  # 1 exposé + 11 pictures, nothing else
     assert is24_server.picture_urls == [m["url"] for m in is24.parse_expose(EXPOSE)["media"]]  # IS24's URLs as given
@@ -208,11 +214,11 @@ def test_ensure_media_downloads_sequentially_and_caches(fresh_db, is24_server, m
     listing = fresh_db.get_listing(listing_id)
     assert listing["media_fetched_at"] and listing["media_error"] is None
     assert listing["contact_name"] == "Frau Erika Mustermann" and "Wohnungstyp: Penthouse" in listing["details"]
-    path = is24.media_file(listing_id, 1)
+    path = media.media_file(listing_id, 1)
     with Image.open(path) as img:  # 1500x1000 webp -> 1024x683 JPEG
         assert img.format == "JPEG" and img.size == (1024, 683)
 
-    again = asyncio.run(is24.ensure_media(listing_id))
+    again = asyncio.run(media.ensure_media(listing_id))
     assert again == rows and len(is24_server.requests) == 12  # cached: no network
 
 
@@ -225,29 +231,29 @@ def test_ensure_media_one_keep_alive_client(fresh_db, is24_server, monkeypatch):
         return real_client(*args, **kwargs)
 
     monkeypatch.setattr(is24.httpx, "AsyncClient", counting_client)
-    asyncio.run(is24.ensure_media(add_is24_listing(fresh_db)))
+    asyncio.run(media.ensure_media(add_is24_listing(fresh_db)))
     assert clients == [False, False]  # one for the exposé, one for all pictures; no redirects followed
 
 
 @pytest.mark.parametrize("status", [403, 429])
 def test_download_stops_at_refusal(fresh_db, monkeypatch, status):
     server = FakeIs24(fail_at=4, fail_status=status)
-    monkeypatch.setattr(is24, "_transport", httpx.MockTransport(server))
-    monkeypatch.setattr(is24, "DOWNLOAD_GAP_S", 0)
+    serve(monkeypatch, server)
+    monkeypatch.setattr(media, "DOWNLOAD_GAP_S", 0)
     listing_id = add_is24_listing(fresh_db)
-    rows = asyncio.run(is24.ensure_media(listing_id))
+    rows = asyncio.run(media.ensure_media(listing_id))
     assert [r["position"] for r in rows] == [1, 2, 3]  # kept what worked
     assert len(server.picture_urls) == 4  # and asked for nothing after the refusal
     listing = fresh_db.get_listing(listing_id)
     assert f"HTTP {status}" in listing["media_error"] and "abgebrochen" in listing["media_error"]
-    assert f"Inserat {listing_id}: Bilder-Server lehnt ab" in fresh_db.get_meta("is24_last_error")
+    assert f"Inserat {listing_id} (ImmoScout24): Bilder-Server lehnt ab" in fresh_db.get_meta("media_last_error")
 
 
 def test_download_stops_at_non_image_content(fresh_db, monkeypatch):
     server = FakeIs24(content_type="text/html")
-    monkeypatch.setattr(is24, "_transport", httpx.MockTransport(server))
+    serve(monkeypatch, server)
     listing_id = add_is24_listing(fresh_db)
-    assert asyncio.run(is24.ensure_media(listing_id)) == []
+    assert asyncio.run(media.ensure_media(listing_id)) == []
     assert len(server.picture_urls) == 1 and "kein Bild" in fresh_db.get_listing(listing_id)["media_error"]
 
 
@@ -258,19 +264,19 @@ def test_failed_expose_is_not_retried_automatically(fresh_db, monkeypatch):
         calls.append(request)
         return httpx.Response(503)
 
-    monkeypatch.setattr(is24, "_transport", httpx.MockTransport(handler))
+    serve(monkeypatch, handler)
     listing_id = add_is24_listing(fresh_db)
-    assert asyncio.run(is24.ensure_media(listing_id)) == []
+    assert asyncio.run(media.ensure_media(listing_id)) == []
     assert "HTTP 503" in fresh_db.get_listing(listing_id)["media_error"]
-    asyncio.run(is24.ensure_media(listing_id))  # e.g. the next draft
-    asyncio.run(is24.ensure_media(listing_id, retry=True))  # a user retry within a minute
+    asyncio.run(media.ensure_media(listing_id))  # e.g. the next draft
+    asyncio.run(media.ensure_media(listing_id, retry=True))  # a user retry within a minute
     assert len(calls) == 1
     an_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
     fresh_db.set_media_state(listing_id, an_hour_ago, "HTTP 503")
     server = FakeIs24()
-    monkeypatch.setattr(is24, "_transport", httpx.MockTransport(server))
-    monkeypatch.setattr(is24, "DOWNLOAD_GAP_S", 0)
-    assert len(asyncio.run(is24.ensure_media(listing_id, retry=True))) == 11  # the user's retry works
+    serve(monkeypatch, server)
+    monkeypatch.setattr(media, "DOWNLOAD_GAP_S", 0)
+    assert len(asyncio.run(media.ensure_media(listing_id, retry=True))) == 11  # the user's retry works
     assert fresh_db.get_listing(listing_id)["media_error"] is None
 
 
@@ -278,7 +284,7 @@ def test_concurrent_triggers_fetch_once(fresh_db, is24_server):
     listing_id = add_is24_listing(fresh_db)
 
     async def main():
-        return await asyncio.gather(*(is24.ensure_media(listing_id) for _ in range(3)))
+        return await asyncio.gather(*(media.ensure_media(listing_id) for _ in range(3)))
 
     results = asyncio.run(main())
     assert all(len(r) == 11 for r in results)
@@ -288,25 +294,25 @@ def test_concurrent_triggers_fetch_once(fresh_db, is24_server):
 def test_other_portals_never_fetch(fresh_db, is24_server):
     other = add_is24_listing(fresh_db, "o1", provider="immowelt", url="https://www.immowelt.de/expose/1")
     austria = add_is24_listing(fresh_db, "o2", provider="immoscoutAt", url="https://www.immobilienscout24.at/expose/2")
-    assert asyncio.run(is24.ensure_media(other)) == [] and asyncio.run(is24.ensure_media(austria)) == []
-    assert asyncio.run(is24.ensure_media(999)) == []
+    assert asyncio.run(media.ensure_media(other)) == [] and asyncio.run(media.ensure_media(austria)) == []
+    assert asyncio.run(media.ensure_media(999)) == []
     assert is24_server.requests == []
 
 
 def test_media_file_stays_inside_the_listing_folder(fresh_db, is24_server):
     listing_id = add_is24_listing(fresh_db)
-    asyncio.run(is24.ensure_media(listing_id))
-    assert is24.media_file(listing_id, 1).parent == (is24.media_root() / str(listing_id)).resolve()
-    assert is24.media_file(listing_id, 99) is None
+    asyncio.run(media.ensure_media(listing_id))
+    assert media.media_file(listing_id, 1).parent == (media.media_root() / str(listing_id)).resolve()
+    assert media.media_file(listing_id, 99) is None
     fresh_db.replace_media(listing_id, [{"position": 1, "caption": "", "source_url": "x", "file": "../../immobot.db"}])
-    assert is24.media_file(listing_id, 1) is None
+    assert media.media_file(listing_id, 1) is None
 
 
 def test_read_pictures(fresh_db, is24_server):
     listing_id = add_is24_listing(fresh_db)
-    rows = asyncio.run(is24.ensure_media(listing_id))
-    (is24.media_root() / str(listing_id) / "2.jpg").unlink()  # a missing file is skipped
-    pictures = is24.read_pictures(listing_id, rows[:3])
+    rows = asyncio.run(media.ensure_media(listing_id))
+    (media.media_root() / str(listing_id) / "2.jpg").unlink()  # a missing file is skipped
+    pictures = media.read_pictures(listing_id, rows[:3])
     assert [row["position"] for row, _ in pictures] == [1, 3]
     assert all(jpeg[:2] == b"\xff\xd8" for _, jpeg in pictures)
 
@@ -314,14 +320,14 @@ def test_read_pictures(fresh_db, is24_server):
 def test_cleanup_old_media(fresh_db, is24_server):
     old = add_is24_listing(fresh_db, "old")
     new = add_is24_listing(fresh_db, "new")
-    asyncio.run(is24.ensure_media(old))
-    asyncio.run(is24.ensure_media(new))
+    asyncio.run(media.ensure_media(old))
+    asyncio.run(media.ensure_media(new))
     sixty_one_days_ago = (datetime.now(timezone.utc) - timedelta(days=61)).isoformat(timespec="seconds")
     with fresh_db.connect() as conn:
         conn.execute("UPDATE listings SET received_at = ? WHERE id = ?", (sixty_one_days_ago, old))
-    assert is24.cleanup_old_media() == 1
-    assert fresh_db.list_media(old) == [] and not (is24.media_root() / str(old)).exists()
+    assert media.cleanup_old_media() == 1
+    assert fresh_db.list_media(old) == [] and not (media.media_root() / str(old)).exists()
     assert fresh_db.get_listing(old)["media_fetched_at"] is None
     assert "Penthouse" in fresh_db.get_listing(old)["details"]  # the text stays
-    assert len(fresh_db.list_media(new)) == 11 and (is24.media_root() / str(new) / "1.jpg").exists()
-    assert is24.cleanup_old_media() == 0
+    assert len(fresh_db.list_media(new)) == 11 and (media.media_root() / str(new) / "1.jpg").exists()
+    assert media.cleanup_old_media() == 0

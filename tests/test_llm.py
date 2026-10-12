@@ -11,7 +11,7 @@ import httpx2
 import pytest
 from PIL import Image
 
-from app import is24, llm
+from app import llm, media
 from app.settings import DEFAULT_MODEL, DEFAULT_SETTINGS, PRICES, PROVIDERS, cost
 
 
@@ -480,10 +480,10 @@ def test_failed_image_still_generates_draft(monkeypatch, fake_client):
 @pytest.fixture
 def listing_id(fresh_db, monkeypatch):
     """An ImmoScout24 listing; the exposé/picture fetch is stubbed (no pictures) unless a test says otherwise."""
-    async def no_media(listing_id, retry=False):
+    async def no_media(listing_id, retry=False, want_images=True):
         return []
 
-    monkeypatch.setattr(is24, "ensure_media", no_media)
+    monkeypatch.setattr(media, "ensure_media", no_media)
     lid, created = fresh_db.insert_listing(LISTING)
     assert created
     return lid
@@ -862,8 +862,8 @@ def test_create_and_store_draft_fetches_is24_media_first(fresh_db, fake_generate
     fresh_db.update_settings({"llm_max_images": "2"})
     calls = []
 
-    async def ensure_media(listing_id, retry=False):
-        calls.append((listing_id, retry))
+    async def ensure_media(listing_id, retry=False, want_images=True):
+        calls.append((listing_id, retry, want_images))
         fresh_db.set_listing_details(listing_id, "Voller Exposé-Text", "Frau Erika Mustermann")
         return [{"position": i, "caption": f"Bild {i}", "source_url": "x", "file": f"{i}.jpg"} for i in (1, 2, 3)]
 
@@ -873,10 +873,10 @@ def test_create_and_store_draft_fetches_is24_media_first(fresh_db, fake_generate
         read.append([r["position"] for r in rows])
         return [(r, jpeg_bytes(r["position"])) for r in rows]
 
-    monkeypatch.setattr(is24, "ensure_media", ensure_media)
-    monkeypatch.setattr(is24, "read_pictures", read_pictures)
+    monkeypatch.setattr(media, "ensure_media", ensure_media)
+    monkeypatch.setattr(media, "read_pictures", read_pictures)
     asyncio.run(llm.create_and_store_draft(lid, "initial"))
-    assert calls == [(lid, False)]  # drafts never force a retry of a failed fetch
+    assert calls == [(lid, False, True)]  # drafts never force a retry of a failed fetch; pictures wanted
     assert read == [[1, 2]]  # only as many files as will be sent are read
     assert fake_generate[0]["listing"]["details"] == "Voller Exposé-Text"  # re-read after the fetch
 

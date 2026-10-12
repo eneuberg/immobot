@@ -365,7 +365,7 @@ def valid_settings(**overrides):
     form = {
         "system_prompt": "Sei nett.", "profile": "Erika, 34", "wishes": "Balkon", "style": "locker",
         "target_words": "120", "model": "claude-haiku-5-5", "effort": "medium", "monthly_budget_eur": "7,5",
-        "send_image": "1", "followup_delay_s": "10", "paused": "1",
+        "send_image": "1", "followup_delay_s": "10", "paused": "1", "is24_fetch": "1",
     }
     form.update(overrides)
     return form
@@ -1373,9 +1373,9 @@ def store_listing_pictures(listing_id, captions):
 
     from PIL import Image
 
-    from app import is24
+    from app import media
 
-    folder = is24.media_root() / str(listing_id)
+    folder = media.media_root() / str(listing_id)
     folder.mkdir(parents=True, exist_ok=True)
     rows = []
     for position, caption in enumerate(captions, start=1):
@@ -1444,7 +1444,7 @@ def test_load_media_button(client, monkeypatch):
         calls.append((listing_id, retry))
         return []
 
-    monkeypatch.setattr(web.is24, "ensure_media", ensure_media)
+    monkeypatch.setattr(web.media, "ensure_media", ensure_media)
     lid = add_listing(provider="immoscout", url=IS24_URL)
     assert client.post(f"/listing/{lid}/media").headers["location"] == "/login"
     login(client)
@@ -1489,8 +1489,8 @@ def test_settings_llm_max_images(client):
         assert client.post("/settings", data=valid_settings(llm_max_images=bad)).status_code == 400
 
 
-def test_status_shows_last_is24_error(client):
+def test_status_shows_last_picture_error(client):
     login(client)
-    assert "Letzter ImmoScout24-Fehler" in client.get("/status").text
-    db.set_meta("is24_last_error", "2026-10-12T10:00:00+00:00 Inserat 7: Exposé nicht abrufbar (HTTP 404).")
-    assert "Inserat 7: Exposé nicht abrufbar (HTTP 404)." in client.get("/status").text
+    assert "Letzter Bilder-Fehler: keiner" in client.get("/status").text
+    db.set_meta("media_last_error", "2026-10-12T10:00:00+00:00 Inserat 7 (ImmoScout24): Exposé nicht abrufbar (HTTP 404).")
+    assert "Inserat 7 (ImmoScout24): Exposé nicht abrufbar (HTTP 404)." in client.get("/status").text

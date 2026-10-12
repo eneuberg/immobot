@@ -22,20 +22,21 @@ os.environ.update({
 
 
 @pytest.fixture(autouse=True)
-def no_is24_network(tmp_path, monkeypatch):
-    """No test may reach ImmoScout24: requests fail the test (pytest.fail is a BaseException, so no
-    `except Exception` can swallow it). Tests that exercise is24 install their own MockTransport.
-    Pictures go to a temporary directory; per-listing locks start fresh for every event loop."""
+def no_picture_network(tmp_path, monkeypatch):
+    """No test may reach ImmoScout24 or any picture host: requests fail the test (pytest.fail is a
+    BaseException, so no `except Exception` can swallow it). Tests that download install their own
+    MockTransport. Pictures go to a temporary directory; per-listing locks start fresh for every event loop."""
     import httpx
 
-    from app import is24
+    from app import is24, media
 
     def refuse(request):
         pytest.fail(f"unexpected network request in a test: {request.url}")
 
-    monkeypatch.setattr(is24, "_transport", httpx.MockTransport(refuse))
-    monkeypatch.setattr(is24, "_media_root", tmp_path / "media")
-    monkeypatch.setattr(is24, "_locks", {})
+    monkeypatch.setattr(is24, "_transport", httpx.MockTransport(refuse))  # exposé API
+    monkeypatch.setattr(media, "_transport", httpx.MockTransport(refuse))  # picture downloads
+    monkeypatch.setattr(media, "_media_root", tmp_path / "media")
+    monkeypatch.setattr(media, "_locks", {})
 
 
 @pytest.fixture(autouse=True)

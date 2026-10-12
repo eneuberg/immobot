@@ -179,6 +179,10 @@
         {% if errors.llm_max_images %}aria-invalid="true"{% endif %}>
       {{ field_error("llm_max_images") }}
     </label>
+    <label class="check">
+      <input type="checkbox" role="switch" name="is24_fetch" value="1" {% if values.is24_fetch|as_bool %}checked{% endif %}>
+      <span>Bilder &amp; Details selbst von ImmoScout24 laden <small>Wenn Fredy keine Bilder mitschickt, holt immobot bei ImmoScout24-Inseraten das Exposé selbst (1 Abruf pro Inserat, nur bei Bedarf). Schickt Fredy die Bilder mit (Fredy-PR #489 bzw. gepatchtes Fredy), wird nichts zusätzlich abgerufen.</small></span>
+    </label>
 
     <h3>Telegram</h3>
     <label>Verzögerung nach Fredys Nachricht <small>in Sekunden, 0–60 – damit die Buttons direkt unter Fredys Inserat erscheinen</small>

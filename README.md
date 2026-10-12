@@ -97,24 +97,42 @@ gerechnet wird in **Euro**: Monatsbudget (Einstellungen, in €), Summen, Insera
 Dollar-Kosten (Anthropic) werden mit dem „Wechselkurs: 1 € = x $“ (Standard 1,10) umgerechnet; beim Entwurf im Dashboard
 steht dann zusätzlich der Dollarbetrag, z. B. „3,8 ct (≈ 0,042 $)“. DeutschlandGPT-Kosten sind bereits in Euro.
 
-## ImmoScout24: alle Bilder und Details
+## Bildquellen
 
-Fredy liefert pro Inserat nur ein Bild und einen kurzen Text. Bei ImmoScout24-Inseraten (nicht Österreich) holt immobot
-beim ersten Bedarf einmal das Exposé (dieselbe App-API, die Fredy nutzt) und lädt alle Bilder herunter: nacheinander über
-eine Verbindung mit kurzer Pause, nur in der Größe, die ImmoScout24 selbst ausliefert, nur von `*.immobilienscout24.de`.
-Bei der ersten Ablehnung (403/429/kein Bild) wird abgebrochen; was da ist, bleibt. Gespeichert wird als JPEG (max.
-1024 px) unter `/data/media/<Inserat>/`; nach 60 Tagen löscht immobot die Bilder beim Start wieder.
+Fredys normaler Webhook liefert pro Inserat nur ein Bild (`imageUrl`) und einen kurzen Text. immobot nimmt für die
+Bildergalerie die erste passende Quelle:
 
-- **Entwürfe** bekommen den vollen Exposé-Text, die Ansprechperson und so viele Fotos, wie unter „Fotos für Claude pro
-  Entwurf“ eingestellt (Einstellungen, 0–20, Standard 10). Jedes Foto kostet ca. 1.000 Tokens (≈ 0,1–4 ct je nach
-  Modell) und ist beschriftet („Bild 1: Grundriss“); Grundrisse kommen zuerst. Andere Portale bekommen wie bisher Fredys
-  Einzelbild.
-- **Telegram:** „🖼 Bilder“ schickt bis zu 10 Fotos als Album unter die immobot-Nachricht (einmal pro Inserat). Das ist
-  Telegrams Grenze pro Album und hat mit der Einstellung für Claude nichts zu tun.
+1. **Fredy schickt die Bilder mit**: Mit dem Fredy-PR [#489](https://github.com/orangecoding/fredy/pull/489) (oder
+   einem so gepatchten Fredy) enthält jedes Inserat im Webhook optional `images: [{url, caption?, floorPlan?}]`.
+   immobot speichert diese Adressen beim Eingang und lädt die Bilder erst bei Bedarf. ImmoScout24 wird dann **nie**
+   zusätzlich abgefragt. Angenommen werden nur https-Adressen mit echtem Domainnamen (keine IP-Adressen, kein
+   `localhost`, `.local` oder `.internal`, keine Zugangsdaten in der URL, höchstens 2000 Zeichen); Bildunterschriften
+   werden auf 200 Zeichen gekürzt, ungültige Einträge stillschweigend verworfen (der Webhook schlägt deshalb nie fehl).
+   Kommt ein Inserat erneut, bleiben die gespeicherten Bilder; bringt ein späterer Webhook Bilder für ein Inserat ohne
+   Bilder, werden sie übernommen.
+2. **immobot holt sie selbst von ImmoScout24**: Ohne Fredy-Bilder holt immobot bei ImmoScout24-Inseraten
+   (nicht Österreich) beim ersten Bedarf einmal das Exposé (dieselbe App-API, die Fredy nutzt): Details-Text,
+   Ansprechperson und alle Bilder, nur in der Größe, die ImmoScout24 selbst ausliefert, nur von
+   `*.immobilienscout24.de`. Abschaltbar unter Einstellungen → „Bilder & Details selbst von ImmoScout24 laden“; dann
+   geht von keiner Stelle (Entwurf, „🖼 Bilder“, Dashboard) eine Anfrage an ImmoScout24. Ist Fredys Text schon lang
+   (Detailseiten in Fredy aktiviert, über 500 Zeichen), wird das Exposé nicht nur für den Text abgerufen.
+3. **Sonst** gibt es keine Galerie; Entwürfe bekommen wie bisher Fredys Einzelbild.
+
+Heruntergeladen wird höflich: über eine Verbindung, ein Bild nach dem anderen mit kurzer Pause, keine Weiterleitungen,
+höchstens 10 MB pro Bild; bei der ersten Ablehnung (403/429/kein Bild) ist Schluss, was da ist, bleibt. Gespeichert
+wird als JPEG (max. 1024 px) unter `/data/media/<Inserat>/`; nach 60 Tagen löscht immobot die Bilder beim Start wieder.
+Unter Status steht, ob der letzte Webhook Bilder enthielt („Fredy schickt Bilder mit: ja/nein“) und der letzte
+Bilder-Fehler.
+
+- **Entwürfe** bekommen den vollen Text, die Ansprechperson (ImmoScout24) und so viele Fotos, wie unter „Fotos für
+  Claude pro Entwurf“ eingestellt (Einstellungen, 0–20, Standard 10). Jedes Foto kostet ca. 1.000 Tokens (≈ 0,1–4 ct je
+  nach Modell) und ist beschriftet („Bild 1: Grundriss“); Grundrisse kommen zuerst.
+- **Telegram:** „🖼 Bilder“ (bei Inseraten mit Galerie) schickt bis zu 10 Fotos als Album unter die immobot-Nachricht
+  (einmal pro Inserat). Das ist Telegrams Grenze pro Album und hat mit der Einstellung für Claude nichts zu tun.
   „🔗 Dashboard“ öffnet die Inseratseite.
-- **Dashboard:** Die Inseratseite zeigt alle Bilder, Details und Ansprechperson. Wurde noch nichts geladen oder ist
-  etwas schiefgegangen, gibt es „Bilder & Details laden“ bzw. „Erneut versuchen“. Fehlversuche wiederholt immobot
-  nicht selbst; der letzte Fehler steht unter Status.
+- **Dashboard:** Die Inseratseite zeigt alle Bilder mit ihrer Quelle („Bilder von Fredy“ / „von ImmoScout24 geladen“),
+  Details und Ansprechperson. Solange nichts geladen ist oder etwas schiefging, gibt es „Bilder laden“ bzw.
+  „Erneut versuchen“. Fehlversuche wiederholt immobot nicht selbst.
 
 Die Adresse für „🔗 Dashboard“ merkt sich immobot aus deinen Dashboard-Aufrufen und aus Fredys Webhook. Fest einstellen
 lässt sie sich mit der optionalen Env-Variable `IMMOBOT_PUBLIC_URL` (z. B. `https://immobot.example.de`). Adressen wie

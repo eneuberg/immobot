@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import bot, db, is24, vault, web
+from . import bot, db, media, vault, web
 from .config import load_config
 from .web import router, security_headers
 
@@ -23,8 +23,8 @@ config = load_config()
 async def lifespan(app: FastAPI):
     db.init_db(config.data_dir)
     vault.init(config.session_secret, config.env_credentials())  # before anything reads a credential
-    is24.init(config.data_dir)
-    is24.cleanup_old_media()  # pictures of listings older than 60 days
+    media.init(config.data_dir)
+    media.cleanup_old_media()  # pictures of listings older than 60 days
     bot.init_public_url(config.public_url)
     if not config.disable_bot:
         await bot.start()

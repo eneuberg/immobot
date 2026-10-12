@@ -1,4 +1,4 @@
-"""Image helper shared by the LLM (Fredy's single image) and the ImmoScout24 gallery (is24.py):
+"""Image helper shared by the LLM (Fredy's single image) and the listing galleries (media.py):
 decode foreign image data safely, shrink it and re-encode it as JPEG."""
 
 import io

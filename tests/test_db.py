@@ -140,7 +140,8 @@ def test_migration_of_a_database_from_the_previous_version(tmp_path):
         listing_columns = {r["name"] for r in conn.execute("PRAGMA table_info(listings)")}
         media_columns = {r["name"] for r in conn.execute("PRAGMA table_info(listing_media)")}
     assert {"details", "contact_name", "media_fetched_at", "media_error", "album_message_id", "album_sent_at"} <= listing_columns
-    assert media_columns == {"listing_id", "position", "caption", "source_url", "file"}
+    assert media_columns == {"listing_id", "position", "caption", "source_url", "file", "floor_plan"}
+    assert "media_source" in listing_columns
     assert db.get_listing(1)["media_fetched_at"] is None and db.list_media(1) == []
     (old,) = db.list_drafts(1)
     assert (old["provider"], old["currency"], old["cost_native"], old["cost_usd"]) == ("anthropic", "USD", 0.042, 0.042)

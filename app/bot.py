@@ -12,7 +12,8 @@ undecryptable one means nobody may. "/pair CODE" is handled completely inside th
 _pair) and never reaches the other handlers; strangers with a wrong code get no answer at all.
 All listing and draft text is HTML-escaped. The bot token is never logged.
 
-ImmoScout24 listings get a "🖼 Bilder" button: it sends the pictures stored by is24.py as one album
+Listings with a gallery (pictures from Fredy, or ImmoScout24 with the own fetch switched on, see media.py) get
+a "🖼 Bilder" button: it sends the stored pictures as one album
 (uploaded bytes, max 10) under the listing's message. Every listing gets a "🔗 Dashboard" link when the
 dashboard's public address is known (IMMOBOT_PUBLIC_URL, else remembered from dashboard requests).
 
@@ -47,7 +48,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import db, is24, llm, portals, settings, vault
+from . import db, llm, media, portals, settings, vault
 
 log = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ PAIR_NEEDS_USER = ("⚠️ Bitte von einem normalen Telegram-Konto aus koppeln (
 NOT_OWNER = "Nur für den Besitzer dieses Bots."
 LOADING_PICTURES = "⏳ lade Bilder …"
 PICTURES_ALREADY_SENT = "Bilder sind schon oben ↑"
-NO_PICTURES_HERE = "Bilder gibt es nur für ImmoScout24-Inserate."
+NO_PICTURES_HERE = "Für dieses Inserat gibt es keine Bildergalerie."
 ALBUM_MAX = 10  # Telegram's limit per album
 CAPTION_MAX = 1024  # Telegram's limit per caption
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
@@ -145,9 +146,9 @@ def header(listing: dict) -> str:
 
 
 def _links_row(listing: dict) -> list[InlineKeyboardButton]:
-    """"🖼 Bilder" (ImmoScout24 only) and "🔗 Dashboard" (if the public address is known)."""
+    """"🖼 Bilder" (if the listing has a gallery) and "🔗 Dashboard" (if the public address is known)."""
     row = []
-    if is24.is_supported(listing):
+    if media.has_gallery(listing):
         row.append(_button("🖼 Bilder", "img", listing["id"]))
     url = dashboard_url(listing["id"])
     if url:
@@ -571,7 +572,7 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def _send_pictures(tg_bot, listing: dict, query) -> None:
     """"🖼 Bilder": the stored pictures (fetched on first use) as one album, as a reply to the listing's message."""
     listing_id = listing["id"]
-    if not is24.is_supported(listing):
+    if not media.has_gallery(listing):
         await _answer(query, NO_PICTURES_HERE)
         return
     if listing.get("album_message_id"):
@@ -583,7 +584,7 @@ async def _send_pictures(tg_bot, listing: dict, query) -> None:
     _sending_albums.add(listing_id)
     try:
         await _answer(query, LOADING_PICTURES)
-        pictures = is24.read_pictures(listing_id, await is24.ensure_media(listing_id, retry=True))
+        pictures = media.read_pictures(listing_id, await media.ensure_media(listing_id, retry=True))
         fresh = db.get_listing(listing_id) or listing
         if not pictures:
             await _show(tg_bot, fresh, note="Bilder: " + (fresh.get("media_error") or "keine gefunden."))

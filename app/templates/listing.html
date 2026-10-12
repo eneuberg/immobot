@@ -48,14 +48,17 @@
   </div>
 </article>
 
-{% if is24 %}
-{# ImmoScout24 pictures: stored under DATA_DIR/media, served by /listing/{id}/media/{position} behind login. #}
+{% if gallery %}
+{# Pictures from Fredy or ImmoScout24 (media.py): stored under DATA_DIR/media, served by
+   /listing/{id}/media/{position} behind login. #}
 <section id="bilder">
   <div class="section-head">
-    <h2>Bilder <span class="count">{{ media|length }}</span></h2>
-    {% if not listing.media_fetched_at or listing.media_error %}
+    <h2>Bilder <span class="count">{{ media|length }}</span>
+      {% if media_source_label %}<small class="muted">{{ media_source_label }}</small>{% endif %}</h2>
+    {% if can_load_media %}
     <form method="post" action="/listing/{{ listing.id }}/media" data-once>
-      <button type="submit" class="secondary">{{ "Erneut versuchen" if listing.media_error else "Bilder & Details laden" }}</button>
+      <button type="submit" class="secondary">{% if listing.media_error %}Erneut versuchen
+        {%- elif media_source == "is24" %}Bilder &amp; Details laden{% else %}Bilder laden{% endif %}</button>
     </form>
     {% endif %}
   </div>
@@ -71,8 +74,9 @@
     {% endfor %}
   </div>
   {% endif %}
-  {% if not listing.media_fetched_at or listing.media_error %}
-  <p class="help">Holt das Exposé und alle Bilder von ImmoScout24 (einige Sekunden).</p>
+  {% if can_load_media %}
+  <p class="help">{% if media_source == "is24" %}Holt das Exposé und alle Bilder von ImmoScout24 (einige Sekunden).
+    {%- else %}Lädt die Bilder, die Fredy mitgeschickt hat (einige Sekunden).{% endif %}</p>
   {% endif %}
 </section>
 {% endif %}

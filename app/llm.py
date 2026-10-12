@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 import anthropic
 import httpx
 
-from . import db, images, is24, vault
+from . import db, images, media, vault
 from .portals import provider_label, safe_url
 from .settings import (
     DEFAULT_SYSTEM_PROMPT, DRAFT_KINDS, EFFORTS, PRICES, PROVIDERS, as_bool, as_float, as_int, cost, fmt_eur, fmt_money,
@@ -224,7 +224,7 @@ def build_user_text(listing: dict, kind: str, previous_text: str | None = None, 
     if listing.get("contact_name"):
         fields.append(("Ansprechperson", listing["contact_name"]))
     lines = [name + ": " + str(value).strip() for name, value in fields if value and str(value).strip()]
-    # The full ImmoScout24 exposé text when we have it (is24.py), else Fredy's description.
+    # The full ImmoScout24 exposé text when we have it (media.py), else Fredy's description.
     description = (listing.get("details") or listing.get("description") or "").strip()[:DESCRIPTION_MAX_CHARS]
     lines.append("Beschreibung:\n" + (description or "(keine Beschreibung)"))
     parts = ["<inserat>\n" + "\n".join(lines) + "\n</inserat>"]
@@ -516,11 +516,12 @@ async def create_and_store_draft(listing_id: int, kind: str, instruction: str | 
         previous = db.latest_draft(listing_id)
         previous_text = previous["text"] if previous else None
 
-    # ImmoScout24: exposé details and pictures, fetched once, then from the local copies. [] for other portals
-    # or when nothing could be fetched - then Fredy's single image is used (pictures=None).
-    rows = await is24.ensure_media(listing_id)
-    listing = db.get_listing(listing_id) or listing
-    pictures = is24.read_pictures(listing_id, rows[:max_images(settings)]) if rows else None
+    # Pictures from Fredy or ImmoScout24 (media.py), fetched once, then from the local copies. [] when there are
+    # none or nothing could be fetched - then Fredy's single image is used (pictures=None).
+    want_images = as_bool(settings.get("send_image")) and max_images(settings) > 0
+    rows = await media.ensure_media(listing_id, want_images=want_images)
+    listing = db.get_listing(listing_id) or listing  # may have gained the ImmoScout24 details text
+    pictures = media.read_pictures(listing_id, rows[:max_images(settings)]) if rows else None
 
     result = await generate_draft(listing, settings, kind, previous_text, instruction, pictures)
     draft_id = db.add_draft(
