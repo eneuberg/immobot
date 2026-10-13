@@ -450,6 +450,42 @@ def test_propose_rules_without_call(lid, client):
         asyncio.run(learning.propose_rules(open_one["id"]))
 
 
+def test_note_from_fertig_counts_like_a_critique(lid, client):
+    """A critique typed in the editor but not sent before "Fertig" is kept as a note: it goes to the rule proposals
+    and the profile rewrite, but it isn't a Claude call (daily limit) and starts a new rule round when added."""
+    draft = db.add_draft(lid, "initial", "Guten Tag. Ich bin Erika.", "claude-opus-5-5")
+    session = learning.open_or_create_session(lid)
+    assert session["base_draft_id"] == draft
+    session = learning.finish(session["id"], "Hallo. Ich bin Erika, 34.", note="  Den Balkon\nnicht erwähnen ")
+    (note,) = db.list_feedback(session_id=session["id"])
+    assert (note["kind"], note["source"], note["text"], note["before_text"]) == (
+        "note", "editor", "Den Balkon nicht erwähnen", "Hallo. Ich bin Erika, 34.")
+    assert learning.editor_calls_today(lid) == 0
+    assert [f["id"] for f in learning.session_critiques(session["id"])] == [note["id"]]
+    client.responses.append(rules_answer())
+    asyncio.run(learning.propose_rules(session["id"]))
+    assert "<kritik>\n- „Den Balkon nicht erwähnen“\n</kritik>" in client.calls[0]["messages"][0]["content"]
+    assert learning.finish(learning.reopen(session["id"])["id"], "Hallo. Ich bin Erika, 34.", note=" ")
+    assert len(db.list_feedback(session_id=session["id"])) == 1  # an empty field adds nothing
+
+
+def test_rule_round_state(lid, client):
+    unchanged = done_session(lid, original="Gleich.", final="Gleich.")
+    assert learning.rule_round_state(unchanged) == "nothing"
+    db.add_feedback(lid, "editor", "note", "Kürzer", session_id=unchanged["id"], before_text="Gleich.")
+    assert learning.rule_round_state(unchanged) == "due"  # a note is something to learn from
+    other = db.insert_listing({**LISTING, "fredy_id": "L2"})[0]
+    session = done_session(other)
+    assert learning.rule_round_state(session) == "due"  # no round yet (e.g. a restart cut the call off)
+    client.responses.append(rules_answer())
+    asyncio.run(learning.propose_rules(session["id"]))
+    assert learning.rule_round_state(db.get_session(session["id"])) == "done"
+    db.update_settings({"use_rules": "0"})
+    assert learning.rule_round_state(db.get_session(session["id"])) == "off"
+    db.update_settings({"use_rules": "1"})
+    assert learning.rule_round_state(learning.reopen(session["id"])) == "off"  # open again
+
+
 def test_new_round_of_rule_proposals_after_more_changes(lid, client):
     session = done_session(lid)
     client.responses += [rules_answer(("add", None, "Regel eins.", "a")), rules_answer(("add", None, "Regel zwei.", "b"))]
@@ -560,10 +596,29 @@ def test_rewrite_needs_enough_feedback(lid, client):
     assert not learning.rewrite_status()["enabled"]
     done_session(lid)  # a finished session with changes counts as feedback too
     assert learning.rewrite_status()["enabled"]
+    status = learning.rewrite_status()
+    assert status["enabled"] and not status["suggested"]  # possible, but not much yet: one quiet line
     db.mark_feedback_processed([f["id"] for f in db.list_feedback()], db.latest_version()["id"])
-    db.add_rule("Regel.", status="active")
-    assert learning.rewrite_status()["enabled"]  # one active rule is enough
+    db.mark_sessions_processed([s["id"] for s in db.unprocessed_sessions()], db.latest_version()["id"])
+    for n in range(learning.REWRITE_MIN_RULES):
+        assert not learning.rewrite_status()["enabled"]  # a single rule isn't worth a rewrite
+        db.add_rule(f"Regel {n}.", status="active")
+    assert learning.rewrite_status()["enabled"]
     assert client.calls == []
+
+
+def test_rewrite_is_suggested_when_there_is_plenty(lid):
+    for _ in range(learning.REWRITE_SUGGEST_AT - 1):
+        db.add_feedback(lid, "telegram", "quick", "shorter")
+    status = learning.rewrite_status()
+    assert status["enabled"] and not status["suggested"]
+    db.add_feedback(lid, "telegram", "quick", "shorter")
+    assert learning.rewrite_status()["suggested"]
+    db.mark_feedback_processed([f["id"] for f in db.list_feedback()], db.latest_version()["id"])
+    for n in range(learning.REWRITE_SUGGEST_RULES):
+        assert not learning.rewrite_status()["suggested"]
+        db.add_rule(f"Regel {n}.", status="active")
+    assert learning.rewrite_status()["suggested"]
 
 
 def setup_rewrite(lid):
@@ -636,7 +691,7 @@ def test_apply_rewrite(lid, client):
     assert values["system_prompt"].endswith("\nNenne kein Einzugsdatum.")
     assert values["profile"] == "Name: Erika\nAlter: 33" and values["target_words"] == "110"
     version = db.get_version(result["version_id"])
-    assert (version["source"], version["note"], version["data"]) == ("feedback", "3 Änderungen aus Feedback", values)
+    assert (version["source"], version["note"], version["data"]) == ("feedback", "3 Änderungen aus Rückmeldungen", values)
     decisions = {edit["id"]: edit["decision"] for edit in result["proposal"]["edits"]}
     assert decisions == {1: "accepted", 2: "accepted", 3: "rejected", 4: "accepted"}
     assert result["proposal"]["status"] == "accepted" and result["proposal"]["applied_version_id"] == version["id"]
@@ -655,7 +710,8 @@ def test_apply_rewrite(lid, client):
     with pytest.raises(learning.LearningError, match="schon entschieden"):
         learning.apply_rewrite(proposal["id"], [3])
     # The rejected edit is remembered for the next proposal.
-    db.add_rule("Andere Regel.", status="active")
+    for n in range(learning.REWRITE_MIN_RULES):
+        db.add_rule(f"Andere Regel {n}.", status="active")
     client.responses.append(rewrite_answer())
     asyncio.run(learning.propose_rewrite())
     assert "- Änderung an profile: „Alter: 33“ → „Alter: 34“" in client.calls[-1]["messages"][0]["content"]

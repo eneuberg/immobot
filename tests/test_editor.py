@@ -168,12 +168,14 @@ def test_link_error_pages(client, lid):
     check(client.get(path, params={**login_params(), "username": "mallory"}), 400, ["Anmeldung ungültig"])
     check(from_telegram(client, lid, path, auth_date=int(time.time()) - 3600), 410, ["10 Minuten"])
     check(from_telegram(client, lid, path, user_id=2002), 403, ["Kein Zugriff"])
-    params = login_params(auth_date=int(time.time()) - 7)
+    used_at = int(time.time()) - 7
+    params = login_params(auth_date=used_at)
     assert client.get(path, params=params).status_code == 303
     client.cookies.clear()
     check(client.get(path, params=params), 410, ["Link schon benutzt", "kopierte oder weitergeleitete"])
     vault.clear("telegram_allowed_user_ids")
-    check(from_telegram(client, lid, path, auth_date=int(time.time()) - 8), 403,
+    # another auth_date than above in any case (time.time() may have moved on a second): else "schon benutzt"
+    check(from_telegram(client, lid, path, auth_date=used_at - 1), 403,
           ["Erst erlaubte User-IDs eintragen", "Erlaubte Telegram-User-IDs"])
     vault.set("telegram_allowed_user_ids", str(USER))
     old = editor_access.make_editor_path(lid, now=time.time() - DAY - 600)  # first used more than a day ago
@@ -294,7 +296,12 @@ def test_revise_with_critique_and_history(client, lid, fake_generate):
     assert "„Kürzer bitte“" in page and "Claudes Entwurf" in page  # history
     assert "Codewort Linde" in page  # Claude's hint for this text
     assert "Es gibt einen neueren Entwurf" not in page  # its own revision isn't a newer draft
-    assert "Heute 1 von 30" in page
+    assert "Claude-Aufrufen" not in page  # the daily count only shows when the limit comes near
+    editor.CALLS_SHOWN_FROM, shown_from = 1, editor.CALLS_SHOWN_FROM
+    try:
+        assert "Heute schon 1 von 30 Claude-Aufrufen" in client.get(f"/editor/{lid}").text
+    finally:
+        editor.CALLS_SHOWN_FROM = shown_from
 
     db.update_settings({"monthly_budget_eur": "0.001"})
     r = post(client, lid, "revise", fields, text="Fassung von Claude 1", critique="Förmlicher")
@@ -362,6 +369,56 @@ def test_finish_proposes_rules_in_the_background(client, lid, fake_rules):
     assert "Nenne nie ein Einzugsdatum." in page and "verworfen" in page  # decided ones listed
     r = post(client, lid, f"rules/{update['id']}", fields, decision="accept")
     assert r.status_code == 400 and "schon entschieden" in r.text
+
+
+def test_unsent_critique_on_fertig_is_kept(client, lid, fake_rules):
+    """Critique typed, "Überarbeiten lassen" not pressed, then "Fertig": not dropped, but kept as a note for
+    learning, and the page says so."""
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    editor_cookie(client, lid)
+    _, fields = open_editor(client, lid)
+    r = post(client, lid, "finish", fields, text="Endversion", critique=" Den Balkon nicht erwähnen ")
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=done_note#ende"
+    session = db.latest_session(lid)
+    (note,) = db.list_feedback(session_id=session["id"])
+    assert (note["kind"], note["text"]) == ("note", "Den Balkon nicht erwähnen")
+    assert wait_for_rules(client, lid) == "done"
+    page = client.get(r.headers["location"]).text
+    assert "hat Claude nicht mehr umgesetzt" in page and "als Rückmeldung gespeichert" in page
+    assert "„Den Balkon nicht erwähnen“" in page and "nicht an Claude geschickt" in page  # in the Verlauf
+    assert "Fassung" not in page.split('class="ed-history"')[1]  # no numbered Fassung for it
+
+
+def test_finished_session_without_proposals_offers_to_ask(client, lid, fake_rules):
+    """After a restart the background job is gone: a finished session with nothing proposed for its final version
+    offers "Regeln vorschlagen lassen" instead of claiming there are none."""
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    login(client)
+    _, fields = open_editor(client, lid)
+    session_id = int(fields["session_id"])
+    learning.finish(session_id, "Geändert")  # finished, but no rule round (like a job lost in a restart)
+    page = client.get(f"/editor/{lid}").text
+    assert "Für diese Endversion hat Claude noch keine Regeln vorgeschlagen." in page
+    assert f'action="/editor/{lid}/rules/retry"' in page and "Regeln vorschlagen lassen" in page
+    r = post(client, lid, "rules/retry", fields)
+    assert r.status_code == 303 and wait_for_rules(client, lid) == "done" and fake_rules == [session_id]
+    page = client.get(f"/editor/{lid}").text
+    assert "Nenne kein Einzugsdatum.</textarea>" in page and "Regeln vorschlagen lassen" not in page
+
+
+@pytest.mark.parametrize("final,basis,shown", [
+    ("Original", None, "Du hast Claudes Entwurf unverändert übernommen"),
+    ("Geändert", "same", "Claude hat in dieser Runde keine allgemeine Regel gefunden."),
+])
+def test_finished_session_says_why_there_are_no_proposals(client, lid, final, basis, shown):
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    login(client)
+    _, fields = open_editor(client, lid)
+    session = learning.finish(int(fields["session_id"]), final)
+    if basis:  # a round was made and found nothing
+        db.update_session(session["id"], rules_basis=learning._rules_basis(session, []))
+    page = client.get(f"/editor/{lid}").text
+    assert shown in page and "Regeln vorschlagen lassen" not in page
 
 
 def test_rules_of_other_sessions_are_out_of_reach(client, lid):

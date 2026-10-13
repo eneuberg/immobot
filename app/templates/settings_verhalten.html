@@ -7,7 +7,10 @@
 {% if r.listing_id %}aus <a href="/listing/{{ r.listing_id }}">„{{ r.listing_title or "(ohne Titel)" }}“</a> · {% endif %}{{ r.created_at|local_time }}
 {%- endmacro %}
 
-{% macro card_flash(name) %}{% if card == name and card_message %}<div class="flash ok" role="status">{{ card_message }}</div>{% endif %}{% endmacro %}
+{% macro card_flash(name) %}{% if card == name and card_message %}<div class="flash ok" role="status"><span>{{ card_message }}</span>
+  {%- if name == "beispiele" and undo_example %}
+  <form method="post" action="/settings/examples/{{ undo_example }}/on" class="flash-dismiss"><button type="submit" class="linkish">Rückgängig</button></form>
+  {%- endif %}</div>{% endif %}{% endmacro %}
 
 {% block intro %}Wie Entwürfe entstehen, was sie kosten dürfen, wie sich der Bot verhält – und was Claude dazulernt.{% endblock %}
 
@@ -77,7 +80,8 @@
   <article id="lernen" class="setting-card">
     <h2>Lernen</h2>
     <p class="help">Claude lernt aus deinen Endversionen im 📝 Editor und aus Regeln, die du freigibst – ohne Training.
-      Beides steht in Claudes Anweisungen für jeden neuen Entwurf.</p>
+      Beides steht in Claudes Anweisungen für jeden neuen Entwurf. Gesammelte Rückmeldungen kann Claude außerdem
+      <a href="/settings#verbessern">ins Profil einarbeiten</a>.</p>
     <label class="check">
       <input type="checkbox" role="switch" name="use_examples" value="1" {% if values.use_examples|as_bool %}checked{% endif %}>
       <span>Endversionen als Stil-Beispiele nutzen <small>Deine {{ example_count }} neuesten fertigen Texte aus dem Editor zeigen Claude Ton, Aufbau und Länge.</small></span>
@@ -86,8 +90,8 @@
       <input type="checkbox" role="switch" name="use_rules" value="1" {% if values.use_rules|as_bool %}checked{% endif %}>
       <span>Gelernte Regeln nutzen <small>Aktive Regeln gelten für jeden Entwurf. Nach „Fertig“ im Editor schlägt Claude neue vor.</small></span>
     </label>
-    <p class="learn-links"><a href="#vorlieben">{{ plural(rules_active, "aktive Regel", "aktive Regeln") }}</a>
-      {%- if rules_proposed %} · <a href="#vorlieben">{{ rules_proposed|length }} {{ "wartet" if rules_proposed|length == 1 else "warten" }} auf dich</a>{% endif %}
+    <p class="learn-links"><a href="#regeln">{{ plural(rules_active, "aktive Regel", "aktive Regeln") }}</a>
+      {%- if rules_proposed %} · <a href="#regeln">{{ rules_proposed|length }} {{ "wartet" if rules_proposed|length == 1 else "warten" }} auf dich</a>{% endif %}
       · <a href="#beispiele">{{ plural(examples|length, "Beispiel", "Beispiele") }}</a></p>
   </article>
 
@@ -98,12 +102,12 @@
 </form>
 
 {# ---- Lernen: learned rules (each action is its own small form) ---- #}
-<article id="vorlieben" class="setting-card">
+<article id="regeln" class="setting-card">
   <div class="card-title">
     <h2>Gelernte Regeln</h2>
     <span class="badge{% if rules_active >= max_rules %} warn{% endif %}">{{ rules_active }} von {{ max_rules }} aktiv</span>
   </div>
-  {{ card_flash("vorlieben") }}
+  {{ card_flash("regeln") }}
   {% if not values.use_rules|as_bool %}
   <div class="callout info"><span>Regeln werden gerade nicht genutzt („Gelernte Regeln nutzen“ ist aus). Sie bleiben gespeichert.</span></div>
   {% endif %}
@@ -145,6 +149,8 @@
   {% endif %}
 
   {% if rules_in_use %}
+  {% if rules_proposed %}<h3 class="rule-list-title">Deine Regeln</h3>{% endif %}
+  <p class="help">Gelten für jeden neuen Entwurf. Die Schalter hier speichern sofort.</p>
   <ul class="rule-list">
     {% for r in rules_in_use %}
     <li class="rule{% if r.status == 'inactive' %} is-off{% endif %}" id="regel-{{ r.id }}">
@@ -153,8 +159,8 @@
         {# The switch saves itself (app.js, data-autosubmit); without JS the small button does. #}
         <form class="rule-toggle" method="post" action="/settings/rules/{{ r.id }}/active">
           <label><input type="checkbox" role="switch" name="active" value="1" data-autosubmit
-            {% if r.status == "active" %}checked{% endif %}> wird genutzt</label>
-          <button type="submit" class="linkish nojs-only">übernehmen</button>
+            {% if r.status == "active" %}checked{% endif %}> {{ "wird genutzt" if r.status == "active" else "abgeschaltet" }}</label>
+          <button type="submit" class="linkish nojs-only">speichern</button>
         </form>
         <span class="rule-meta">{{ origin(r) }}</span>
       </div>
@@ -224,15 +230,37 @@
         <pre class="draft">{{ e.final_text }}</pre>
       </details>
       <form method="post" action="/settings/examples/{{ e.id }}/off">
-        <button type="submit" class="secondary outline btn-sm"
-          data-confirm="Diese Endversion nicht mehr als Beispiel nutzen?">Nicht mehr als Beispiel nutzen</button>
+        <button type="submit" class="secondary outline btn-sm">Nicht mehr als Beispiel nutzen</button>
       </form>
     </li>
     {% endfor %}
   </ul>
   {% if examples_waiting %}<p class="help">{{ plural(examples_waiting, "weitere Endversion rückt", "weitere Endversionen rücken") }} nach, wenn du ein Beispiel entfernst.</p>{% endif %}
+  {% elif examples_off %}
+  <p class="empty-line">Gerade wird keine Endversion als Beispiel genutzt.</p>
   {% else %}
   <p class="empty-line">Noch keine. Sobald du im 📝 Editor auf „Fertig“ drückst, wird deine Endversion zum Beispiel.</p>
+  {% endif %}
+
+  {% if examples_off %}
+  <details class="disclosure"{% if card == "beispiele" and not examples %} open{% endif %}>
+    <summary>Nicht mehr als Beispiel genutzt <span class="count">{{ examples_off|length }}</span></summary>
+    <div class="disclosure-body">
+      <ul class="rule-list compact">
+        {% for e in examples_off %}
+        <li class="rule is-off" id="beispiel-{{ e.id }}">
+          <p class="rule-text"><a href="/listing/{{ e.listing_id }}">{{ e.listing_title or "(ohne Titel)" }}</a></p>
+          <div class="rule-foot">
+            <span class="rule-meta">fertig am {{ e.finished_at|local_time }}</span>
+            <form method="post" action="/settings/examples/{{ e.id }}/on">
+              <button type="submit" class="linkish">Wieder als Beispiel nutzen</button>
+            </form>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </details>
   {% endif %}
 </article>
 {% endblock %}

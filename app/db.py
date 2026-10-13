@@ -20,7 +20,7 @@ Learning (see learning.py; the current profile itself stays in `settings`):
   feedback           critiques and quick buttons ("Kürzer", ...) from editor, Telegram and dashboard; never test drafts
   learned_rules      rules proposed on "Fertig" and their decisions (proposed / active / inactive / rejected / merged /
                      replaced); update and remove proposals point at their rule with replaces_rule_id
-  rewrite_proposals  "Profil aus Feedback verbessern": a list of small edits to the profile and what became of them
+  rewrite_proposals  "Aus Rückmeldungen verbessern": a list of small edits to the profile and what became of them
   llm_usage          tokens and cost of the learning calls (rules, rewrite); counts toward budget and totals like drafts
 
 Editor access from Telegram (see editor_access.py):
@@ -808,14 +808,15 @@ def update_session(session_id: int, **fields) -> None:
     _update("edit_sessions", SESSION_UPDATE_COLUMNS | {"updated_at"}, session_id, {**fields, "updated_at": now_iso()})
 
 
-def example_sessions(limit: int | None = 3) -> list[dict]:
+def example_sessions(limit: int | None = 3, use: bool = True) -> list[dict]:
     """Done sessions marked use_as_example, newest finished first, with listing_title / listing_address
-    (the "## Beispiele" in the system prompt and the list of used examples)."""
+    (the "## Beispiele" in the system prompt and the list of used examples). use=False: the ones taken out with
+    "Nicht mehr als Beispiel nutzen" (Verhalten → Beispiele, to switch them on again)."""
     sql = (f"SELECT s.*, {_LISTING_INFO} FROM edit_sessions s JOIN listings l ON l.id = s.listing_id "
-           "WHERE s.status = 'done' AND s.use_as_example = 1 AND TRIM(COALESCE(s.final_text, '')) != '' "
+           "WHERE s.status = 'done' AND s.use_as_example = ? AND TRIM(COALESCE(s.final_text, '')) != '' "
            "ORDER BY s.finished_at DESC, s.id DESC" + (" LIMIT ?" if limit else ""))
     with connect() as conn:
-        return [dict(r) for r in conn.execute(sql, (limit,) if limit else ())]
+        return [dict(r) for r in conn.execute(sql, (1 if use else 0, limit) if limit else (1 if use else 0,))]
 
 
 def unprocessed_sessions(limit: int | None = None) -> list[dict]:
@@ -840,8 +841,9 @@ def mark_sessions_processed(session_ids: list[int], version_id: int) -> None:
 
 def add_feedback(listing_id: int, source: str, kind: str, text: str, *, session_id: int | None = None,
                  before_text: str | None = None) -> int:
-    """source: editor | telegram | dashboard; kind: critique (text = the critique verbatim) or quick
-    (text = shorter | formal | regenerate). before_text: the text the critique was about (editor only)."""
+    """source: editor | telegram | dashboard; kind: critique (text = the critique verbatim), quick
+    (text = shorter | formal | regenerate) or note (editor: a critique typed but not sent to Claude before "Fertig").
+    before_text: the text the critique was about (editor only)."""
     with connect() as conn:
         cur = conn.execute(
             """INSERT INTO feedback (listing_id, session_id, source, kind, text, before_text, created_at)
@@ -891,10 +893,12 @@ def mark_feedback_processed(feedback_ids: list[int], version_id: int) -> None:
                      "AND processed_version_id IS NULL", [version_id, *feedback_ids])
 
 
-def count_feedback_since(listing_id: int, source: str, since_iso: str) -> int:
+def count_feedback_since(listing_id: int, source: str, since_iso: str, kind: str | None = None) -> int:
+    sql = "SELECT COUNT(*) FROM feedback WHERE listing_id = ? AND source = ? AND created_at >= ?"
     with connect() as conn:
-        return conn.execute("SELECT COUNT(*) FROM feedback WHERE listing_id = ? AND source = ? AND created_at >= ?",
-                            (listing_id, source, since_iso)).fetchone()[0]
+        if kind is None:
+            return conn.execute(sql, (listing_id, source, since_iso)).fetchone()[0]
+        return conn.execute(sql + " AND kind = ?", (listing_id, source, since_iso, kind)).fetchone()[0]
 
 
 # --- learned rules --------------------------------------------------------------

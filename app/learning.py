@@ -36,7 +36,10 @@ MAX_PROPOSED_RULES = 3
 MAX_ACTIVE_RULES = 25
 RULES_MERGE_HINT_AT = 15  # from this many active rules, suggest merging them into the profile
 RULES_DECLINED_MAX = 15  # rejected / switched-off rules shown to the rule proposer
-REWRITE_MIN_FEEDBACK = 3  # feedback rows + finished sessions needed for a rewrite (or one active rule)
+REWRITE_MIN_FEEDBACK = 3  # feedback rows + finished sessions needed for a rewrite ...
+REWRITE_MIN_RULES = 3  # ... or this many active rules
+REWRITE_SUGGEST_AT = 10  # from this much feedback (rows + sessions) the Profil tab suggests a rewrite with a card ...
+REWRITE_SUGGEST_RULES = 8  # ... or from this many active rules (below: one quiet line)
 REVIEW_FEEDBACK_MAX = 30
 REVIEW_SESSIONS_MAX = 15
 REVIEW_DECLINED_MAX = 20
@@ -52,7 +55,7 @@ VERSION_SOURCE_LABELS = {
     "initial": "Ausgangsstand",
     "manual": "gespeichert",
     "reset": "auf Standard zurückgesetzt",
-    "feedback": "aus Feedback",
+    "feedback": "aus Rückmeldungen",
     "restore": "wiederhergestellt",
 }
 RULE_STATUS_LABELS = {
@@ -64,6 +67,9 @@ RULE_STATUS_LABELS = {
     "replaced": "ersetzt",
 }
 FEEDBACK_SOURCE_LABELS = {"editor": "Editor", "telegram": "Telegram", "dashboard": "Dashboard"}
+# Feedback kinds that are words of the user (not a quick button): "critique" (sent to Claude in the editor, or an
+# "Anpassen" text) and "note" (typed into the editor's critique field but not sent before "Fertig").
+CRITIQUE_KINDS = ("critique", "note")
 QUICK_LABELS = {"shorter": "Kürzer", "formal": "Förmlicher", "regenerate": "Neu"}
 FIELD_LABELS = {"system_prompt": "System-Prompt", "profile": "Über mich", "wishes": "Wünsche", "style": "Schreibstil",
                 "target_words": "Ziellänge"}
@@ -189,9 +195,11 @@ def save_text(session_id: int, text: str) -> dict:
     return db.get_session(session_id)
 
 
-def finish(session_id: int, final_text: str) -> dict:
+def finish(session_id: int, final_text: str, note: str | None = None) -> dict:
     """"Fertig": store the final version (again after reopen: it is overwritten) and close the session.
-    Rule proposals are a separate call: propose_rules(session_id). Returns the session."""
+    `note`: a critique typed into the editor but not sent to Claude before "Fertig". It isn't lost: it is stored as
+    feedback (kind "note", before_text = the final text) and goes into the rule proposals and the next profile
+    rewrite like a critique. Rule proposals are a separate call: propose_rules(session_id). Returns the session."""
     session = _session(session_id, "open")
     text = _clean_text(final_text).strip()
     if not text:
@@ -200,6 +208,9 @@ def finish(session_id: int, final_text: str) -> dict:
     if text != session["final_text"]:  # a changed final version is new material for the next profile rewrite
         fields["processed_version_id"] = None
     db.update_session(session_id, **fields)
+    note = " ".join((note or "").split())[:llm.INSTRUCTION_MAX_CHARS]
+    if note:
+        db.add_feedback(session["listing_id"], "editor", "note", note, session_id=session_id, before_text=text)
     return db.get_session(session_id)
 
 
@@ -225,7 +236,8 @@ def set_session_example(session_id: int, use: bool) -> dict:
 def editor_calls_today(listing_id: int) -> int:
     """Claude calls through the editor for this listing within the last 24 hours (revisions and rule proposals)."""
     since = _since(24)
-    return db.count_feedback_since(listing_id, "editor", since) + db.count_llm_usage_since(listing_id, "rules", since)
+    return (db.count_feedback_since(listing_id, "editor", since, kind="critique")
+            + db.count_llm_usage_since(listing_id, "rules", since))
 
 
 def _check_editor_limit(listing_id: int) -> None:
@@ -413,6 +425,24 @@ def _rules_user_text(session: dict, listing: dict | None, critiques: list[dict],
     return "\n\n".join(parts)
 
 
+def session_critiques(session_id: int) -> list[dict]:
+    """The session's critiques sent to Claude and its note from "Fertig" (CRITIQUE_KINDS), oldest first."""
+    return [f for f in reversed(db.list_feedback(session_id=session_id)) if f["kind"] in CRITIQUE_KINDS]
+
+
+def rule_round_state(session: dict) -> str:
+    """What the editor can say about rule proposals for a session:
+    "off" (not done, or use_rules off), "nothing" (final text = Claude's original and no critique: nothing to learn),
+    "due" (propose_rules would ask Claude: the final text or the critiques changed since the last round, or there
+    was none yet, e.g. after a restart cut the background call off), "done" (a round was made for exactly this)."""
+    if session["status"] != "done" or not as_bool(db.get_settings().get("use_rules")):
+        return "off"
+    critiques = session_critiques(session["id"])
+    if (session["final_text"] or "").strip() == session["original_text"].strip() and not critiques:
+        return "nothing"
+    return "done" if session["rules_basis"] == _rules_basis(session, critiques) else "due"
+
+
 def _rules_basis(session: dict, critiques: list[dict]) -> str:
     """Fingerprint of what the rule proposals were made from: final text and critiques."""
     material = (session["final_text"] or "") + "\0" + ",".join(str(c["id"]) for c in critiques)
@@ -465,7 +495,7 @@ async def propose_rules(session_id: int) -> list[dict]:
     settings = db.get_settings()
     if not as_bool(settings.get("use_rules")):
         return []
-    critiques = list(reversed(db.list_feedback(session_id=session_id, kind="critique")))  # oldest first
+    critiques = session_critiques(session_id)
     if (session["final_text"] or "").strip() == session["original_text"].strip() and not critiques:
         return []
     basis = _rules_basis(session, critiques)
@@ -787,11 +817,13 @@ def get_proposal(proposal_id: int) -> dict | None:
 
 
 def rewrite_status() -> dict:
-    """For the card "Aus Feedback verbessern":
+    """For "Aus Rückmeldungen verbessern" on the Profil tab:
     feedback (unprocessed feedback rows), sessions (finished editor sessions with changes not yet processed),
-    rules (active rules), enabled (feedback + sessions >= REWRITE_MIN_FEEDBACK or rules >= 1),
+    rules (active rules), enabled (a proposal may be made: feedback + sessions >= REWRITE_MIN_FEEDBACK or
+    rules >= REWRITE_MIN_RULES), suggested (enough to be worth it, shown as a card instead of one quiet line:
+    feedback + sessions >= REWRITE_SUGGEST_AT, rules >= REWRITE_SUGGEST_RULES, or the merge hint),
     base_version (the latest profile version, "seit Version #x"), pending (the open proposal or None),
-    merge_hint (rules >= RULES_MERGE_HINT_AT), max_rules."""
+    merge_hint (rules >= RULES_MERGE_HINT_AT), max_rules, min_feedback, min_rules."""
     feedback, sessions, rules = db.count_unprocessed_feedback(), len(db.unprocessed_sessions()), db.count_rules("active")
     pending = next(iter(db.list_rewrite_proposals("pending", limit=1)), None)
     pending = get_proposal(pending["id"]) if pending else None
@@ -799,12 +831,21 @@ def rewrite_status() -> dict:
         "feedback": feedback,
         "sessions": sessions,
         "rules": rules,
-        "enabled": feedback + sessions >= REWRITE_MIN_FEEDBACK or rules >= 1,
+        "enabled": feedback + sessions >= REWRITE_MIN_FEEDBACK or rules >= REWRITE_MIN_RULES,
+        "suggested": (feedback + sessions >= REWRITE_SUGGEST_AT or rules >= REWRITE_SUGGEST_RULES
+                      or rules >= RULES_MERGE_HINT_AT),
         "base_version": db.latest_version(),
         "pending": pending if pending and pending["status"] == "pending" else None,
         "merge_hint": rules >= RULES_MERGE_HINT_AT,
         "max_rules": MAX_ACTIVE_RULES,
+        "min_feedback": REWRITE_MIN_FEEDBACK,
+        "min_rules": REWRITE_MIN_RULES,
     }
+
+
+def rewrite_threshold_text() -> str:
+    """'ab 3 Rückmeldungen oder 3 aktiven Regeln' (when a profile rewrite becomes possible)."""
+    return f"ab {REWRITE_MIN_FEEDBACK} Rückmeldungen oder {REWRITE_MIN_RULES} aktiven Regeln"
 
 
 async def propose_rewrite() -> dict:
@@ -815,15 +856,14 @@ async def propose_rewrite() -> dict:
     Raises LearningError (not enough feedback, already running), BudgetExceeded, LLMError."""
     global _rewrite_running
     if not rewrite_status()["enabled"]:
-        raise LearningError(f"Noch zu wenig Rückmeldungen – ab {REWRITE_MIN_FEEDBACK} Rückmeldungen oder einer "
-                            "aktiven Regel.")
+        raise LearningError(f"Noch zu wenig Rückmeldungen – möglich {rewrite_threshold_text()}.")
     if _rewrite_running:
         raise LearningError("Ein Vorschlag wird schon erstellt – bitte kurz warten.")
     settings = db.get_settings()
     db.snapshot_profile("manual", "vor dem Vorschlag erfasst")  # only if the values were changed without a version
     version, values = db.latest_version(), db.current_profile_values()
     feedback = db.list_feedback(unprocessed=True)
-    critiques = [f for f in feedback if f["kind"] == "critique"][:REVIEW_FEEDBACK_MAX]
+    critiques = [f for f in feedback if f["kind"] in CRITIQUE_KINDS][:REVIEW_FEEDBACK_MAX]
     quick = [f for f in feedback if f["kind"] == "quick"]
     quick_counts: dict[str, int] = {}
     for row in quick:
@@ -896,7 +936,7 @@ def apply_rewrite(proposal_id: int, accepted_edit_ids) -> dict:
     if applied:
         db.update_settings({key: values[key] for key in PROFILE_FIELDS})
         count = len(applied)
-        version_id = db.snapshot_profile("feedback", f"{count} Änderung{'' if count == 1 else 'en'} aus Feedback")
+        version_id = db.snapshot_profile("feedback", f"{count} Änderung{'' if count == 1 else 'en'} aus Rückmeldungen")
         if version_id is not None:
             db.merge_rules(covered, version_id)
     processed = version_id or db.latest_version()["id"]

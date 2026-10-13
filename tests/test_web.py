@@ -431,7 +431,7 @@ def test_settings_pages_render_all_fields(client):
             assert f'name="{name}"' in pages[section].text, key
             assert all(f'name="{name}"' not in r.text for other, r in pages.items() if other != section), key
     zugaenge = pages["zugaenge"].text
-    assert "Opus 5.5 – 4,00 $ / 20,00 $" in zugaenge and "Sonnet 5.5 – 3,30 € / 16,50 €" in zugaenge
+    assert "Opus 5.5 · 4 / 20 $" in zugaenge and "Sonnet 5.5 · 3,30 / 16,50 €" in zugaenge
     profil = pages["profil"].text  # the texts stay on their own tab, without keys or tokens around them
     assert "Über mich" in profil and "System-Prompt" in profil and "API-Key" not in profil and "Token" not in profil
     verhalten = pages["verhalten"].text
@@ -1434,7 +1434,7 @@ def test_switch_provider_with_the_settings_form(client, model_refreshes):
     page = client.get("/settings/zugaenge").text
     assert 'data-saved="deutschlandgpt"' in page and 'class="provider-panel is-active" data-provider-panel="deutschlandgpt"' in page
     assert "Noch kein DeutschlandGPT-API-Key hinterlegt" in provider_panel(page, "deutschlandgpt")
-    assert "3,30 € / 16,50 €" in page
+    assert "3,30 / 16,50 €" in page
     assert save_provider(client, "deutschlandgpt", "claude-opus-5.5").status_code == 303
     assert db.get_settings()["model"] == "claude-opus-5.5"
     assert save_provider(client, "anthropic", "claude-sonnet-5-5").status_code == 303  # its own panel's select

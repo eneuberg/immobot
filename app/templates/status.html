@@ -50,7 +50,7 @@
   {% if editor_login_error %}
   {% call tile("warn", "📝 Editor-Button") %}
     <p>Telegram hat den Button abgelehnt{% if editor_login_error.at %} ({{ editor_login_error.at|local_time }}){% endif %}: {{ editor_login_error.text }}</p>
-    <p>Meist fehlt die Domain beim Bot: in @BotFather <code>/setdomain</code> – <a href="/settings/zugaenge#editor-login">so geht's</a></p>
+    <p>Entwürfe kommen ohne den Button an. Meist fehlt die Domain beim Bot (@BotFather <code>/setdomain</code>) – <a href="/settings/zugaenge#editor-login">so geht's</a></p>
   {% endcall %}
   {% endif %}
 

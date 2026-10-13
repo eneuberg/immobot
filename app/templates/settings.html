@@ -1,5 +1,5 @@
 {# Einstellungen → Profil: what the drafts say about you and how they sound, every change as a version ("Verlauf"),
-   and improvements from feedback (card at the top, only when there is something to do). Nothing technical here. #}
+   and improvements from feedback ("Aus Rückmeldungen verbessern" at the top). Nothing technical here. #}
 {% extends "settings_base.html" %}
 {% from "macros.html" import draft_meta %}
 {% from "settings_macros.html" import field_error with context %}
@@ -41,12 +41,18 @@
 </article>
 {% endif %}
 
-{# ---- "Aus Feedback verbessern": a card when there is something to do, else one muted line ---- #}
+{# ---- "Aus Rückmeldungen verbessern": prominence follows what there is to do. A card while a proposal runs, waits,
+   failed or went stale, or once there is plenty of feedback (rewrite.suggested); otherwise one quiet line, with a
+   small button once a proposal is possible (rewrite.enabled). ---- #}
 {% set job_state = job.state if job else None %}
 {% set feedback_count = rewrite.feedback + rewrite.sessions %}
-{% if job_state in ("running", "failed") or rewrite.pending or rewrite.enabled or stale_proposal %}
-<article id="verbessern" class="setting-card rewrite-card{% if rewrite.pending or job_state == 'running' %} is-active{% endif %}">
-  <h2>Aus Feedback verbessern</h2>
+{% set counts -%}
+{{ plural(feedback_count, "Rückmeldung", "Rückmeldungen") }} und {{ plural(rewrite.rules, "aktive Regel", "aktive Regeln") }}
+{%- if rewrite.base_version %} seit Version #{{ rewrite.base_version.id }}{% endif %}
+{%- endset %}
+{% if job_state in ("running", "failed") or rewrite.pending or stale_proposal or (rewrite.enabled and rewrite.suggested) %}
+<article id="verbessern" class="setting-card rewrite-card{% if rewrite.pending or job_state == 'running' or not (job_state == 'failed' or stale_proposal) %} is-active{% endif %}">
+  <h2>Aus Rückmeldungen verbessern</h2>
   {% if job_state == "running" %}
   <p class="rewrite-busy"><span aria-busy="true" data-rewrite-poll="/settings/rewrite/status">Vorschlag wird erstellt …</span></p>
   <p class="help">Claude liest deine Rückmeldungen und sucht kleine Verbesserungen für dein Profil. Das dauert bis zu ein
@@ -68,8 +74,7 @@
   <div class="callout info"><span>Vorschlag #{{ stale_proposal.id }} passt nicht mehr, weil du das Profil danach geändert hast.
     Einfach einen neuen erstellen lassen.</span></div>
   {% endif %}
-  <p>{{ plural(feedback_count, "Rückmeldung", "Rückmeldungen") }} und {{ plural(rewrite.rules, "gelernte Regel", "gelernte Regeln") }}
-    {%- if rewrite.base_version %} seit Version #{{ rewrite.base_version.id }}{% endif %}.</p>
+  <p>{{ counts }}.{% if rewrite.suggested %} Genug, um dein Profil gezielt zu verbessern.{% endif %}</p>
   {% if rewrite.merge_hint %}<p class="help">Schon {{ rewrite.rules }} aktive Regeln – ein Vorschlag kann sie ins Profil einarbeiten.</p>{% endif %}
   {% if rewrite.enabled %}
   <form method="post" action="/settings/rewrite" data-once class="actions">
@@ -78,13 +83,20 @@
   <p class="help">Claude schlägt kleine Änderungen an deinem Profil vor; du entscheidest über jede einzeln.
     Dauert bis zu ein paar Minuten und kostet etwa so viel wie ein gründlicher Entwurf.</p>
   {% else %}
-  <p class="help">Möglich ab 3 Rückmeldungen oder einer aktiven Regel.</p>
+  <p class="help">Möglich {{ rewrite_threshold }}.</p>
   {% endif %}
   {% endif %}
 </article>
+{% elif rewrite.enabled %}
+<div class="rewrite-line" id="verbessern">
+  <small><strong>Aus Rückmeldungen verbessern:</strong> {{ counts }}. Lohnt sich meist ab etwa {{ rewrite_suggest_at }}
+    Rückmeldungen – ein Vorschlag geht aber schon jetzt.</small>
+  <form method="post" action="/settings/rewrite" data-once><button type="submit" class="linkish">Verbesserung vorschlagen</button></form>
+</div>
 {% else %}
-<p class="rewrite-line" id="verbessern"><small><strong>Aus Feedback verbessern:</strong> möglich ab 3 Rückmeldungen
-  (bisher {{ feedback_count }}) oder einer gelernten Regel – Rückmeldungen sammelt immobot aus „Kürzer“, „Anpassen“ und dem 📝 Editor.</small></p>
+<p class="rewrite-line" id="verbessern"><small><strong>Aus Rückmeldungen verbessern:</strong> möglich {{ rewrite_threshold }}
+  (bisher {{ plural(feedback_count, "Rückmeldung", "Rückmeldungen") }}, {{ plural(rewrite.rules, "Regel", "Regeln") }}).
+  Rückmeldungen sammelt immobot aus „Kürzer“, „Förmlicher“, „Neu“, „Anpassen“ und dem 📝 Editor.</small></p>
 {% endif %}
 
 <form id="settings-form" method="post" action="/settings">

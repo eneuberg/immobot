@@ -103,19 +103,27 @@ def test_profile_history_shows_the_newest_and_all_on_request(client, monkeypatch
     assert page.count('href="/settings/version/') == 3 and "Alle 4 Versionen zeigen" not in page
 
 
-# --- Profil: "Aus Feedback verbessern" -----------------------------------------------------------
+# --- Profil: "Aus Rückmeldungen verbessern" -----------------------------------------------------------
 
-def test_rewrite_card_only_when_there_is_something_to_do(client):
+def test_rewrite_prominence_follows_the_feedback(client):
+    """Nothing yet: a quiet line with the threshold. Possible but little: a quiet line with a small button.
+    Plenty: a card with the main button. A proposal waiting: a card with "Vorschlag ansehen"."""
     login(client)
     page = client.get("/settings").text
-    assert 'class="rewrite-line"' in page and "möglich ab 3 Rückmeldungen" in page and "(bisher 0)" in page
-    assert 'action="/settings/rewrite"' not in page
+    assert 'class="rewrite-line"' in page and "möglich ab 3 Rückmeldungen oder 3 aktiven Regeln" in page
+    assert "(bisher 0 Rückmeldungen, 0 Regeln)" in page and 'action="/settings/rewrite"' not in page
     lid = add_listing()
     for kind in ("shorter", "shorter", "formal"):
         db.add_feedback(lid, "telegram", "quick", kind)
     page = client.get("/settings").text
-    card = page.split('<article id="verbessern"')[1].split("</article>")[0]
-    assert "3 Rückmeldungen und 0 gelernte Regeln seit Version #1." in card
+    assert '<article id="verbessern"' not in page
+    line = page.split('<div class="rewrite-line" id="verbessern">')[1].split("</div>")[0]
+    assert "3 Rückmeldungen und 0 aktive Regeln seit Version #1." in line and "ab etwa 10" in line
+    assert 'action="/settings/rewrite"' in line and 'class="linkish">Verbesserung vorschlagen' in line
+    for _ in range(learning.REWRITE_SUGGEST_AT - 3):
+        db.add_feedback(lid, "telegram", "quick", "shorter")
+    card = client.get("/settings").text.split('<article id="verbessern"')[1].split("</article>")[0]
+    assert "10 Rückmeldungen und 0 aktive Regeln seit Version #1. Genug" in card and "is-active" in card
     assert 'action="/settings/rewrite"' in card and "Verbesserung vorschlagen" in card
     assert "bis zu ein paar Minuten" in card
     pid = make_proposal({"field": "target_words", "old": "150", "new": "120"})
@@ -124,11 +132,14 @@ def test_rewrite_card_only_when_there_is_something_to_do(client):
     assert 'action="/settings/rewrite"' not in card
 
 
-def test_one_active_rule_enables_the_rewrite(client):
+def test_one_active_rule_is_not_enough_for_a_rewrite(client):
     login(client)
     db.add_rule("Kein Ausrufezeichen.", status="active")
-    card = client.get("/settings").text.split('<article id="verbessern"')[1].split("</article>")[0]
-    assert "0 Rückmeldungen und 1 gelernte Regel seit Version #1." in card and "Verbesserung vorschlagen" in card
+    page = client.get("/settings").text
+    assert '<article id="verbessern"' not in page and 'action="/settings/rewrite"' not in page
+    assert "(bisher 0 Rückmeldungen, 1 Regel)" in page
+    r = client.post("/settings/rewrite")
+    assert r.status_code == 409 and "Noch zu wenig Rückmeldungen – möglich ab 3 Rückmeldungen" in r.text
 
 
 @pytest.fixture
@@ -261,7 +272,7 @@ def test_apply_selected_edits(client):
     assert current["style"] == "Freundlich und direkt." and current["profile"].endswith("ab 1.12.")  # fact not taken
     assert current["wishes"].endswith("\n- Balkon")
     version = db.latest_version()
-    assert version["source"] == "feedback" and version["note"] == "2 Änderungen aus Feedback"
+    assert version["source"] == "feedback" and version["note"] == "2 Änderungen aus Rückmeldungen"
     assert f"2 Änderungen übernommen – Version #{version['id']}." in client.get(r.headers["location"]).text
     assert db.get_rule(rule)["status"] == "merged" and db.count_unprocessed_feedback() == 0
     page = client.get(f"/settings/vorschlag/{pid}").text  # read-only now
@@ -358,7 +369,7 @@ def test_rules_list_on_verhalten(client):
     login(client)
     ids = rules_fixture()
     page = client.get("/settings/verhalten").text
-    card = page.split('<article id="vorlieben"')[1].split('<article id="beispiele"')[0]
+    card = page.split('<article id="regeln"')[1].split('<article id="beispiele"')[0]
     assert "1 von 25 aktiv" in card
     proposed = card.split("Warten auf deine Entscheidung")[1].split('<ul class="rule-list">')[1].split("</ul>")[0]
     assert f'action="/settings/rules/{ids["new"]}/decide"' in proposed and "Neue Regel" in proposed
@@ -367,7 +378,9 @@ def test_rules_list_on_verhalten(client):
     in_use = re.findall(r'action="/settings/rules/(\d+)/active">\s*<label><input type="checkbox" role="switch" name="active" '
                         r'value="1" data-autosubmit\s*(checked)?', card)
     assert in_use == [(str(ids["active"]), "checked"), (str(ids["off"]), "")]
-    assert "wird genutzt" in card and "nojs-only" in card  # fallback button without JS
+    assert "wird genutzt</label>" in card and "abgeschaltet</label>" in card  # the switch says its state
+    assert "nojs-only" in card  # fallback button without JS
+    assert '<h3 class="rule-list-title">Deine Regeln</h3>' in card  # set apart from the open proposals
     assert f'formaction="/settings/rules/{ids["active"]}/delete"' in card
     history = card.split("Verlauf")[1]
     assert "Schreib per Du." in history and "verworfen" in history and "ins Profil übernommen" in history
@@ -380,26 +393,26 @@ def test_rule_actions(client):
     login(client)
     ids = rules_fixture()
     r = client.post(f"/settings/rules/{ids['active']}/active")  # unticked checkbox: nothing sent
-    assert r.status_code == 303 and r.headers["location"] == "/settings/verhalten?done=rule_off#vorlieben"
+    assert r.status_code == 303 and r.headers["location"] == "/settings/verhalten?done=rule_off#regeln"
     assert db.get_rule(ids["active"])["status"] == "inactive"
     assert "Regel abgeschaltet – sie bleibt gespeichert." in client.get("/settings/verhalten?done=rule_off").text
     client.post(f"/settings/rules/{ids['active']}/active", data={"active": "1"})
     assert db.get_rule(ids["active"])["status"] == "active"
     r = client.post(f"/settings/rules/{ids['off']}/text", data={"text": "  Keine Ausrufezeichen,\nnie.  "})
-    assert r.headers["location"].endswith("done=rule_saved#vorlieben")
+    assert r.headers["location"].endswith("done=rule_saved#regeln")
     assert db.get_rule(ids["off"])["text"] == "Keine Ausrufezeichen, nie."
     r = client.post(f"/settings/rules/{ids['off']}/text", data={"text": "  "})
     assert r.status_code == 409 and "Die Regel ist leer." in r.text
     r = client.post(f"/settings/rules/{ids['new']}/decide", data={"accept": "1", "text": "Nenne keine Beträge."})
-    assert r.headers["location"].endswith("done=rule_accepted#vorlieben")
+    assert r.headers["location"].endswith("done=rule_accepted#regeln")
     rule = db.get_rule(ids["new"])
     assert (rule["status"], rule["text"], rule["proposed_text"]) == ("active", "Nenne keine Beträge.", "Nenne keine Zahlen.")
     r = client.post(f"/settings/rules/{ids['update']}/decide", data={"accept": "0", "text": "ignoriert"})
-    assert r.headers["location"].endswith("done=rule_rejected#vorlieben")
+    assert r.headers["location"].endswith("done=rule_rejected#regeln")
     assert db.get_rule(ids["update"])["status"] == "rejected" and db.get_rule(ids["update"])["text"].startswith("Einzug")
     assert client.post(f"/settings/rules/{ids['update']}/decide", data={"accept": "1"}).status_code == 409  # decided
     r = client.post(f"/settings/rules/{ids['rejected']}/delete")
-    assert r.headers["location"].endswith("done=rule_deleted#vorlieben") and db.get_rule(ids["rejected"]) is None
+    assert r.headers["location"].endswith("done=rule_deleted#regeln") and db.get_rule(ids["rejected"]) is None
     assert client.post("/settings/rules/999/active", data={"active": "1"}).status_code == 409
     assert client.post(f"/settings/rules/{ids['active']}/active", data={"active": "1"},
                        headers={"Origin": "https://evil.example"}).status_code == 403
@@ -409,13 +422,13 @@ def test_rule_limit_and_merge_hint(client, monkeypatch):
     login(client)
     for i in range(learning.RULES_MERGE_HINT_AT):
         db.add_rule(f"Regel {i}.", status="active")
-    card = client.get("/settings/verhalten").text.split('<article id="vorlieben"')[1]
+    card = client.get("/settings/verhalten").text.split('<article id="regeln"')[1]
     assert "Schon 15 aktive Regeln" in card and 'href="/settings#verbessern"' in card
     profil = client.get("/settings").text
     assert "Schon 15 aktive Regeln – ein Vorschlag kann sie ins Profil einarbeiten." in profil
     monkeypatch.setattr(learning, "MAX_ACTIVE_RULES", 15)
     off = db.add_rule("Noch eine.", status="inactive")
-    card = client.get("/settings/verhalten").text.split('<article id="vorlieben"')[1]
+    card = client.get("/settings/verhalten").text.split('<article id="regeln"')[1]
     assert "Höchstgrenze erreicht:" in card and "15 von 15 aktiv" in card
     r = client.post(f"/settings/rules/{off}/active", data={"active": "1"})
     assert r.status_code == 409 and "Höchstens 15 aktive Regeln" in r.text
@@ -433,12 +446,27 @@ def test_examples_listed_and_removed(client):
     assert [int(i) for i in re.findall(r'action="/settings/examples/(\d+)/off"', card)] == [s["id"] for s in sessions[:0:-1]]
     assert f'href="/listing/{sessions[3]["listing_id"]}">Wohnung 3</a>' in card and "Endversion 3" in card
     assert "Wohnung 0" not in card  # the oldest isn't used
-    r = client.post(f"/settings/examples/{sessions[3]['id']}/off")
-    assert r.status_code == 303 and r.headers["location"] == "/settings/verhalten?done=example_off#beispiele"
-    assert db.get_session(sessions[3]["id"])["use_as_example"] == 0
+    assert "Nicht mehr als Beispiel genutzt" not in card
+    sid = sessions[3]["id"]
+    r = client.post(f"/settings/examples/{sid}/off")
+    assert r.status_code == 303 and r.headers["location"] == f"/settings/verhalten?done=example_off&undo={sid}#beispiele"
+    assert db.get_session(sid)["use_as_example"] == 0
     card = client.get(r.headers["location"]).text.split('<article id="beispiele"')[1]
-    assert "Wird nicht mehr als Beispiel genutzt." in card and "Wohnung 0" in card and "Wohnung 3" not in card
+    used = card.split("Nicht mehr als Beispiel genutzt")[0]
+    assert "Wird nicht mehr als Beispiel genutzt." in card and "Wohnung 0" in used and "Wohnung 3" not in used
+    assert f'action="/settings/examples/{sid}/on" class="flash-dismiss"' in card and "Rückgängig" in card
+    taken_out = card.split("Nicht mehr als Beispiel genutzt")[1]  # reversible later too
+    assert "Wohnung 3" in taken_out and f'action="/settings/examples/{sid}/on"' in taken_out
+    assert "Rückgängig" not in client.get("/settings/verhalten?done=rule_off&undo=3").text  # only after example_off
+    r = client.post(f"/settings/examples/{sid}/on")
+    assert r.status_code == 303 and r.headers["location"] == "/settings/verhalten?done=example_on#beispiele"
+    assert db.get_session(sid)["use_as_example"] == 1
+    card = client.get(r.headers["location"]).text.split('<article id="beispiele"')[1]
+    assert "Wird wieder als Beispiel genutzt." in card and "Nicht mehr als Beispiel genutzt" not in card
+    assert "Wohnung 3" in card and "Wohnung 0" not in card
     assert client.post("/settings/examples/999/off").status_code == 409
+    assert client.post("/settings/examples/999/on").status_code == 409
+    assert client.post(f"/settings/examples/{sid}/on", headers={"Origin": "https://evil.example"}).status_code == 403
 
 
 # --- Zugänge: editor login from Telegram ---------------------------------------------------------------
@@ -457,6 +485,12 @@ def test_setdomain_hint_with_the_dashboard_domain(client):
 
 @pytest.mark.parametrize("stored,text,when", [
     ("2026-10-13T07:12:00+00:00 Bad Request: BOT_DOMAIN_INVALID", "Bad Request: BOT_DOMAIN_INVALID", "13.10.2026 09:12"),
+    # bot.py's own wording: the page says "abgelehnt" already, so only the reason is shown
+    ("2026-10-13T07:12:00+00:00 Telegram lehnt den Editor-Button ab: Domain nicht mit dem Bot verknüpft "
+     "(@BotFather → /setdomain).", "(zuletzt am 13.10.2026 09:12): Domain nicht mit dem Bot verknüpft",
+     "13.10.2026 09:12"),
+    ("2026-10-13T07:12:00+00:00 Telegram lehnt den Editor-Button ab (Bad Request: URL host is empty).",
+     ": Bad Request: URL host is empty", "13.10.2026 09:12"),
     ("Bad Request: BOT_DOMAIN_INVALID 2026-10-13T07:12:00+00:00", "Bad Request: BOT_DOMAIN_INVALID", "13.10.2026 09:12"),
     ('{"error": "Button abgelehnt", "at": "2026-10-13T07:12:00+00:00"}', "Button abgelehnt", "13.10.2026 09:12"),
     ("Nur Text", "Nur Text", None),
@@ -468,7 +502,9 @@ def test_editor_login_error_warning(client, stored, text, when):
     zugaenge = client.get("/settings/zugaenge").text.split('<article id="editor-login"')[1].split("</article>")[0]
     status = client.get("/status").text
     for page in (zugaenge, status):
-        assert text in page and (when is None or when in page)
+        assert text.split(": ", 1)[-1] in page and (when is None or when in page)
+        assert "lehnt den Editor-Button ab" not in page
+    assert text in zugaenge
     assert "Telegram hat den „📝 Editor“-Button abgelehnt" in zugaenge and "/setdomain" in zugaenge
     assert "📝 Editor-Button" in status and 'href="/settings/zugaenge#editor-login"' in status
 

@@ -81,11 +81,12 @@ Key eintragen. Weitere Instanz: den Block in `docker-compose.yaml` kopieren und 
 ## Einstellungen
 
 - **Profil:** Über mich, Wünsche, Schreibstil mit Ziellänge, System-Prompt (eingeklappt) und ein Test-Entwurf. Jede
-  Änderung dieser Felder wird eine **Version** (Speichern, „Standard wiederherstellen“, Übernahmen aus Feedback); die
+  Änderung dieser Felder wird eine **Version** (Speichern, „Standard wiederherstellen“, Übernahmen aus Rückmeldungen); die
   Meldung nennt die Nummer. Unter **Verlauf** zeigt „Ansehen“ den Unterschied einer Version zum aktuellen Stand pro Feld,
   „Wiederherstellen“ legt eine neue Version an. Versionen werden nie gelöscht.
-- **Aus Feedback verbessern** (Karte oben im Profil, nur wenn es etwas zu tun gibt: ab 3 Rückmeldungen oder einer aktiven
-  Regel): Claude liest die gesammelte Kritik, die Endversionen aus dem Editor und die gelernten Regeln und schlägt kleine
+- **Aus Rückmeldungen verbessern** (oben im Profil; möglich ab 3 Rückmeldungen oder 3 aktiven Regeln, bis etwa 10
+  Rückmeldungen oder 8 Regeln nur eine unauffällige Zeile, danach eine Karte): Claude liest die gesammelte Kritik, die
+  Endversionen aus dem Editor und die gelernten Regeln und schlägt kleine
   Änderungen am Profil vor. Das läuft im Hintergrund (bis zu ein paar Minuten, die Seite aktualisiert sich selbst). Jede
   Änderung erscheint als Diff in ihrem Feld mit Begründung und Belegen; du hakst an, was übernommen wird. Änderungen an
   „Über mich“ (Fakten) sind nie vorausgewählt. Verworfenes schlägt Claude nicht wieder vor. Ändert sich das Profil
@@ -93,12 +94,23 @@ Key eintragen. Weitere Instanz: den Block in `docker-compose.yaml` kopieren und 
 - **Verhalten:** Denkaufwand, Monatsbudget und Wechselkurs, Fotos & Exposé, Verzögerung und Pause des Bots und die Karte
   **Lernen**: die Schalter „Endversionen als Stil-Beispiele nutzen“ und „Gelernte Regeln nutzen“, darunter die gelernten
   Regeln (an-/abschalten, bearbeiten, löschen, offene Vorschläge annehmen oder verwerfen, Verlauf; höchstens 25 aktive,
-  ab 15 der Hinweis, sie ins Profil einzuarbeiten) und die genutzten Beispiele mit „Nicht mehr als Beispiel nutzen“.
+  ab 15 der Hinweis, sie ins Profil einzuarbeiten) und die genutzten Beispiele mit „Nicht mehr als Beispiel nutzen“
+  (rückgängig zu machen; entfernte Beispiele stehen eingeklappt darunter mit „Wieder als Beispiel nutzen“).
 - **Zugänge:** KI-Anbieter (Key, Modell, Test, Modellliste), Telegram (Token, Chat, erlaubte User, Links und
   `/setdomain`-Anleitung für den 📝 Editor), Fredy (Webhook-Token, Fredy-Adresse). Die alten Adressen `/settings/ki`,
   `/settings/telegram` und `/credentials` leiten hierher weiter.
 
 Lern-Aufrufe (Regeln, Umschreiben) zählen wie Entwürfe zum Monatsbudget und zu den Kosten-Summen.
+
+Begriffe, wie sie überall in immobot heißen:
+
+- **Entwurf:** ein Anschreiben, das Claude schreibt (in Telegram, auf der Inseratsseite, im Editor).
+- **Fassung:** ein Zwischenstand im 📝 Editor (Fassung 1 = Claudes Entwurf, jede Überarbeitung eine neue Fassung).
+- **Endversion:** der Text nach „Fertig“ im Editor; er wird zum **Beispiel** für Claudes Stil.
+- **Rückmeldung:** alles, woraus immobot lernt: „Kürzer“, „Förmlicher“, „Neu“, „Anpassen“, Kritik im Editor und
+  geänderte Endversionen.
+- **Regel:** ein kurzer Satz an Claude, den du nach „Fertig“ übernommen hast; gilt für jeden neuen Entwurf.
+- **Version:** ein gespeicherter Stand deines Profils (Verlauf im Reiter Profil).
 
 ## KI-Anbieter: Anthropic oder DeutschlandGPT
 
@@ -191,8 +203,10 @@ Eine Seite pro Inserat (`/editor/<id>`), auf dem Handy gut bedienbar, zum Fertig
 
 - Text von Hand ändern, mit „Kopieren“ und „Speichern“; „Änderungen zum Original“ zeigt den Wort-Diff zu Claudes Entwurf.
 - „Was soll Claude ändern?“: Claude überarbeitet den aktuellen Text samt deiner Änderungen (beliebig oft, mit Verlauf).
-- „Fertig“ speichert die Endversion. Sie dient künftig als Stil-Beispiel, und Claude schlägt (wenn „Lernen“ an ist)
-  bis zu 3 Regeln für künftige Entwürfe vor, die du übernimmst, umformulierst oder verwirfst.
+- „Fertig“ speichert die Endversion. Sie dient künftig als Stil-Beispiel, und Claude schlägt (wenn „Gelernte Regeln
+  nutzen“ an ist) bis zu 3 Regeln für künftige Entwürfe vor, die du übernimmst, umformulierst oder verwirfst. Steht beim
+  „Fertig“ noch eine nicht geschickte Kritik im Feld, wird sie als Rückmeldung gespeichert und fließt in die
+  Regelvorschläge ein. Fehlen Vorschläge (z. B. nach einem Neustart), gibt es „Regeln vorschlagen lassen“.
 - Danach: Kopieren, „Inserat öffnen“, „Als gesendet markieren“ (ändert auch die Telegram-Nachricht), „Weiter bearbeiten“.
 - Monatsbudget und höchstens 30 Claude-Aufrufe pro Inserat und Tag gelten auch hier.
 

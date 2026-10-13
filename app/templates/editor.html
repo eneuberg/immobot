@@ -11,6 +11,21 @@
 <input type="hidden" name="token" value="{{ token }}">{% if session %}<input type="hidden" name="session_id" value="{{ session.id }}">{% endif %}
 {%- endmacro %}
 
+{# "Verlauf": Claude's draft, then one numbered Fassung per critique sent to Claude; a critique only noted on "Fertig"
+   (not sent) comes last, without a number. #}
+{% macro history_list() %}
+<h3 class="ed-history-title">Verlauf</h3>
+<ol class="ed-history">
+  <li><span class="n">1</span><span class="t">Claudes Entwurf</span></li>
+  {% for f in history %}
+  <li><span class="n">{{ loop.index + 1 }}</span><span class="t">„{{ f.text }}“</span><span class="when">{{ f.created_at|local_time }}</span></li>
+  {% endfor %}
+  {% for f in notes %}
+  <li class="is-note"><span class="n" aria-hidden="true">✎</span><span class="t">„{{ f.text }}“ <small class="muted">– bei „Fertig“ notiert, nicht an Claude geschickt</small></span><span class="when">{{ f.created_at|local_time }}</span></li>
+  {% endfor %}
+</ol>
+{% endmacro %}
+
 {% block content %}
 <div class="ed">
   <header class="ed-head">
@@ -49,10 +64,11 @@
   {% if newer %}
   <div class="callout info ed-newer" role="status">
     <div>
-      <p><strong>Es gibt einen neueren Entwurf</strong> ({{ newer.kind_label }}, {{ newer.created_at|local_time }}).</p>
+      <p><strong>Es gibt einen neueren Entwurf</strong> ({{ newer.kind_label }}, {{ newer.created_at|local_time }}), entstanden
+        nach dem Öffnen des Editors.{% if session.status == "done" %} Deine Endversion bleibt gespeichert.{% endif %}</p>
       <form method="post" action="/editor/{{ listing.id }}/new-round">
         {{ hidden() }}
-        <button type="submit" class="btn-sm"{% if session.status == "open" and changed %} data-confirm="Deine Änderungen an dieser Fassung gehen verloren. Mit dem neueren Entwurf weitermachen?"{% endif %}>Neue Runde mit diesem Entwurf</button>
+        <button type="submit" class="btn-sm"{% if session.status == "open" and changed %} data-confirm="Deine Änderungen an dieser Fassung gehen verloren. Mit dem neueren Entwurf weitermachen?"{% endif %}>Mit dem neueren Entwurf weitermachen</button>
       </form>
     </div>
   </div>
@@ -69,6 +85,8 @@
           <span class="badge accent">Fassung {{ version_no }}</span>
           <span class="ed-unsaved" data-unsaved hidden>nicht gespeichert</span>
         </header>
+        <p class="help ed-intro">Ändere den Text selbst oder lass ihn unten von Claude überarbeiten. „Fertig“ speichert die
+          Endversion – daraus lernt Claude für künftige Entwürfe.</p>
         {% if hint %}<div class="callout warn"><span><strong>Hinweis von Claude:</strong> <span class="pre-wrap">{{ hint }}</span></span></div>{% endif %}
         <textarea id="ed-text" name="text" rows="12" maxlength="20000" spellcheck="true" data-autosize>{{ text }}</textarea>
         <div class="ed-bar">
@@ -91,17 +109,10 @@
         <h2><label for="ed-critique">Was soll Claude ändern?</label></h2>
         <textarea id="ed-critique" name="critique" rows="3" maxlength="500" placeholder="z. B. kürzer, Homeoffice erwähnen, weniger förmlich">{{ critique or "" }}</textarea>
         <p class="help">Claude überarbeitet deinen aktuellen Text samt deiner Änderungen (10–60 Sekunden).
-          Heute {{ calls_today }} von {{ calls_limit }} Claude-Aufrufen für dieses Inserat.</p>
+          {%- if calls_today >= calls_shown_from %} Heute schon {{ calls_today }} von {{ calls_limit }} Claude-Aufrufen für
+          dieses Inserat.{% endif %}</p>
         <button type="submit" formaction="/editor/{{ listing.id }}/revise" class="ed-revise" data-busy-label="Claude schreibt …">Überarbeiten lassen</button>
-        {% if history %}
-        <h3 class="ed-history-title">Verlauf</h3>
-        <ol class="ed-history">
-          <li><span class="n">1</span><span class="t">Claudes Entwurf</span></li>
-          {% for f in history %}
-          <li><span class="n">{{ loop.index + 1 }}</span><span class="t">„{{ f.text }}“</span><span class="when">{{ f.created_at|local_time }}</span></li>
-          {% endfor %}
-        </ol>
-        {% endif %}
+        {% if history or notes %}{{ history_list() }}{% endif %}
       </article>
     </div>
   </form>
@@ -141,6 +152,9 @@
       {% if use_rules or proposals or decided %}
       <article class="ed-card ed-rules" id="regeln">
         <h2>Regeln für künftige Entwürfe</h2>
+        <p class="help">Aus deinen Änderungen und deiner Kritik leitet Claude allgemeine Regeln ab. Übernommene Regeln gelten
+          für jeden neuen Entwurf; den Text kannst du vorher anpassen.
+          {% if logged_in %}<a href="/settings/verhalten#regeln">Alle Regeln</a>{% else %}Alle Regeln: im Dashboard unter Einstellungen → Verhalten.{% endif %}</p>
         {% if job and job.state == "running" %}
         <p class="ed-wait" aria-busy="true" data-rules-poll="/editor/{{ listing.id }}/rules/status">Claude sucht nach Regeln …</p>
         {% elif job and job.state == "error" %}
@@ -166,7 +180,13 @@
           </div>
         </form>
         {% else %}
-        {% if not job and not decided %}<p class="muted ed-norules">Keine neuen Regelvorschläge aus dieser Runde.</p>{% endif %}
+        {% if not job and rule_state == "due" %}
+        <p class="ed-norules">Für diese Endversion hat Claude noch keine Regeln vorgeschlagen.</p>
+        <form method="post" action="/editor/{{ listing.id }}/rules/retry" class="ed-ask">{{ hidden() }}<button type="submit" class="secondary outline btn-sm">Regeln vorschlagen lassen</button></form>
+        {% elif not job and not decided %}
+        <p class="muted ed-norules">{% if rule_state == "nothing" %}Du hast Claudes Entwurf unverändert übernommen – daraus gibt es nichts zu lernen.
+          {%- else %}Claude hat in dieser Runde keine allgemeine Regel gefunden.{% endif %}</p>
+        {% endif %}
         {% endfor %}
 
         {% if decided %}
@@ -177,16 +197,8 @@
       </article>
       {% endif %}
 
-      {% if history %}
-      <article class="ed-card">
-        <h3 class="ed-history-title">Verlauf</h3>
-        <ol class="ed-history">
-          <li><span class="n">1</span><span class="t">Claudes Entwurf</span></li>
-          {% for f in history %}
-          <li><span class="n">{{ loop.index + 1 }}</span><span class="t">„{{ f.text }}“</span><span class="when">{{ f.created_at|local_time }}</span></li>
-          {% endfor %}
-        </ol>
-      </article>
+      {% if history or notes %}
+      <article class="ed-card">{{ history_list() }}</article>
       {% endif %}
     </div>
   </div>

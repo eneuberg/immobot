@@ -49,8 +49,10 @@ MESSAGES = {
     "saved": "Gespeichert.",
     "revised": "Claude hat den Text überarbeitet.",
     "done": "Endversion gespeichert.",
+    "done_note": "Endversion gespeichert. Deine Kritik im Feld hat Claude nicht mehr umgesetzt – sie ist als "
+                 "Rückmeldung gespeichert und fließt ins Lernen ein.",
     "reopened": "Weiter bearbeiten – die Endversion bleibt bis zum nächsten „Fertig“ gespeichert.",
-    "round": "Neue Runde mit dem neuesten Entwurf.",
+    "round": "Du bearbeitest jetzt den neueren Entwurf.",
     "accepted": "Regel übernommen – sie gilt ab dem nächsten Entwurf.",
     "removed": "Regel abgeschaltet.",
     "rejected": "Vorschlag verworfen.",
@@ -85,6 +87,7 @@ EXPIRED = (401, "Sitzung abgelaufen – bitte anmelden",
 NOT_FOUND = (404, "Inserat nicht gefunden", "Dieses Inserat gibt es nicht (mehr).")
 
 RULE_ACTION_LABELS = {"add": "Neue Regel", "update": "Regel ändern", "remove": "Regel streichen"}
+CALLS_SHOWN_FROM = 20  # "Heute schon n von 30 Claude-Aufrufen …" only when the daily limit comes near
 
 # Rule proposals after "Fertig": session id -> {"state": "running" | "done" | "error", "error": message or None}.
 _rule_jobs: dict[int, dict] = {}
@@ -218,7 +221,9 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
     }
     if session is not None:
         text = session["final_text"] if session["status"] == "done" else session["current_text"]
-        history = list(reversed(db.list_feedback(session_id=session["id"], kind="critique")))  # oldest first
+        feedback = list(reversed(db.list_feedback(session_id=session["id"])))  # oldest first
+        history = [f for f in feedback if f["kind"] == "critique"]  # one per revision by Claude
+        notes = [f for f in feedback if f["kind"] == "note"]  # typed but not sent before "Fertig"
         last_draft = db.get_draft(session["last_draft_id"]) if session["last_draft_id"] else None
         newer = learning.newer_draft(session)
         proposals, decided = _proposals(session)
@@ -229,6 +234,7 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
             text=text,
             changed=textdiff.has_changes(textdiff.word_diff(session["original_text"], text)),
             history=history,
+            notes=notes,
             version_no=len(history) + 1,
             hint=last_draft.get("hint") if last_draft else None,
             newer={**newer, "kind_label": web.DRAFT_KIND_LABELS.get(newer["kind"], newer["kind"])} if newer else None,
@@ -238,6 +244,9 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
             job_error=web.redact(request, job["error"]) if job and job.get("error") else None,
             calls_today=learning.editor_calls_today(listing_id),
             calls_limit=learning.EDITOR_DAILY_LIMIT,
+            calls_shown_from=CALLS_SHOWN_FROM,
+            # after "Fertig" without proposals and without a running job: may Claude still be asked (button)?
+            rule_state=learning.rule_round_state(session) if session["status"] == "done" else "off",
         )
     return web.render(request, "editor.html", context, status_code=status_code)
 
@@ -355,8 +364,9 @@ async def _propose_rules(session_id: int) -> None:
 
 @router.post("/editor/{listing_id}/finish", dependencies=ACTION)
 async def editor_finish(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
-                        text: str = Form("")):
-    """"Fertig": store the final version; with "Lernen aus Regeln" on, Claude looks for rules in the background."""
+                        text: str = Form(""), critique: str = Form("")):
+    """"Fertig": store the final version; with "Gelernte Regeln nutzen" on, Claude looks for rules in the background.
+    A critique still in its field (typed, but "Überarbeiten lassen" not pressed) is kept as a note for learning."""
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
         return denied
@@ -364,16 +374,18 @@ async def editor_finish(request: Request, listing_id: str, token: str = Form("")
     if session is None:
         return _stale(request, listing, mode, text)
     try:
-        session = learning.finish(session["id"], text)
+        session = learning.finish(session["id"], text, note=critique)
     except Exception as exc:
-        return _failed(request, listing, mode, exc)
+        return _failed(request, listing, mode, exc, critique=critique)
     if settings.as_bool(db.get_settings().get("use_rules")):
         _start_rule_job(session["id"])
-    return _back(listing["id"], "done", "ende")
+    return _back(listing["id"], "done_note" if critique.strip() else "done", "ende")
 
 
 @router.post("/editor/{listing_id}/rules/retry", dependencies=ACTION)
 async def editor_rules_retry(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form("")):
+    """"Regeln vorschlagen" / "Nochmal versuchen": ask Claude for rules of a finished session again (after an error,
+    or when no round was made for this final version, e.g. because a restart cut the background call off)."""
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
         return denied
@@ -406,7 +418,7 @@ def editor_reopen(request: Request, listing_id: str, token: str = Form(""), sess
 
 @router.post("/editor/{listing_id}/new-round", dependencies=ACTION)
 def editor_new_round(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form("")):
-    """"Neue Runde mit diesem Entwurf": a new session from the newest draft (the open one is superseded)."""
+    """"Mit dem neueren Entwurf weitermachen": a new session from the newest draft (the open one is superseded)."""
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
         return denied

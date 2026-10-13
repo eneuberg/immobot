@@ -118,8 +118,9 @@ def local_time(value) -> str:
     return value.astimezone(LOCAL_TZ).strftime("%d.%m.%Y %H:%M")
 
 
-def _price(value: float) -> str:
-    return f"{value:.2f}".replace(".", ",")
+def _short_price(value: float) -> str:
+    """4.0 -> '4', 3.3 -> '3,30' (prices per million tokens in the model list)."""
+    return str(int(value)) if float(value).is_integer() else f"{value:.2f}".replace(".", ",")
 
 
 templates.env.filters["eur"] = settings.fmt_eur
@@ -721,9 +722,9 @@ def _model_choices(request: Request, provider: str, model: str) -> dict:
         ids.append(model)  # keep the saved choice selectable
     return {
         "sign": sign,
-        "model_options": [  # short ("Opus 5.5 – 4,00 $ / 20,00 $") so the price isn't cut off on phones
-            (m, f"{prices[m]['label'].removeprefix('Claude ')} – {_price(prices[m]['input'])} {sign} / "
-                f"{_price(prices[m]['output'])} {sign}")
+        "model_options": [  # short ("Opus 5.5 · 4 / 20 $") so the price isn't cut off on a 320 px phone
+            (m, f"{prices[m]['label'].removeprefix('Claude ')} · {_short_price(prices[m]['input'])} / "
+                f"{_short_price(prices[m]['output'])} {sign}")
             for m in ids
         ],
         "current_model": model,
@@ -822,7 +823,7 @@ async def _run_rewrite(started_at: str) -> None:
 
 
 def _profile_context(request: Request, all_versions: bool = False) -> dict:
-    """The rewrite card ("Aus Feedback verbessern") and the profile history of the Profil tab."""
+    """The rewrite card ("Aus Rückmeldungen verbessern") and the profile history of the Profil tab."""
     rewrite = learning.rewrite_status()  # first: marks a pending proposal stale when the profile changed meanwhile
     job = _rewrite_job()
     if job and job.get("error"):
@@ -831,6 +832,8 @@ def _profile_context(request: Request, all_versions: bool = False) -> dict:
     versions = db.list_versions()
     return {
         "rewrite": rewrite,
+        "rewrite_threshold": learning.rewrite_threshold_text(),
+        "rewrite_suggest_at": learning.REWRITE_SUGGEST_AT,
         "job": job,
         "stale_proposal": newest if newest and newest["status"] == "stale" else None,
         "versions": versions if all_versions else versions[:VERSIONS_SHOWN],
@@ -925,6 +928,8 @@ def _proposal_view(proposal: dict) -> list[dict]:
 
 # --- settings: Verhalten → Lernen ---------------------------------------------------
 
+EXAMPLES_OFF_SHOWN = 20  # newest final versions taken out as examples, listed to switch them on again
+
 def _learning_context() -> dict:
     """Learned rules by state, and the editor texts the prompt uses as examples."""
     rules = learning.list_rules()
@@ -943,18 +948,20 @@ def _learning_context() -> dict:
         "merge_hint_at": learning.RULES_MERGE_HINT_AT,
         "examples": examples,
         "examples_waiting": max(0, len(db.example_sessions(None)) - len(examples)),
+        "examples_off": db.example_sessions(EXAMPLES_OFF_SHOWN, use=False),  # "Nicht mehr genutzt": switch on again
         "example_count": llm.EXAMPLE_COUNT,
     }
 
 
 LEARNING_MESSAGES = {  # ?done=… after an action on Verhalten → Lernen, shown in its card
-    "rule_on": ("vorlieben", "Regel wird wieder genutzt."),
-    "rule_off": ("vorlieben", "Regel abgeschaltet – sie bleibt gespeichert."),
-    "rule_saved": ("vorlieben", "Regel gespeichert."),
-    "rule_deleted": ("vorlieben", "Regel gelöscht."),
-    "rule_accepted": ("vorlieben", "Vorschlag übernommen."),
-    "rule_rejected": ("vorlieben", "Vorschlag verworfen – Claude schlägt ihn nicht wieder vor."),
+    "rule_on": ("regeln", "Regel wird wieder genutzt."),
+    "rule_off": ("regeln", "Regel abgeschaltet – sie bleibt gespeichert."),
+    "rule_saved": ("regeln", "Regel gespeichert."),
+    "rule_deleted": ("regeln", "Regel gelöscht."),
+    "rule_accepted": ("regeln", "Regel übernommen – sie gilt ab dem nächsten Entwurf."),
+    "rule_rejected": ("regeln", "Vorschlag verworfen – Claude schlägt ihn nicht wieder vor."),
     "example_off": ("beispiele", "Wird nicht mehr als Beispiel genutzt."),
+    "example_on": ("beispiele", "Wird wieder als Beispiel genutzt."),
 }
 
 
@@ -1010,10 +1017,12 @@ def settings_page(request: Request, saved: str | None = None, reset: str | None 
 
 
 @router.get("/settings/verhalten", dependencies=PAGE)
-def settings_verhalten_page(request: Request, saved: str | None = None, done: str | None = None):
+def settings_verhalten_page(request: Request, saved: str | None = None, done: str | None = None,
+                            undo: str | None = None):
     card, card_message = LEARNING_MESSAGES.get(done or "", (None, None))
     return _render_section(request, "verhalten", message=SETTINGS_MESSAGES["saved"] if saved else None,
-                           card=card, card_message=card_message)
+                           card=card, card_message=card_message,
+                           undo_example=_int_param(undo) if done == "example_off" else None)
 
 
 @router.get("/settings/zugaenge", dependencies=PAGE)
@@ -1156,7 +1165,7 @@ def settings_version_restore(version_id: int):
                             status_code=303)
 
 
-# --- settings: improve the profile from feedback (Profil → "Aus Feedback verbessern") -------
+# --- settings: improve the profile from feedback (Profil → "Aus Rückmeldungen verbessern") -------
 
 @router.post("/settings/rewrite", dependencies=ACTION)
 async def settings_rewrite_start(request: Request):
@@ -1167,8 +1176,7 @@ async def settings_rewrite_start(request: Request):
     if not (job and job.get("state") == "running"):
         if not learning.rewrite_status()["enabled"]:
             return _render_section(request, "profil", status_code=409,
-                                   error=f"Noch zu wenig Rückmeldungen – ab {learning.REWRITE_MIN_FEEDBACK} "
-                                         "Rückmeldungen oder einer aktiven Regel.")
+                                   error=f"Noch zu wenig Rückmeldungen – möglich {learning.rewrite_threshold_text()}.")
         started_at = db.now_iso()
         _set_rewrite_job(state="running", started_at=started_at)
         _rewrite_task = asyncio.create_task(_run_rewrite(started_at))
@@ -1236,14 +1244,14 @@ def settings_proposal_reject(request: Request, proposal_id: int):
 
 # --- settings: learned rules and examples (Verhalten → Lernen) ------------------------------
 
-def _learning_action(request: Request, apply, done: str):
+def _learning_action(request: Request, apply, done: str, query: str = ""):
     """Run a rule/example change; on success back to its card (PRG), else the tab with the error."""
     try:
         apply()
     except learning.LearningError as exc:
         return _render_section(request, "verhalten", error=str(exc), status_code=409)
     card = LEARNING_MESSAGES[done][0]
-    return RedirectResponse(f"/settings/verhalten?done={done}#{card}", status_code=303)
+    return RedirectResponse(f"/settings/verhalten?done={done}{query}#{card}", status_code=303)
 
 
 @router.post("/settings/rules/{rule_id}/active", dependencies=ACTION)
@@ -1273,8 +1281,15 @@ def settings_rule_decide(request: Request, rule_id: int, accept: str = Form(""),
 
 @router.post("/settings/examples/{session_id}/off", dependencies=ACTION)
 def settings_example_off(request: Request, session_id: int):
-    """"Nicht mehr als Beispiel nutzen"."""
-    return _learning_action(request, lambda: learning.set_session_example(session_id, False), "example_off")
+    """"Nicht mehr als Beispiel nutzen" (the message offers "Rückgängig")."""
+    return _learning_action(request, lambda: learning.set_session_example(session_id, False), "example_off",
+                            f"&undo={session_id}")
+
+
+@router.post("/settings/examples/{session_id}/on", dependencies=ACTION)
+def settings_example_on(request: Request, session_id: int):
+    """"Rückgängig" / "Wieder als Beispiel nutzen"."""
+    return _learning_action(request, lambda: learning.set_session_example(session_id, True), "example_on")
 
 
 # --- credentials (all on "Zugänge": KI-Anbieter, Telegram, Fredy) ------------------------
@@ -1294,6 +1309,7 @@ OPEN_CHAT_NOTE = "jedes Mitglied des Chats darf Buttons drücken, und der 📝 E
 LOCKED_CHAT_WARNING = ("Die Liste erlaubter Telegram-User ist nicht entschlüsselbar (SESSION_SECRET geändert?) – "
                        "niemand darf Buttons drücken. Pairing erneut ausführen oder User-ID neu eintragen.")
 EDITOR_LOGIN_ERROR_META = "editor_login_url_error"  # set by the editor feature when Telegram rejects the login button
+EDITOR_BUTTON_REJECTED = "Telegram lehnt den Editor-Button ab"  # start of bot._note_editor_button_error's reason
 ONE_TIME_TTL_S = 300
 _one_time: dict[str, tuple[float, str]] = {}  # one-time id -> (monotonic expiry, value); server memory only
 
@@ -1334,6 +1350,13 @@ def _editor_login_error(request: Request) -> dict | None:
         elif _is_iso_time(last):
             text, at = head, last
         text = text.strip(" :|–-")
+    # bot.py stores "Telegram lehnt den Editor-Button ab: <Grund>." / "… ab (<Grund>)."; the page says that already.
+    if text.startswith(EDITOR_BUTTON_REJECTED):
+        reason = text[len(EDITOR_BUTTON_REJECTED):].strip()
+        if reason.startswith("(") and reason.rstrip(".").endswith(")"):
+            reason = reason.rstrip(".")[1:-1]
+        text = reason.lstrip(": ").strip()
+        text = text[:1].upper() + text[1:]
     return {"text": redact(request, text) or "Telegram hat den Button abgelehnt.", "at": at}
 
 
