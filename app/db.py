@@ -12,14 +12,29 @@ Tables:
   pending_prompts  Telegram "Anpassen" questions waiting for the user's reply
   credentials      API key / tokens entered in the dashboard, AES-GCM encrypted by vault.py
   credential_events  audit log of credential changes (never contains values)
+
+Learning (see learning.py; the current profile itself stays in `settings`):
+  profile_versions   snapshot of the five profile settings (settings.PROFILE_FIELDS) after every change; never deleted
+  edit_sessions      one editor session per listing and round: Claude's original, the current and the final text
+  feedback           critiques and quick buttons ("Kürzer", ...) from editor, Telegram and dashboard; never test drafts
+  learned_rules      rules proposed on "Fertig" and their decisions (proposed / active / inactive / rejected / merged /
+                     replaced); update and remove proposals point at their rule with replaces_rule_id
+  rewrite_proposals  "Profil aus Feedback verbessern": a list of small edits to the profile and what became of them
+  llm_usage          tokens and cost of the learning calls (rules, rewrite); counts toward budget and totals like drafts
+
+Editor access from Telegram (see editor_access.py):
+  used_login_hashes       SHA-256 of every Telegram login hash used once (replay protection; purged after 1 day)
+  editor_links            first successful use of a signed editor link (key = SHA-256 of listing_id:exp:sig)
+  editor_access_sessions  browser sessions of the editor: SHA-256 of the cookie value, listing, Telegram user, expiry
 """
 
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-from .settings import DEFAULT_SETTINGS, eur_usd_rate
+from .settings import DEFAULT_SETTINGS, PROFILE_FIELDS, eur_usd_rate
 
 _db_path: str | None = None
 
@@ -99,6 +114,100 @@ CREATE TABLE IF NOT EXISTS credential_events (
     client_ip TEXT,
     detail TEXT
 );
+CREATE TABLE IF NOT EXISTS profile_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    source TEXT NOT NULL,
+    note TEXT,
+    data TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS edit_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    base_draft_id INTEGER REFERENCES drafts(id),
+    original_text TEXT NOT NULL,
+    current_text TEXT NOT NULL,
+    final_text TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    profile_version_id INTEGER REFERENCES profile_versions(id),
+    use_as_example INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT,
+    rules_basis TEXT,
+    processed_version_id INTEGER REFERENCES profile_versions(id)
+);
+CREATE INDEX IF NOT EXISTS idx_edit_sessions_listing ON edit_sessions(listing_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_edit_sessions_open ON edit_sessions(listing_id) WHERE status = 'open';
+CREATE TABLE IF NOT EXISTS feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    session_id INTEGER REFERENCES edit_sessions(id),
+    source TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    before_text TEXT,
+    created_at TEXT NOT NULL,
+    processed_version_id INTEGER REFERENCES profile_versions(id)
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_listing ON feedback(listing_id);
+CREATE TABLE IF NOT EXISTS learned_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'proposed',
+    reason TEXT,
+    session_id INTEGER REFERENCES edit_sessions(id),
+    replaces_rule_id INTEGER REFERENCES learned_rules(id),
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    merged_version_id INTEGER REFERENCES profile_versions(id),
+    action TEXT NOT NULL DEFAULT 'add',
+    proposed_text TEXT
+);
+CREATE TABLE IF NOT EXISTS rewrite_proposals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    base_version_id INTEGER NOT NULL REFERENCES profile_versions(id),
+    status TEXT NOT NULL DEFAULT 'pending',
+    edits TEXT NOT NULL,
+    feedback_ids TEXT NOT NULL,
+    decided_at TEXT,
+    session_ids TEXT NOT NULL DEFAULT '[]',
+    applied_version_id INTEGER REFERENCES profile_versions(id)
+);
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    listing_id INTEGER REFERENCES listings(id),
+    purpose TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    cost_native REAL
+);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_listing ON llm_usage(listing_id);
+CREATE TABLE IF NOT EXISTS used_login_hashes (
+    hash_sha256 TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS editor_links (
+    link_key TEXT PRIMARY KEY,
+    listing_id INTEGER NOT NULL,
+    first_used_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS editor_access_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash TEXT NOT NULL UNIQUE,
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    telegram_user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
 """
 
 # Columns added after the first deployment. CREATE TABLE IF NOT EXISTS doesn't touch existing tables,
@@ -138,6 +247,7 @@ def init_db(data_dir: str) -> None:
         conn.executescript(SCHEMA)
         _add_missing_columns(conn)
         _rename_setting(conn, "monthly_budget_usd", "monthly_budget_eur")  # the budget is in euros now (15 stays 15)
+    _ensure_initial_version()
 
 
 def _rename_setting(conn: sqlite3.Connection, old: str, new: str) -> None:
@@ -216,21 +326,26 @@ def latest_listing() -> dict | None:
 
 
 def list_listings(status: str | None = None, limit: int = 300) -> list[dict]:
-    """Listings newest first, each with draft_count and cost_eur (sum over its drafts, in euros)."""
+    """Listings newest first, each with draft_count and cost_eur (its drafts plus its learning calls in llm_usage,
+    in euros)."""
     sql = """
-        SELECT l.*, COUNT(d.id) AS draft_count, COALESCE(SUM({cost}), 0) AS cost_eur
+        SELECT l.*, COUNT(d.id) AS draft_count,
+               COALESCE(SUM({cost}), 0)
+               + (SELECT COALESCE(SUM({usage_cost}), 0) FROM llm_usage u WHERE u.listing_id = l.id) AS cost_eur
         FROM listings l LEFT JOIN drafts d ON d.listing_id = l.id
         {where}
         GROUP BY l.id ORDER BY l.id DESC LIMIT ?
     """
-    params: list = [_rate()]
+    rate = _rate()
+    params: list = [rate, rate]
     where = ""
     if status:
         where = "WHERE l.status = ?"
         params.append(status)
     params.append(limit)
+    sql = sql.format(cost=cost_eur_sql("d"), usage_cost=cost_eur_sql("u"), where=where)
     with connect() as conn:
-        return [dict(r) for r in conn.execute(sql.format(cost=cost_eur_sql("d"), where=where), params).fetchall()]
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
 def unannounced_listing_ids(hours: int = 24) -> list[int]:
@@ -380,6 +495,14 @@ def latest_draft(listing_id: int, include_test: bool = False) -> dict | None:
         return _row(conn.execute(sql, (rate, listing_id)).fetchone())
 
 
+def get_draft(draft_id: int) -> dict | None:
+    """One draft (with cost_eur)."""
+    sql = f"SELECT *, {cost_eur_sql()} AS cost_eur FROM drafts WHERE id = ?"
+    rate = _rate()
+    with connect() as conn:
+        return _row(conn.execute(sql, (rate, draft_id)).fetchone())
+
+
 def list_drafts(listing_id: int) -> list[dict]:
     """All drafts of a listing, oldest first (with cost_eur)."""
     sql = f"SELECT *, {cost_eur_sql()} AS cost_eur FROM drafts WHERE listing_id = ? ORDER BY id ASC"
@@ -388,22 +511,26 @@ def list_drafts(listing_id: int) -> list[dict]:
         return [dict(r) for r in conn.execute(sql, (rate, listing_id)).fetchall()]
 
 
+# Total cost in euros of drafts plus learning calls (llm_usage); parameters: rate, [prefix,] rate, [prefix].
+_COST_SUM_SQL = ("SELECT (SELECT COALESCE(SUM({cost}), 0) FROM drafts{where})"
+                 " + (SELECT COALESCE(SUM({cost}), 0) FROM llm_usage{where})")
+
+
 def cost_this_month() -> float:
-    """Costs of the current month in euros (the monthly budget is checked against this)."""
+    """Costs of the current month in euros, drafts and learning calls (the monthly budget is checked against this)."""
     month_prefix, rate = datetime.now(timezone.utc).strftime("%Y-%m"), _rate()
+    sql = _COST_SUM_SQL.format(cost=cost_eur_sql(), where=" WHERE created_at LIKE ?")
     with connect() as conn:
-        row = conn.execute(f"SELECT COALESCE(SUM({cost_eur_sql()}), 0) AS c FROM drafts WHERE created_at LIKE ?",
-                           (rate, month_prefix + "%")).fetchone()
-        return float(row["c"])
+        return float(conn.execute(sql, (rate, month_prefix + "%", rate, month_prefix + "%")).fetchone()[0])
 
 
 def stats() -> dict:
-    """Numbers for the dashboard header; costs in euros."""
+    """Numbers for the dashboard header; costs in euros (drafts and learning calls)."""
     month_prefix, rate = datetime.now(timezone.utc).strftime("%Y-%m"), _rate()
     with connect() as conn:
         listings_total = conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0]
         drafts_total = conn.execute("SELECT COUNT(*) FROM drafts").fetchone()[0]
-        cost_total = conn.execute(f"SELECT COALESCE(SUM({cost_eur_sql()}), 0) FROM drafts", (rate,)).fetchone()[0]
+        cost_total = conn.execute(_COST_SUM_SQL.format(cost=cost_eur_sql(), where=""), (rate, rate)).fetchone()[0]
         by_status = {r["status"]: r["n"] for r in conn.execute("SELECT status, COUNT(*) AS n FROM listings GROUP BY status")}
     return {
         "listings_total": listings_total,
@@ -522,3 +649,444 @@ def list_credential_events(limit: int = 20) -> list[dict]:
     """Newest first."""
     with connect() as conn:
         return [dict(r) for r in conn.execute("SELECT * FROM credential_events ORDER BY id DESC LIMIT ?", (limit,))]
+
+
+# --- learning: shared helpers -------------------------------------------------
+
+def _update(table: str, allowed: set[str], row_id: int, fields: dict) -> None:
+    """UPDATE one row by id. Column names come from code, never from a request: unknown ones are a bug."""
+    unknown = set(fields) - allowed
+    if unknown:
+        raise ValueError(f"unknown {table} columns: {sorted(unknown)}")
+    if not fields:
+        return
+    assignments = ", ".join(f"{name} = ?" for name in fields)
+    with connect() as conn:
+        conn.execute(f"UPDATE {table} SET {assignments} WHERE id = ?", [*fields.values(), row_id])
+
+
+def _json_list(raw) -> list:
+    try:
+        value = json.loads(raw) if raw else []
+    except ValueError:
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _placeholders(values) -> str:
+    return ", ".join("?" for _ in values)
+
+
+# Listing columns joined onto feedback, sessions and rules (for the "Inserats-Kurzinfo" and origin links).
+_LISTING_INFO = ("l.title AS listing_title, l.provider AS listing_provider, l.price AS listing_price, "
+                 "l.size AS listing_size, l.address AS listing_address")
+
+
+# --- profile versions ---------------------------------------------------------
+
+def current_profile_values() -> dict[str, str]:
+    """The effective values of the five profile settings (stored over defaults), as stored strings."""
+    current = get_settings()
+    return {key: current[key] for key in PROFILE_FIELDS}
+
+
+def _version(row: sqlite3.Row | None) -> dict | None:
+    """A profile_versions row with `data` decoded to {field: value} (every PROFILE_FIELDS key present)."""
+    if row is None:
+        return None
+    version = dict(row)
+    try:
+        data = json.loads(version["data"])
+    except ValueError:
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    version["data"] = {key: str(data.get(key) or "") for key in PROFILE_FIELDS}
+    return version
+
+
+def add_version(source: str, data: dict, note: str | None = None) -> int:
+    """Store a snapshot unconditionally (snapshot_profile() skips unchanged ones)."""
+    payload = json.dumps({key: str(data.get(key) or "") for key in PROFILE_FIELDS}, ensure_ascii=False)
+    with connect() as conn:
+        cur = conn.execute("INSERT INTO profile_versions (created_at, source, note, data) VALUES (?, ?, ?, ?)",
+                           (now_iso(), source, note, payload))
+        return cur.lastrowid
+
+
+def get_version(version_id: int) -> dict | None:
+    with connect() as conn:
+        return _version(conn.execute("SELECT * FROM profile_versions WHERE id = ?", (version_id,)).fetchone())
+
+
+def latest_version() -> dict | None:
+    with connect() as conn:
+        return _version(conn.execute("SELECT * FROM profile_versions ORDER BY id DESC LIMIT 1").fetchone())
+
+
+def list_versions(limit: int | None = None) -> list[dict]:
+    """Newest first, each with decoded `data`."""
+    sql = "SELECT * FROM profile_versions ORDER BY id DESC" + (" LIMIT ?" if limit else "")
+    with connect() as conn:
+        return [_version(r) for r in conn.execute(sql, (limit,) if limit else ())]
+
+
+def snapshot_profile(source: str, note: str | None = None) -> int | None:
+    """Version the current profile values. Returns the new version id, or None when they equal the latest
+    version (a save without a real change creates no version). source: initial | manual | reset | feedback | restore."""
+    values = current_profile_values()
+    latest = latest_version()
+    if latest is not None and latest["data"] == values:
+        return None
+    return add_version(source, values, note)
+
+
+def restore_version(version_id: int) -> int | None:
+    """Write the five profile settings of a version back and record that as a new version (source "restore",
+    note "aus Version #n"). Returns the new version id, or None if the profile already had these values.
+    Raises LookupError for an unknown version."""
+    version = get_version(version_id)
+    if version is None:
+        raise LookupError("Version nicht gefunden.")
+    update_settings(version["data"])
+    return snapshot_profile("restore", f"aus Version #{version_id}")
+
+
+def _ensure_initial_version() -> None:
+    """First start with versioning (new or older database): the current values become version "initial"."""
+    with connect() as conn:
+        exists = conn.execute("SELECT 1 FROM profile_versions LIMIT 1").fetchone()
+    if not exists:
+        add_version("initial", current_profile_values())
+
+
+# --- edit sessions --------------------------------------------------------------
+
+SESSION_UPDATE_COLUMNS = {"current_text", "final_text", "status", "use_as_example", "finished_at", "rules_basis",
+                          "processed_version_id"}
+
+
+def create_session(listing_id: int, base_draft_id: int | None, text: str, profile_version_id: int | None) -> int:
+    """A new open session with `text` as original and current text. Raises sqlite3.IntegrityError when the
+    listing already has an open session (unique index idx_edit_sessions_open)."""
+    ts = now_iso()
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO edit_sessions (listing_id, base_draft_id, original_text, current_text, status,
+                                          profile_version_id, created_at, updated_at)
+               VALUES (?, ?, ?, ?, 'open', ?, ?, ?)""",
+            (listing_id, base_draft_id, text, text, profile_version_id, ts, ts),
+        )
+        return cur.lastrowid
+
+
+def get_session(session_id: int) -> dict | None:
+    with connect() as conn:
+        return _row(conn.execute("SELECT * FROM edit_sessions WHERE id = ?", (session_id,)).fetchone())
+
+
+def open_session(listing_id: int) -> dict | None:
+    with connect() as conn:
+        return _row(conn.execute("SELECT * FROM edit_sessions WHERE listing_id = ? AND status = 'open'",
+                                 (listing_id,)).fetchone())
+
+
+def latest_session(listing_id: int) -> dict | None:
+    """The listing's newest session, open or done."""
+    with connect() as conn:
+        return _row(conn.execute("SELECT * FROM edit_sessions WHERE listing_id = ? ORDER BY id DESC LIMIT 1",
+                                 (listing_id,)).fetchone())
+
+
+def update_session(session_id: int, **fields) -> None:
+    """Set columns of SESSION_UPDATE_COLUMNS; updated_at is set too. Raises sqlite3.IntegrityError when
+    status 'open' would give the listing a second open session."""
+    _update("edit_sessions", SESSION_UPDATE_COLUMNS | {"updated_at"}, session_id, {**fields, "updated_at": now_iso()})
+
+
+def example_sessions(limit: int | None = 3) -> list[dict]:
+    """Done sessions marked use_as_example, newest finished first, with listing_title / listing_address
+    (the "## Beispiele" in the system prompt and the list of used examples)."""
+    sql = (f"SELECT s.*, {_LISTING_INFO} FROM edit_sessions s JOIN listings l ON l.id = s.listing_id "
+           "WHERE s.status = 'done' AND s.use_as_example = 1 AND TRIM(COALESCE(s.final_text, '')) != '' "
+           "ORDER BY s.finished_at DESC, s.id DESC" + (" LIMIT ?" if limit else ""))
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(sql, (limit,) if limit else ())]
+
+
+def unprocessed_sessions(limit: int | None = None) -> list[dict]:
+    """Done sessions whose final text differs from Claude's original and that no profile rewrite has processed
+    yet, newest finished first, with listing info."""
+    sql = (f"SELECT s.*, {_LISTING_INFO} FROM edit_sessions s JOIN listings l ON l.id = s.listing_id "
+           "WHERE s.status = 'done' AND s.processed_version_id IS NULL AND s.final_text IS NOT NULL "
+           "AND s.final_text != s.original_text ORDER BY s.finished_at DESC, s.id DESC" + (" LIMIT ?" if limit else ""))
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(sql, (limit,) if limit else ())]
+
+
+def mark_sessions_processed(session_ids: list[int], version_id: int) -> None:
+    if not session_ids:
+        return
+    with connect() as conn:
+        conn.execute(f"UPDATE edit_sessions SET processed_version_id = ? WHERE id IN ({_placeholders(session_ids)}) "
+                     "AND processed_version_id IS NULL", [version_id, *session_ids])
+
+
+# --- feedback -------------------------------------------------------------------
+
+def add_feedback(listing_id: int, source: str, kind: str, text: str, *, session_id: int | None = None,
+                 before_text: str | None = None) -> int:
+    """source: editor | telegram | dashboard; kind: critique (text = the critique verbatim) or quick
+    (text = shorter | formal | regenerate). before_text: the text the critique was about (editor only)."""
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO feedback (listing_id, session_id, source, kind, text, before_text, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (listing_id, session_id, source, kind, text, before_text, now_iso()),
+        )
+        return cur.lastrowid
+
+
+def list_feedback(*, unprocessed: bool = False, session_id: int | None = None, kind: str | None = None,
+                  limit: int | None = None) -> list[dict]:
+    """Newest first, with listing info (listing_title, listing_provider, listing_price, listing_size,
+    listing_address)."""
+    where, params = [], []
+    if unprocessed:
+        where.append("f.processed_version_id IS NULL")
+    if session_id is not None:
+        where.append("f.session_id = ?")
+        params.append(session_id)
+    if kind is not None:
+        where.append("f.kind = ?")
+        params.append(kind)
+    sql = (f"SELECT f.*, {_LISTING_INFO} FROM feedback f JOIN listings l ON l.id = f.listing_id"
+           + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY f.id DESC" + (" LIMIT ?" if limit else ""))
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(sql, [*params, limit] if limit else params)]
+
+
+def quick_feedback_counts(unprocessed: bool = True) -> dict[str, int]:
+    """{"shorter": 7, "regenerate": 2, ...} of the quick buttons."""
+    sql = ("SELECT text, COUNT(*) AS n FROM feedback WHERE kind = 'quick'"
+           + (" AND processed_version_id IS NULL" if unprocessed else "") + " GROUP BY text")
+    with connect() as conn:
+        return {r["text"]: r["n"] for r in conn.execute(sql)}
+
+
+def count_unprocessed_feedback() -> int:
+    with connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM feedback WHERE processed_version_id IS NULL").fetchone()[0]
+
+
+def mark_feedback_processed(feedback_ids: list[int], version_id: int) -> None:
+    if not feedback_ids:
+        return
+    with connect() as conn:
+        conn.execute(f"UPDATE feedback SET processed_version_id = ? WHERE id IN ({_placeholders(feedback_ids)}) "
+                     "AND processed_version_id IS NULL", [version_id, *feedback_ids])
+
+
+def count_feedback_since(listing_id: int, source: str, since_iso: str) -> int:
+    with connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM feedback WHERE listing_id = ? AND source = ? AND created_at >= ?",
+                            (listing_id, source, since_iso)).fetchone()[0]
+
+
+# --- learned rules --------------------------------------------------------------
+
+RULE_UPDATE_COLUMNS = {"text", "status", "reason", "decided_at", "merged_version_id"}
+
+
+def add_rule(text: str, *, status: str = "proposed", action: str = "add", reason: str | None = None,
+             session_id: int | None = None, replaces_rule_id: int | None = None) -> int:
+    """action: add | update | remove (what the proposal does; replaces_rule_id = the rule it changes).
+    proposed_text keeps Claude's wording when the text is edited before accepting."""
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO learned_rules (text, status, reason, session_id, replaces_rule_id, created_at, action,
+                                          proposed_text)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (text, status, reason, session_id, replaces_rule_id, now_iso(), action, text),
+        )
+        return cur.lastrowid
+
+
+_RULE_SELECT = (f"SELECT r.*, s.listing_id AS listing_id, {_LISTING_INFO} FROM learned_rules r "
+                "LEFT JOIN edit_sessions s ON s.id = r.session_id LEFT JOIN listings l ON l.id = s.listing_id")
+
+
+def get_rule(rule_id: int) -> dict | None:
+    """A rule with its origin (listing_id, listing_title, ... of its session; NULL without session)."""
+    with connect() as conn:
+        return _row(conn.execute(_RULE_SELECT + " WHERE r.id = ?", (rule_id,)).fetchone())
+
+
+def list_rules(statuses=None, *, session_id: int | None = None, newest_first: bool = False,
+               limit: int | None = None) -> list[dict]:
+    """Rules (with origin, like get_rule), oldest first unless newest_first (by decision time, then id)."""
+    where, params = [], []
+    if statuses:
+        statuses = [statuses] if isinstance(statuses, str) else list(statuses)
+        where.append(f"r.status IN ({_placeholders(statuses)})")
+        params += statuses
+    if session_id is not None:
+        where.append("r.session_id = ?")
+        params.append(session_id)
+    order = " ORDER BY COALESCE(r.decided_at, r.created_at) DESC, r.id DESC" if newest_first else " ORDER BY r.id"
+    sql = _RULE_SELECT + (" WHERE " + " AND ".join(where) if where else "") + order + (" LIMIT ?" if limit else "")
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(sql, [*params, limit] if limit else params)]
+
+
+def count_rules(status: str) -> int:
+    with connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM learned_rules WHERE status = ?", (status,)).fetchone()[0]
+
+
+def update_rule(rule_id: int, **fields) -> None:
+    _update("learned_rules", RULE_UPDATE_COLUMNS, rule_id, fields)
+
+
+def delete_rule(rule_id: int) -> None:
+    """Delete a rule and the open proposals that would change it; later rules that replaced it keep their text."""
+    with connect() as conn:
+        conn.execute("DELETE FROM learned_rules WHERE replaces_rule_id = ? AND status = 'proposed'", (rule_id,))
+        conn.execute("UPDATE learned_rules SET replaces_rule_id = NULL WHERE replaces_rule_id = ?", (rule_id,))
+        conn.execute("DELETE FROM learned_rules WHERE id = ?", (rule_id,))
+
+
+def delete_proposed_rules(session_id: int) -> None:
+    """Undecided proposals of a session (replaced by a new round of proposals)."""
+    with connect() as conn:
+        conn.execute("DELETE FROM learned_rules WHERE session_id = ? AND status = 'proposed'", (session_id,))
+
+
+def merge_rules(rule_ids: list[int], version_id: int) -> None:
+    """Active or inactive rules that a profile rewrite took over become 'merged'."""
+    if not rule_ids:
+        return
+    with connect() as conn:
+        conn.execute(f"UPDATE learned_rules SET status = 'merged', merged_version_id = ?, decided_at = ? "
+                     f"WHERE id IN ({_placeholders(rule_ids)}) AND status IN ('active', 'inactive')",
+                     [version_id, now_iso(), *rule_ids])
+
+
+# --- rewrite proposals ------------------------------------------------------------
+
+PROPOSAL_UPDATE_COLUMNS = {"status", "edits", "decided_at", "applied_version_id"}
+
+
+def _proposal(row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    proposal = dict(row)
+    for key in ("edits", "feedback_ids", "session_ids"):
+        proposal[key] = _json_list(proposal.get(key))
+    return proposal
+
+
+def add_rewrite_proposal(base_version_id: int, edits: list[dict], feedback_ids: list[int],
+                         session_ids: list[int]) -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO rewrite_proposals (created_at, base_version_id, status, edits, feedback_ids, session_ids)
+               VALUES (?, ?, 'pending', ?, ?, ?)""",
+            (now_iso(), base_version_id, json.dumps(edits, ensure_ascii=False), json.dumps(feedback_ids),
+             json.dumps(session_ids)),
+        )
+        return cur.lastrowid
+
+
+def get_rewrite_proposal(proposal_id: int) -> dict | None:
+    """With edits, feedback_ids and session_ids decoded to lists."""
+    with connect() as conn:
+        return _proposal(conn.execute("SELECT * FROM rewrite_proposals WHERE id = ?", (proposal_id,)).fetchone())
+
+
+def list_rewrite_proposals(statuses=None, limit: int | None = None) -> list[dict]:
+    """Newest first, decoded like get_rewrite_proposal."""
+    where, params = "", []
+    if statuses:
+        statuses = [statuses] if isinstance(statuses, str) else list(statuses)
+        where = f" WHERE status IN ({_placeholders(statuses)})"
+        params = statuses
+    sql = "SELECT * FROM rewrite_proposals" + where + " ORDER BY id DESC" + (" LIMIT ?" if limit else "")
+    with connect() as conn:
+        return [_proposal(r) for r in conn.execute(sql, [*params, limit] if limit else params)]
+
+
+def update_rewrite_proposal(proposal_id: int, **fields) -> None:
+    """`edits` may be given as a list (stored as JSON)."""
+    if isinstance(fields.get("edits"), list):
+        fields["edits"] = json.dumps(fields["edits"], ensure_ascii=False)
+    _update("rewrite_proposals", PROPOSAL_UPDATE_COLUMNS, proposal_id, fields)
+
+
+# --- llm_usage (learning calls) -----------------------------------------------------
+
+def add_llm_usage(purpose: str, provider: str, model: str, *, listing_id: int | None = None, input_tokens: int = 0,
+                  output_tokens: int = 0, cache_read_tokens: int = 0, cache_write_tokens: int = 0,
+                  cost_usd: float = 0.0, currency: str = "USD", cost_native: float | None = None) -> int:
+    """purpose: rules | rewrite. Costs like add_draft: cost_native in `currency`, cost_usd for the legacy column."""
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO llm_usage (created_at, listing_id, purpose, provider, model, input_tokens, output_tokens,
+                                      cache_read_tokens, cache_write_tokens, cost_usd, currency, cost_native)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (now_iso(), listing_id, purpose, provider, model, input_tokens, output_tokens, cache_read_tokens,
+             cache_write_tokens, cost_usd, currency, cost_usd if cost_native is None else cost_native),
+        )
+        return cur.lastrowid
+
+
+def list_llm_usage(limit: int = 50) -> list[dict]:
+    """Newest first (with cost_eur)."""
+    sql = f"SELECT *, {cost_eur_sql()} AS cost_eur FROM llm_usage ORDER BY id DESC LIMIT ?"
+    rate = _rate()
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(sql, (rate, limit))]
+
+
+def count_llm_usage_since(listing_id: int, purpose: str, since_iso: str) -> int:
+    with connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM llm_usage WHERE listing_id = ? AND purpose = ? AND created_at >= ?",
+                            (listing_id, purpose, since_iso)).fetchone()[0]
+
+
+# --- editor access from Telegram (editor_access.py; all times are ISO strings like now_iso()) -------------
+
+def use_login_hash(hash_sha256: str, now: str, purge_before: str) -> bool:
+    """Record a Telegram login hash as used. False if it was used before. Entries older than purge_before go."""
+    with connect() as conn:
+        conn.execute("DELETE FROM used_login_hashes WHERE created_at < ?", (purge_before,))
+        cur = conn.execute("INSERT OR IGNORE INTO used_login_hashes (hash_sha256, created_at) VALUES (?, ?)",
+                           (hash_sha256, now))
+        return cur.rowcount == 1
+
+
+def editor_link_first_use(link_key: str, listing_id: int, now: str, purge_before: str) -> str:
+    """first_used_at of a signed link, recorded as `now` on its first use. Links first used before purge_before
+    are forgotten (their token has expired by then anyway)."""
+    with connect() as conn:
+        conn.execute("DELETE FROM editor_links WHERE first_used_at < ?", (purge_before,))
+        conn.execute("INSERT OR IGNORE INTO editor_links (link_key, listing_id, first_used_at) VALUES (?, ?, ?)",
+                     (link_key, listing_id, now))
+        return conn.execute("SELECT first_used_at FROM editor_links WHERE link_key = ?", (link_key,)).fetchone()[0]
+
+
+def add_editor_access_session(token_hash: str, listing_id: int, telegram_user_id: int, created_at: str,
+                              expires_at: str, purge_before: str) -> int:
+    """A new editor browser session; sessions that expired before purge_before are removed."""
+    with connect() as conn:
+        conn.execute("DELETE FROM editor_access_sessions WHERE expires_at < ?", (purge_before,))
+        cur = conn.execute(
+            """INSERT INTO editor_access_sessions (token_hash, listing_id, telegram_user_id, created_at, expires_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (token_hash, listing_id, telegram_user_id, created_at, expires_at),
+        )
+        return cur.lastrowid
+
+
+def get_editor_access_session(token_hash: str) -> dict | None:
+    with connect() as conn:
+        return _row(conn.execute("SELECT * FROM editor_access_sessions WHERE token_hash = ?", (token_hash,)).fetchone())

@@ -438,6 +438,19 @@ pre.draft {
 :target.draft-card { animation: flash-target 1.6s ease-out 1; }
 @keyframes flash-target { from { box-shadow: 0 0 0 4px var(--accent); } to { box-shadow: 0 0 0 2px transparent; } }
 
+/* ---------- text diff (textdiff.word_diff + macros.text_diff): profile history, rewrite proposals, editor ---------- */
+.diff { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.diff ins, .diff del { border-radius: .2rem; padding: 0 .08em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.diff ins { background: var(--ok-soft); color: var(--ok); text-decoration: none; box-shadow: inset 0 -1px 0 var(--ok-line); }
+.diff del { background: var(--err-soft); color: var(--err); text-decoration: line-through; text-decoration-thickness: 1px; }
+/* Screen readers don't announce <ins>/<del>: say it, without showing it. */
+.diff ins::before, .diff ins::after, .diff del::before, .diff del::after {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(100%); white-space: nowrap;
+}
+.diff ins::before { content: " [eingefügt: "; }
+.diff del::before { content: " [gelöscht: "; }
+.diff ins::after, .diff del::after { content: "] "; }
+
 /* ---------- gallery (photo grid with captions; markup comes from the gallery feature) ----------
    <div class="gallery">
      <a class="gallery-item" href="FULL_URL" data-lightbox data-caption="Wohnzimmer">

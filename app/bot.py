@@ -33,7 +33,8 @@ from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
 from telegram import (
-    Bot, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, LinkPreviewOptions, ReplyParameters, Update,
+    Bot, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, LinkPreviewOptions, LoginUrl,
+    ReplyParameters, Update,
 )
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden, InvalidToken, RetryAfter, TelegramError
@@ -48,7 +49,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import db, llm, media, portals, settings, vault
+from . import db, editor_access, llm, media, portals, settings, vault
 
 log = logging.getLogger(__name__)
 
@@ -299,6 +300,20 @@ def dashboard_url(listing_id: int) -> str | None:
     return f"{_public_base}/listing/{int(listing_id)}" if _public_base else None
 
 
+def editor_url(listing_id: int) -> str | None:
+    """Signed link to the listing's draft editor (token valid 7 days, see editor_access.py), or None while the
+    public address is unknown. Only usable as a login_url: opening it needs Telegram's login data too."""
+    return f"{_public_base}{editor_access.make_editor_path(listing_id)}" if _public_base else None
+
+
+def editor_button(listing_id: int) -> InlineKeyboardButton | None:
+    """"📝 Editor" as a login_url button: Telegram appends the user's signed login data when it is tapped
+    (editor_access.start_editor_browser_session checks them). None while the public address is unknown.
+    Needs the dashboard domain linked to the bot (@BotFather /setdomain), else Telegram rejects the message."""
+    url = editor_url(listing_id)
+    return InlineKeyboardButton("📝 Editor", login_url=LoginUrl(url=url)) if url else None
+
+
 # --- input checks (pure) -----------------------------------------------------
 
 _CALLBACK_RE = re.compile(r"([a-z]{1,10}):([1-9][0-9]{0,11})")
@@ -351,10 +366,7 @@ def allowed_user_ids() -> set[int] | None:
     """The Telegram user allowlist (dashboard value, else env). Empty set = no restriction.
     None = a saved list can't be decrypted (SESSION_SECRET changed): fail closed, nobody may use the bot
     until the list is entered again or a new pairing is done."""
-    if vault.undecryptable("telegram_allowed_user_ids"):
-        return None
-    raw = vault.get("telegram_allowed_user_ids") or ""
-    return {int(part) for part in raw.split(",") if part.strip().isdigit()}
+    return vault.allowed_user_ids()
 
 
 def configured_chat_id() -> int | None:
@@ -443,7 +455,7 @@ async def _generate(tg_bot, listing: dict, kind: str, instruction: str | None = 
     # Keep the buttons while generating: if the final edit never happens (restart, network), the message stays usable.
     await _edit(tg_bot, listing, generating_text(listing), current_view(listing)[1])
     try:
-        draft = await llm.create_and_store_draft(listing_id, kind, instruction)
+        draft = await llm.create_and_store_draft(listing_id, kind, instruction, source="telegram")
     except llm.LLMError as exc:  # includes BudgetExceeded; message is safe to show
         await _show(tg_bot, listing, note=str(exc) or GENERIC_ERROR)
         return

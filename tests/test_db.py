@@ -180,3 +180,32 @@ def test_budget_setting_becomes_euros_with_the_same_number(tmp_path):
 def test_fresh_database_budget_default(fresh_db):
     assert fresh_db.get_settings()["monthly_budget_eur"] == "15"
     assert "monthly_budget_usd" not in fresh_db.get_settings()
+
+
+LEARNING_TABLES = {"profile_versions", "edit_sessions", "feedback", "learned_rules", "rewrite_proposals", "llm_usage",
+                   "used_login_hashes", "editor_links", "editor_access_sessions"}
+
+
+def test_migration_adds_learning_tables_and_initial_version(tmp_path):
+    """A database from before learning: the new tables appear, and the stored profile becomes version "initial"."""
+    import sqlite3
+
+    from app import db
+
+    conn = sqlite3.connect(tmp_path / "immobot.db")
+    conn.executescript(OLD_SCHEMA + "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+                       "INSERT INTO settings VALUES ('profile', 'Name: Erika'), ('target_words', '120'),"
+                       " ('effort', 'high');")
+    conn.close()
+    for _ in range(2):  # idempotent: a restart adds no second "initial"
+        db.init_db(str(tmp_path))
+    with db.connect() as conn:
+        tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert LEARNING_TABLES <= tables
+    (version,) = db.list_versions()
+    assert version["source"] == "initial"
+    assert version["data"]["profile"] == "Name: Erika" and version["data"]["target_words"] == "120"
+    assert version["data"]["style"] == settings.DEFAULT_STYLE and set(version["data"]) == set(settings.PROFILE_FIELDS)
+    assert db.get_settings()["use_rules"] == "1" and db.get_settings()["use_examples"] == "1"
+    assert db.stats()["cost_total"] == pytest.approx(0.042 / 1.10)  # the old draft only, no learning calls yet
+    assert db.list_listings()[0]["cost_eur"] == pytest.approx(0.042 / 1.10)

@@ -13,6 +13,9 @@
 Also here: the Telegram chat pairing ("/pair CODE"). Only an HMAC-SHA256 of the code (keyed from
 SESSION_SECRET, so a copy of the database can't be used to brute-force the short code) and its expiry
 are stored, in the meta table.
+
+Also derived here: the HMAC key of the signed editor links (editor_access.py), so they stop working when
+SESSION_SECRET changes, like sessions do.
 """
 
 import hmac
@@ -54,6 +57,7 @@ ACTION_LABELS = {  # credential_events.action -> German label
 MAX_LEN = 500
 KDF_INFO = b"immobot credentials v1"
 PAIRING_KDF_INFO = b"immobot pairing v1"
+EDITOR_LINK_KDF_INFO = b"immobot editor link v1"
 
 PAIRING_META_KEY = "telegram_pairing"
 PAIRING_TTL_S = 600
@@ -66,6 +70,7 @@ _USER_IDS = re.compile(r"[0-9]{1,20}(,[0-9]{1,20})*")
 
 _aead: AESGCM | None = None
 _pairing_key: bytes | None = None
+_editor_link_key: bytes | None = None
 _env: dict[str, str] = {}
 _warned: set[str] = set()  # names already logged as undecryptable (log once, not on every lookup)
 
@@ -76,15 +81,23 @@ class InvalidValue(ValueError):
 
 def init(session_secret: str, env_fallbacks: dict[str, str]) -> None:
     """Derive the encryption key and remember the env fallbacks. Call once at startup (after db.init_db)."""
-    global _aead, _pairing_key, _env
+    global _aead, _pairing_key, _editor_link_key, _env
     _aead = AESGCM(_derive(session_secret, KDF_INFO))
     _pairing_key = _derive(session_secret, PAIRING_KDF_INFO)
+    _editor_link_key = _derive(session_secret, EDITOR_LINK_KDF_INFO)
     _env = {name: value.strip() for name, value in env_fallbacks.items() if name in LABELS and value and value.strip()}
     _warned.clear()
 
 
 def _derive(session_secret: str, info: bytes) -> bytes:
     return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=info).derive(session_secret.encode("utf-8"))
+
+
+def editor_link_key() -> bytes:
+    """HMAC key of the signed editor links (HKDF from SESSION_SECRET, info EDITOR_LINK_KDF_INFO)."""
+    if _editor_link_key is None:
+        raise RuntimeError("vault.init() was not called")
+    return _editor_link_key
 
 
 def _cipher() -> AESGCM:
@@ -206,6 +219,15 @@ def credential_status(name: str) -> dict:
         shown = (db.get_credential(name) or {}).get("hint")
     return {"name": name, "label": LABELS[name], "source": where, "updated_at": updated_at,
             "undecryptable": undecryptable, "hint": shown}
+
+
+def allowed_user_ids() -> "set[int] | None":  # quoted: set() is redefined in this module
+    """The Telegram user allowlist "telegram_allowed_user_ids" (dashboard value, else env) as ids. Empty set = not
+    set. None = a saved list can't be decrypted (SESSION_SECRET changed)."""
+    if undecryptable("telegram_allowed_user_ids"):
+        return None
+    raw = get("telegram_allowed_user_ids") or ""
+    return {int(part) for part in raw.split(",") if part.strip().isdigit()}
 
 
 def secret_values() -> list[str]:

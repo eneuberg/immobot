@@ -493,8 +493,10 @@ def listing_id(fresh_db, monkeypatch):
 def fake_generate(monkeypatch):
     calls = []
 
-    async def generate(listing, settings, kind, previous_text=None, instruction=None, pictures=None):
-        calls.append({"listing": listing, "kind": kind, "previous_text": previous_text, "instruction": instruction})
+    async def generate(listing, settings, kind, previous_text=None, instruction=None, pictures=None, rules=None,
+                       examples=None):
+        calls.append({"listing": listing, "kind": kind, "previous_text": previous_text, "instruction": instruction,
+                      "rules": rules, "examples": examples, "system": llm.build_system_prompt(settings, rules, examples)})
         return llm.DraftResult(
             text="Entwurf " + str(len(calls)), hint="Codewort" if kind == "initial" else None, model="claude-opus-5-5",
             input_tokens=1000, output_tokens=400, cache_read_tokens=0, cache_write_tokens=0, cost_usd=0.012,
@@ -776,7 +778,7 @@ def test_unexpected_model_list_failure_is_cached_generically(fresh_db, monkeypat
 def test_create_and_store_draft_records_provider_and_currency(fresh_db, listing_id, monkeypatch):
     fresh_db.update_settings(DGPT_SETTINGS)
 
-    async def generate(listing, settings, kind, previous_text=None, instruction=None, pictures=None):
+    async def generate(listing, settings, kind, previous_text=None, instruction=None, pictures=None, **learned):
         return llm.DraftResult(text="Hallo", hint=None, model="claude-haiku-5.5", input_tokens=10, output_tokens=5,
                                cache_read_tokens=0, cache_write_tokens=0, cost_usd=0.024, provider="deutschlandgpt",
                                currency="EUR", cost_native=0.02)
@@ -884,7 +886,7 @@ def test_create_and_store_draft_fetches_is24_media_first(fresh_db, fake_generate
 def test_create_and_store_draft_without_media_passes_none(fresh_db, listing_id, monkeypatch):
     seen = []
 
-    async def generate(listing, settings, kind, previous_text=None, instruction=None, pictures=None):
+    async def generate(listing, settings, kind, previous_text=None, instruction=None, pictures=None, **learned):
         seen.append(pictures)
         return llm.DraftResult(text="x", hint=None, model="claude-opus-5-5", input_tokens=1, output_tokens=1,
                                cache_read_tokens=0, cache_write_tokens=0, cost_usd=0.0)

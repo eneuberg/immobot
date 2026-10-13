@@ -68,6 +68,9 @@ EFFORTS = ["low", "medium", "high"]
 
 # Draft kinds stored in drafts.kind
 DRAFT_KINDS = ["initial", "regenerate", "shorter", "formal", "custom", "test"]
+# Draft kinds that count as feedback on the previous draft (stored in the feedback table, see llm.create_and_store_draft)
+QUICK_FEEDBACK_KINDS = ("shorter", "formal", "regenerate")
+FEEDBACK_SOURCES = ("editor", "telegram", "dashboard")
 
 # Listing statuses stored in listings.status
 STATUSES = {
@@ -139,7 +142,12 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "followup_delay_s": "4",
     "paused": "0",
     "fredy_base_url": "",  # portals.fredy_url: own "In Fredy öffnen" links; empty = the fredyUrl Fredy sent
+    "use_examples": "1",  # learning.py: the newest finished editor texts go into the system prompt as examples
+    "use_rules": "1",  # learning.py: active learned rules go into the system prompt; rules are proposed on "Fertig"
 }
+
+# The settings that make up the writing profile. Every change of one of them is versioned (db.snapshot_profile).
+PROFILE_FIELDS = ("profile", "wishes", "style", "system_prompt", "target_words")
 
 
 def as_bool(value: str | None) -> bool:

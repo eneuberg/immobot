@@ -107,7 +107,8 @@ def fake_llm(monkeypatch, db, text="Guten Tag,\nich interessiere mich für die W
     """Replace llm.create_and_store_draft; returns the list of recorded calls."""
     calls = []
 
-    async def create_and_store_draft(listing_id, kind, instruction=None):
+    async def create_and_store_draft(listing_id, kind, instruction=None, source=None, record_feedback=True):
+        assert source == "telegram"  # the bot always says where the feedback comes from
         calls.append((listing_id, kind, instruction))
         if error is not None:
             raise error
@@ -413,7 +414,7 @@ def test_double_tap_does_not_generate_twice(tg, monkeypatch):
     release = asyncio.Event()
     calls = []
 
-    async def slow_create(listing_id, kind, instruction=None):
+    async def slow_create(listing_id, kind, instruction=None, **kwargs):
         calls.append(kind)
         await release.wait()
         db.add_draft(listing_id, kind, "Text", "claude-opus-5-5")

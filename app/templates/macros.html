@@ -99,3 +99,9 @@
 </details>
 {% endif %}
 {%- endmacro %}
+
+{# Word diff from textdiff.word_diff (filter "word_diff": {{ text_diff(old|word_diff(new)) }}). Kept on one line:
+   the block is white-space: pre-wrap, so line breaks inside the texts show and no template whitespace may leak in. #}
+{% macro text_diff(segments, extra_class="") -%}
+<div class="diff{% if extra_class %} {{ extra_class }}{% endif %}">{% for op, text in segments %}{% if op == "insert" %}<ins>{{ text }}</ins>{% elif op == "delete" %}<del>{{ text }}</del>{% else %}{{ text }}{% endif %}{% endfor %}</div>
+{%- endmacro %}

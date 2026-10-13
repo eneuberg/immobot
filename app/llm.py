@@ -1,6 +1,10 @@
 """Claude drafting: build the prompt, call the API, compute the cost and store the draft.
 
-create_and_store_draft() is the single entry point for the Telegram bot and the dashboard.
+create_and_store_draft() is the single entry point for the Telegram bot and the dashboard. It also records
+the variants ("Kürzer", "Förmlicher", "Neu", "Anpassen") as feedback for learning.py.
+
+The system prompt contains the learned rules and the newest finished editor texts as examples when those are
+switched on (settings use_rules / use_examples, see learned_context()).
 
 Two providers (settings.PROVIDERS), both through the Anthropic SDK:
 - Anthropic: structured outputs (JSON schema) and server-side refusal fallbacks.
@@ -22,8 +26,8 @@ import httpx
 from . import db, images, media, vault
 from .portals import provider_label, safe_url
 from .settings import (
-    DEFAULT_SYSTEM_PROMPT, DRAFT_KINDS, EFFORTS, PRICES, PROVIDERS, as_bool, as_float, as_int, cost, fmt_eur, fmt_money,
-    model_of, provider_of, to_usd,
+    DEFAULT_SYSTEM_PROMPT, DRAFT_KINDS, EFFORTS, FEEDBACK_SOURCES, PRICES, PROVIDERS, QUICK_FEEDBACK_KINDS, as_bool,
+    as_float, as_int, cost, fmt_eur, fmt_money, model_of, provider_of, to_usd,
 )
 
 log = logging.getLogger(__name__)
@@ -41,6 +45,10 @@ MAX_IMAGES_LIMIT = 20  # upper bound of the llm_max_images setting
 VARIANT_KINDS = ("regenerate", "shorter", "formal", "custom")
 INSTRUCTION_MAX_CHARS = 500
 DESCRIPTION_MAX_CHARS = 12000
+EXAMPLE_COUNT = 3  # finished editor texts in "## Beispiele"
+EXAMPLE_MAX_CHARS = 1500
+EXAMPLES_INTRO = ("So hat die suchende Person ihre letzten Nachrichten selbst abgeschickt. Übernimm Ton, Aufbau und "
+                  "Länge, aber keine Inhalte, die nur zu jenem Inserat passen.")
 
 IMAGE_MAX_BYTES = 10 * 1024 * 1024
 IMAGE_USER_AGENT = (
@@ -77,6 +85,20 @@ class BudgetExceeded(LLMError):
 
 
 @dataclass
+class Usage:
+    """Tokens and cost of one request (see usage_of)."""
+    model: str  # the model that answered
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    cost_usd: float  # counts toward budget and totals
+    provider: str
+    currency: str
+    cost_native: float  # what the provider bills, in `currency`
+
+
+@dataclass
 class DraftResult:
     text: str
     hint: str | None
@@ -98,6 +120,13 @@ def max_images(settings: dict) -> int:
 
 def no_key_message(provider: str) -> str:
     return "Kein " + PROVIDERS[provider]["label"] + "-API-Key hinterlegt – im Dashboard unter Einstellungen → KI & Kosten eintragen."
+
+
+def check_budget(settings: dict) -> None:
+    """Raise BudgetExceeded once this month's costs (drafts and learning calls, in euros) reached the budget."""
+    budget = as_float(settings.get("monthly_budget_eur"), 0.0)
+    if budget > 0 and db.cost_this_month() >= budget:
+        raise BudgetExceeded("Monatsbudget von " + fmt_eur(budget) + " erreicht – im Dashboard erhöhen.")
 
 
 def _get_client(provider: str) -> anthropic.AsyncAnthropic:
@@ -198,7 +227,11 @@ def cached_models(provider: str) -> dict | None:
 # Settings and listing texts are user-editable or foreign data and may contain braces,
 # so everything is joined with plain string concatenation (never str.format).
 
-def build_system_prompt(settings: dict) -> str:
+def build_system_prompt(settings: dict, rules: list[str] | None = None, examples: list[dict] | None = None) -> str:
+    """The system prompt from the profile settings. Pure: the learned parts are passed in (learned_context()).
+    `rules`: texts of the active learned rules -> "## Gelernte Vorlieben" if use_rules is on.
+    `examples`: finished editor sessions (db.example_sessions rows: final_text, listing_title, listing_address)
+    -> "## Beispiele" if use_examples is on. Both stay in the system prompt so it changes rarely (caching)."""
     style = (settings.get("style") or "").strip()
     target_words = as_int(settings.get("target_words"), 150)
     if target_words > 0:
@@ -209,7 +242,34 @@ def build_system_prompt(settings: dict) -> str:
         "## Wünsche\n" + ((settings.get("wishes") or "").strip() or "(keine Angaben)"),
         "## Schreibstil\n" + (style or "(keine Angaben)"),
     ]
+    rules = [rule.strip() for rule in rules or [] if rule and rule.strip()] if as_bool(settings.get("use_rules")) else []
+    if rules:
+        sections.append("## Gelernte Vorlieben\n" + "\n".join("- " + " ".join(rule.split()) for rule in rules))
+    blocks = [_example_block(e) for e in examples or []] if as_bool(settings.get("use_examples")) else []
+    blocks = [block for block in blocks if block]
+    if blocks:
+        sections.append("## Beispiele\n" + EXAMPLES_INTRO + "\n\n" + "\n\n".join(blocks))
     return "\n\n".join(sections)
+
+
+def _example_block(example: dict) -> str | None:
+    """'<beispiel>\nTitel · Adresse\n\nText (max. EXAMPLE_MAX_CHARS)\n</beispiel>', or None without text."""
+    text = (example.get("final_text") or "").strip()
+    if not text:
+        return None
+    if len(text) > EXAMPLE_MAX_CHARS:
+        text = text[:EXAMPLE_MAX_CHARS].rstrip() + " …"
+    head = [" ".join(str(example[key]).split())[:120] for key in ("listing_title", "listing_address")
+            if example.get(key) and str(example[key]).strip()]
+    return "<beispiel>\n" + (" · ".join(head) or "Inserat") + "\n\n" + text + "\n</beispiel>"
+
+
+def learned_context(settings: dict) -> tuple[list[str], list[dict]]:
+    """(rules, examples) for build_system_prompt: the active learned rules (oldest first, so the prompt stays
+    stable) and the EXAMPLE_COUNT newest example sessions - each only when its setting is on."""
+    rules = [rule["text"] for rule in db.list_rules("active")] if as_bool(settings.get("use_rules")) else []
+    examples = db.example_sessions(EXAMPLE_COUNT) if as_bool(settings.get("use_examples")) else []
+    return rules, examples
 
 
 def build_user_text(listing: dict, kind: str, previous_text: str | None = None, instruction: str | None = None) -> str:
@@ -322,11 +382,13 @@ def picture_blocks(pictures: list[tuple[dict, bytes]]) -> list[dict]:
 
 async def generate_draft(
     listing: dict, settings: dict, kind: str, previous_text: str | None = None, instruction: str | None = None,
-    pictures: list[tuple[dict, bytes]] | None = None,
+    pictures: list[tuple[dict, bytes]] | None = None, rules: list[str] | None = None,
+    examples: list[dict] | None = None,
 ) -> DraftResult:
     """Ask Claude (through the configured provider) for one draft. No database writes.
     `pictures`: the stored ImmoScout24 pictures (row, JPEG), already limited to llm_max_images (may be empty).
-    None means there are none for this listing, and Fredy's single image is used instead."""
+    None means there are none for this listing, and Fredy's single image is used instead.
+    `rules` / `examples`: the learned parts of the system prompt, see learned_context()."""
     provider = provider_of(settings)
     client = _get_client(provider)
     model = model_of(settings)
@@ -343,7 +405,7 @@ async def generate_draft(
     content.append({"type": "text", "text": build_user_text(listing, kind, previous_text, instruction)})
 
     structured = provider == "anthropic"  # DeutschlandGPT ignores output_config.format on most models
-    system = build_system_prompt(settings)
+    system = build_system_prompt(settings, rules, examples)
     output_config: dict = {"effort": effort}
     if structured:
         output_config["format"] = {"type": "json_schema", "schema": DRAFT_SCHEMA}
@@ -357,28 +419,58 @@ async def generate_draft(
         "thinking": {"type": "adaptive"},
         "output_config": output_config,
     }
-    try:
-        if provider == "anthropic" and model in FALLBACK_MODELS:
-            response = await client.beta.messages.create(**params, betas=[FALLBACK_BETA], fallbacks="default")
-        else:
-            response = await client.messages.create(**params)
-    except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
-        raise _api_error(provider, exc, "model=" + model) from None
-
+    response = await send(client, provider, model, params)
     return _to_result(response, model, provider, as_float(settings.get("eur_usd_rate"), 1.10))
 
 
-def _to_result(response, requested_model: str, provider: str = "anthropic", eur_usd_rate: float = 1.10) -> DraftResult:
-    # Check stop_reason before reading content: a refusal has empty or partial content.
+async def send(client, provider: str, model: str, params: dict):
+    """One Messages API request. On Anthropic with the server-side refusal fallback for the models that support it.
+    SDK errors become a short German LLMError naming the provider."""
+    try:
+        if provider == "anthropic" and model in FALLBACK_MODELS:
+            return await client.beta.messages.create(**params, betas=[FALLBACK_BETA], fallbacks="default")
+        return await client.messages.create(**params)
+    except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
+        raise _api_error(provider, exc, "model=" + model) from None
+
+
+def check_stop(response, refused: str = "Claude hat diesen Entwurf abgelehnt.") -> None:
+    """Raise LLMError for a refusal (message `refused`) or a cut-off answer. Call before reading the content:
+    a refusal has empty or partial content."""
     if response.stop_reason == "refusal":
         category = getattr(getattr(response, "stop_details", None), "category", None)
-        log.warning("claude refused the draft (model=%s, category=%s)", response.model, category)
-        raise LLMError("Claude hat diesen Entwurf abgelehnt.")
+        log.warning("claude refused (model=%s, category=%s)", response.model, category)
+        raise LLMError(refused)
     if response.stop_reason == "max_tokens":
         log.warning("claude hit max_tokens (model=%s)", response.model)
         raise LLMError("Die Antwort wurde abgeschnitten – bitte nochmal versuchen.")
 
-    text = "".join(block.text for block in response.content if block.type == "text")  # thinking blocks ignored
+
+def reply_text(response) -> str:
+    """The text blocks of a response joined; thinking (and fallback) blocks are ignored."""
+    return "".join(block.text for block in response.content if block.type == "text")
+
+
+def usage_of(response, requested_model: str, provider: str = "anthropic", eur_usd_rate: float = 1.10) -> Usage:
+    """Tokens and cost of a response. response.model is the model that actually answered (differs after a
+    server-side fallback); a name the price table doesn't know is priced as the requested model."""
+    model = response.model or requested_model
+    usage = response.usage
+    input_tokens = usage.input_tokens or 0
+    output_tokens = usage.output_tokens or 0
+    cache_read = getattr(usage, "cache_read_input_tokens", None) or 0
+    cache_write = getattr(usage, "cache_creation_input_tokens", None) or 0
+    priced_as = model if model in PRICES[provider] else requested_model
+    currency = PROVIDERS[provider]["currency"]
+    native = cost(provider, priced_as, input_tokens, output_tokens, cache_read, cache_write)
+    return Usage(model=model, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read,
+                 cache_write_tokens=cache_write, cost_usd=to_usd(native, currency, eur_usd_rate), provider=provider,
+                 currency=currency, cost_native=native)
+
+
+def _to_result(response, requested_model: str, provider: str = "anthropic", eur_usd_rate: float = 1.10) -> DraftResult:
+    check_stop(response)
+    text = reply_text(response)
     if provider == "anthropic":  # structured outputs: exactly our JSON schema
         try:
             data = json.loads(text)
@@ -393,29 +485,19 @@ def _to_result(response, requested_model: str, provider: str = "anthropic", eur_
         draft, hint, how = parse_reply(text)
         log.info("%s reply parsed as %s (model=%s)", provider, how, response.model)
 
-    # response.model is the model that actually answered (differs after a server-side fallback). A name the
-    # price table doesn't know is priced as the requested model.
-    model = response.model or requested_model
-    usage = response.usage
-    input_tokens = usage.input_tokens or 0
-    output_tokens = usage.output_tokens or 0
-    cache_read = getattr(usage, "cache_read_input_tokens", None) or 0
-    cache_write = getattr(usage, "cache_creation_input_tokens", None) or 0
-    priced_as = model if model in PRICES[provider] else requested_model
-    currency = PROVIDERS[provider]["currency"]
-    native = cost(provider, priced_as, input_tokens, output_tokens, cache_read, cache_write)
+    usage = usage_of(response, requested_model, provider, eur_usd_rate)
     return DraftResult(
         text=draft,
         hint=hint,
-        model=model,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        cache_read_tokens=cache_read,
-        cache_write_tokens=cache_write,
-        cost_usd=to_usd(native, currency, eur_usd_rate),
+        model=usage.model,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cache_read_tokens=usage.cache_read_tokens,
+        cache_write_tokens=usage.cache_write_tokens,
+        cost_usd=usage.cost_usd,
         provider=provider,
-        currency=currency,
-        cost_native=native,
+        currency=usage.currency,
+        cost_native=usage.cost_native,
     )
 
 
@@ -491,39 +573,18 @@ def parse_reply(text: str) -> tuple[str, str | None, str]:
 
 # --- entry point ------------------------------------------------------------
 
-async def create_and_store_draft(listing_id: int, kind: str, instruction: str | None = None) -> dict:
-    """Generate a draft for a listing, store it and return the stored drafts row.
-
-    Raises BudgetExceeded when the monthly budget is used up, LLMError for everything else
-    the user should see (both carry a short German message).
-    """
-    if kind not in DRAFT_KINDS:
-        raise LLMError("Unbekannte Entwurfsart.")
-    listing = db.get_listing(listing_id)
-    if listing is None:
-        raise LLMError("Inserat nicht gefunden.")
-    instruction = (instruction or "").strip()[:INSTRUCTION_MAX_CHARS] or None
-    if kind == "custom" and not instruction:
-        raise LLMError("Keine Anweisung angegeben.")
-
-    settings = db.get_settings()
-    budget = as_float(settings.get("monthly_budget_eur"), 0.0)  # euros, like db.cost_this_month()
-    if budget > 0 and db.cost_this_month() >= budget:
-        raise BudgetExceeded("Monatsbudget von " + fmt_eur(budget) + " erreicht – im Dashboard erhöhen.")
-
-    previous_text = None
-    if kind in VARIANT_KINDS:
-        previous = db.latest_draft(listing_id)
-        previous_text = previous["text"] if previous else None
-
-    # Pictures from Fredy or ImmoScout24 (media.py), fetched once, then from the local copies. [] when there are
-    # none or nothing could be fetched - then Fredy's single image is used (pictures=None).
+async def prepare_listing(listing_id: int, listing: dict, settings: dict) -> tuple[dict, list | None]:
+    """(listing, pictures) for generate_draft: pictures from Fredy or ImmoScout24 (media.py), fetched once, then from
+    the local copies, limited to llm_max_images. pictures is None when there are none or nothing could be fetched -
+    then Fredy's single image is used. The listing is re-read: it may have gained the ImmoScout24 details text."""
     want_images = as_bool(settings.get("send_image")) and max_images(settings) > 0
     rows = await media.ensure_media(listing_id, want_images=want_images)
-    listing = db.get_listing(listing_id) or listing  # may have gained the ImmoScout24 details text
-    pictures = media.read_pictures(listing_id, rows[:max_images(settings)]) if rows else None
+    listing = db.get_listing(listing_id) or listing
+    return listing, media.read_pictures(listing_id, rows[:max_images(settings)]) if rows else None
 
-    result = await generate_draft(listing, settings, kind, previous_text, instruction, pictures)
+
+def store_draft(listing_id: int, kind: str, result: DraftResult, instruction: str | None = None) -> int:
+    """Store a generated draft (drafts row) and log it. Returns the draft id."""
     draft_id = db.add_draft(
         listing_id,
         kind,
@@ -543,6 +604,48 @@ async def create_and_store_draft(listing_id: int, kind: str, instruction: str | 
     log.info("draft listing=%s kind=%s provider=%s model=%s tokens=%s/%s cost=%s",
              listing_id, kind, result.provider, result.model, result.input_tokens, result.output_tokens,
              fmt_money(result.cost_usd if result.cost_native is None else result.cost_native, result.currency))
+    return draft_id
+
+
+async def create_and_store_draft(listing_id: int, kind: str, instruction: str | None = None, *,
+                                 source: str = "dashboard", record_feedback: bool = True) -> dict:
+    """Generate a draft for a listing, store it and return the stored drafts row.
+
+    Feedback: "shorter", "formal" and "regenerate" are stored as feedback kind "quick", "custom" as "critique"
+    with the instruction, both with `source` ("telegram" / "dashboard"). The editor stores its own feedback
+    (with the text the critique was about) and passes record_feedback=False; "initial" and "test" never count.
+
+    Raises BudgetExceeded when the monthly budget is used up, LLMError for everything else
+    the user should see (both carry a short German message).
+    """
+    if source not in FEEDBACK_SOURCES:
+        raise ValueError("unknown feedback source: " + str(source))
+    if kind not in DRAFT_KINDS:
+        raise LLMError("Unbekannte Entwurfsart.")
+    listing = db.get_listing(listing_id)
+    if listing is None:
+        raise LLMError("Inserat nicht gefunden.")
+    instruction = (instruction or "").strip()[:INSTRUCTION_MAX_CHARS] or None
+    if kind == "custom" and not instruction:
+        raise LLMError("Keine Anweisung angegeben.")
+
+    settings = db.get_settings()
+    check_budget(settings)
+
+    previous_text = None
+    if kind in VARIANT_KINDS:
+        previous = db.latest_draft(listing_id)
+        previous_text = previous["text"] if previous else None
+
+    listing, pictures = await prepare_listing(listing_id, listing, settings)
+    rules, examples = learned_context(settings)
+    result = await generate_draft(listing, settings, kind, previous_text, instruction, pictures,
+                                  rules=rules, examples=examples)
+    draft_id = store_draft(listing_id, kind, result, instruction)
+    if record_feedback and kind in QUICK_FEEDBACK_KINDS:
+        db.add_feedback(listing_id, source, "quick", kind)
+    elif record_feedback and kind == "custom":
+        db.add_feedback(listing_id, source, "critique", instruction)
 
     # Re-read the status: it may have changed (e.g. "sent") while Claude was writing.
     if kind != "test":
@@ -550,4 +653,4 @@ async def create_and_store_draft(listing_id: int, kind: str, instruction: str | 
         if current and current["status"] == "new":
             db.set_listing_status(listing_id, "drafted")
 
-    return next(d for d in db.list_drafts(listing_id) if d["id"] == draft_id)
+    return db.get_draft(draft_id)

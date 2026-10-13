@@ -81,7 +81,8 @@ def fake_llm(monkeypatch):
     """Replace llm.create_and_store_draft; records (listing_id, kind) and stores a draft like the real one."""
     calls = []
 
-    async def create(listing_id, kind, instruction=None):
+    async def create(listing_id, kind, instruction=None, source=None, record_feedback=True):
+        assert source == "dashboard"
         calls.append((listing_id, kind))
         db.add_draft(listing_id, kind, f"Guten Tag, Entwurf {len(calls)}", "claude-haiku-5-5", hint="Codewort Linde",
                      input_tokens=1200, output_tokens=300, cost_usd=0.0123)
@@ -366,7 +367,7 @@ def test_create_draft_initial_then_regenerate(client, fake_llm):
 
 
 def test_create_draft_shows_llm_error(client, monkeypatch):
-    async def fail(listing_id, kind, instruction=None):
+    async def fail(listing_id, kind, instruction=None, **kwargs):
         raise llm.BudgetExceeded("Monatsbudget erreicht")
 
     monkeypatch.setattr(llm, "create_and_store_draft", fail)
@@ -394,7 +395,8 @@ def field_names(key):
 
 def test_settings_pages_render_all_fields(client):
     login(client)
-    assert set(web.FIELD_SECTION) == set(settings.DEFAULT_SETTINGS)  # every setting lives on exactly one sub-page
+    # Every setting lives on exactly one sub-page. The learning switches get theirs with the "Verhalten" tab.
+    assert set(web.FIELD_SECTION) == set(settings.DEFAULT_SETTINGS) - {"use_examples", "use_rules"}
     pages = {section: client.get(info["path"]) for section, info in web.SETTINGS_SECTIONS.items()}
     for section, r in pages.items():
         assert r.status_code == 200
@@ -550,6 +552,24 @@ def test_settings_reset(client):
     assert client.post("/settings/reset/model").status_code == 404
 
 
+def test_settings_save_and_reset_create_profile_versions(client):
+    login(client)
+    assert [v["source"] for v in db.list_versions()] == ["initial"]
+    client.post("/settings", data={"section": "ki", "monthly_budget_eur": "3"})  # no profile field changed
+    client.post("/settings", data={"section": "texte", **{k: db.get_settings()[k] for k in settings.PROFILE_FIELDS}})
+    assert [v["source"] for v in db.list_versions()] == ["initial"]
+    client.post("/settings", data=valid_settings())
+    latest = db.latest_version()
+    assert latest["source"] == "manual" and latest["data"]["profile"] == "Erika, 34"
+    assert latest["data"]["target_words"] == "120"
+    client.post("/settings", data=valid_settings())  # saved again unchanged: no new version
+    client.post("/settings/reset/style")
+    latest = db.latest_version()
+    assert (latest["source"], latest["note"]) == ("reset", "„Schreibstil“ auf Standard")
+    assert latest["data"]["style"] == settings.DEFAULT_STYLE
+    assert [v["source"] for v in db.list_versions()] == ["reset", "manual", "initial"]
+
+
 def test_settings_test_draft(client, fake_llm):
     login(client)
     r = client.post("/settings/test")
@@ -616,7 +636,7 @@ def test_no_secret_in_any_response(client, fake_llm, monkeypatch):
     responses.append(status)
     responses.append(client.post("/settings", data=valid_settings(target_words="1")))
 
-    async def leaky(listing_id, kind, instruction=None):
+    async def leaky(listing_id, kind, instruction=None, **kwargs):
         raise llm.LLMError(f"Fehler mit Key {TEST_SECRETS['ANTHROPIC_API_KEY']}")
 
     monkeypatch.setattr(llm, "create_and_store_draft", leaky)

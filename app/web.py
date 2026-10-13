@@ -32,7 +32,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import bot, db, is24, llm, media, portals, settings, vault
+from . import bot, db, is24, llm, media, portals, settings, textdiff, vault
 
 log = logging.getLogger(__name__)
 
@@ -121,6 +121,8 @@ templates.env.filters["eur"] = settings.fmt_eur
 templates.env.filters["local_time"] = local_time
 templates.env.filters["as_bool"] = settings.as_bool
 templates.env.filters["safe_url"] = portals.safe_url  # untrusted listing URLs -> http(s) or None
+templates.env.filters["word_diff"] = textdiff.word_diff  # {{ text_diff(old|word_diff(new)) }}, macros.html
+templates.env.filters["trim_diff"] = textdiff.trim_equal  # {{ text_diff(old|word_diff(new)|trim_diff) }}
 templates.env.globals["STATUSES"] = settings.STATUSES
 # Content hash in the /static URLs: browsers may cache the files for a day, a deploy still takes effect at once.
 templates.env.globals["STATIC_VERSION"] = hashlib.sha256(
@@ -547,7 +549,7 @@ async def listing_create_draft(request: Request, listing_id: int):
     _listing_or_404(listing_id)
     kind = "regenerate" if db.latest_draft(listing_id) else "initial"
     try:
-        draft = await llm.create_and_store_draft(listing_id, kind)
+        draft = await llm.create_and_store_draft(listing_id, kind, source="dashboard")
     except Exception as exc:
         message = str(exc) if isinstance(exc, llm.LLMError) else GENERIC_DRAFT_ERROR
         if not isinstance(exc, llm.LLMError):
@@ -846,6 +848,7 @@ async def settings_save(request: Request):
         return _render_section(request, page, values=shown, errors=errors, error="Nicht gespeichert, bitte Eingaben prüfen.",
                                show=values.get("provider"), status_code=400)
     db.update_settings(values)
+    db.snapshot_profile("manual")  # a new profile version, if a profile field really changed
     provider = values.get("provider")
     if (provider and provider != settings.provider_of(current) and llm.cached_models(provider) is None
             and vault.get(settings.PROVIDERS[provider]["credential"])):
@@ -858,6 +861,7 @@ def settings_reset(key: str):
     if key not in TEXT_SETTINGS:
         raise HTTPException(status_code=404, detail="Unbekannte Einstellung")
     db.reset_setting(key)
+    db.snapshot_profile("reset", f"„{TEXT_SETTING_LABELS[key]}“ auf Standard")
     return RedirectResponse(f"/settings?reset={key}", status_code=303)
 
 
@@ -867,7 +871,7 @@ async def settings_test(request: Request):
     if listing is None:
         return _render_section(request, "texte", error="Noch kein Inserat vorhanden – der Test braucht mindestens eins.")
     try:
-        draft = await llm.create_and_store_draft(listing["id"], "test")
+        draft = await llm.create_and_store_draft(listing["id"], "test", source="dashboard")  # tests never count as feedback
     except Exception as exc:
         message = str(exc) if isinstance(exc, llm.LLMError) else GENERIC_DRAFT_ERROR
         if not isinstance(exc, llm.LLMError):

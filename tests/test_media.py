@@ -236,7 +236,7 @@ def test_switch_off_no_is24_request_from_drafts(fresh_db, monkeypatch):
     switch_off()
     seen = []
 
-    async def generate(listing, settings, kind, previous_text=None, instruction=None, pictures=None):
+    async def generate(listing, settings, kind, previous_text=None, instruction=None, pictures=None, **learned):
         seen.append(pictures)
         return llm.DraftResult(text="x", hint=None, model="claude-opus-5-5", input_tokens=1, output_tokens=1,
                                cache_read_tokens=0, cache_write_tokens=0, cost_usd=0.0)
