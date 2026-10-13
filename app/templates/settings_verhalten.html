@@ -135,7 +135,7 @@
           <label class="sr-only" for="rule-text-{{ r.id }}">Text der Regel</label>
           <textarea id="rule-text-{{ r.id }}" name="text" rows="3" maxlength="300">{{ r.text }}</textarea>
           {% endif %}
-          {% if r.reason %}<p class="rule-reason">Warum: {{ r.reason }}</p>{% endif %}
+          {% if r.reason %}<div class="rule-reason md"><span class="md-label">Warum:</span> {{ r.reason|md }}</div>{% endif %}
           <p class="rule-meta">{{ origin(r) }}</p>
           <div class="actions">
             <button type="submit" name="accept" value="1" class="btn-sm">✅ Übernehmen</button>
@@ -169,7 +169,7 @@
         <form method="post" action="/settings/rules/{{ r.id }}/text">
           <label class="sr-only" for="rule-edit-{{ r.id }}">Text der Regel</label>
           <textarea id="rule-edit-{{ r.id }}" name="text" rows="3" maxlength="300">{{ r.text }}</textarea>
-          {% if r.reason %}<p class="rule-reason">Claudes Begründung: {{ r.reason }}</p>{% endif %}
+          {% if r.reason %}<div class="rule-reason md"><span class="md-label">Claudes Begründung:</span> {{ r.reason|md }}</div>{% endif %}
           <div class="actions">
             <button type="submit" class="btn-sm">Speichern</button>
             <button type="submit" formaction="/settings/rules/{{ r.id }}/delete" class="secondary outline btn-sm"

@@ -59,8 +59,10 @@ _image_transport: httpx.AsyncBaseTransport | None = None  # tests inject an http
 DRAFT_SCHEMA = {
     "type": "object",
     "properties": {
-        "draft": {"type": "string", "description": "Der fertige Nachrichtentext an die Vermieterseite."},
-        "hint": {"type": "string", "description": "Kurzer Hinweis für die suchende Person, oder leer."},
+        "draft": {"type": "string", "description": "Der fertige Nachrichtentext an die Vermieterseite. Reiner Text "
+                                                   "ohne Markdown, er wird unverändert verschickt."},
+        "hint": {"type": "string", "description": "Kurzer Hinweis für die suchende Person, oder leer. Einfaches "
+                                                  "Markdown erlaubt (**fett**, Aufzählung mit „- “)."},
     },
     "required": ["draft", "hint"],
     "additionalProperties": False,
@@ -69,6 +71,8 @@ DRAFT_SCHEMA = {
 # For providers without structured outputs (DeutschlandGPT): appended to the system prompt.
 DRAFT_MARK, HINT_MARK = "<<<ENTWURF>>>", "<<<HINWEIS>>>"
 DELIMITER_INSTRUCTION = (
+    "Der Nachrichtentext ist reiner Text ohne Markdown, er wird unverändert verschickt. Im Hinweis ist einfaches "
+    "Markdown erlaubt (**fett**, Aufzählung mit „- “).\n"
     "Antworte exakt in diesem Format, ohne Zeichen davor oder danach:\n"
     + DRAFT_MARK + "\n(Nachrichtentext)\n" + HINT_MARK + "\n(kurzer Hinweis oder leer)"
 )

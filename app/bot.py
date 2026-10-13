@@ -52,7 +52,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import db, editor_access, llm, media, portals, settings, vault
+from . import db, editor_access, llm, media, portals, settings, textfmt, vault
 
 log = logging.getLogger(__name__)
 
@@ -205,11 +205,21 @@ def _fit_escaped(text: str, budget: int) -> str:
     return "".join(pieces).rstrip()
 
 
+def _hint(hint: str) -> str:
+    """Claude's hint as Telegram HTML: its lines (without blank ones), at most HINT_MAX characters, Markdown converted.
+    Cut before converting, so the cut can't leave a tag open: a "**" whose partner was cut off stays as it is."""
+    lines = (" ".join(line.split()) for line in str(hint).splitlines())
+    text = "\n".join(line for line in lines if line)
+    if len(text) > HINT_MAX:
+        text = text[: HINT_MAX - 1].rstrip() + "…"
+    return textfmt.telegram_html(text)
+
+
 def draft_view(listing: dict, draft: dict, note: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
     """Header, optional hint, the draft in <pre> (tap to copy) and a meta line. Never over 4096 chars."""
     top = header(listing)
     if draft.get("hint"):
-        top += f"\n⚠️ {_esc(_shorten(draft['hint'], HINT_MAX))}"
+        top += f"\n⚠️ {_hint(draft['hint'])}"
     provider, kind = draft.get("provider") or settings.DEFAULT_PROVIDER, draft.get("kind") or ""
     if kind == "final":  # the Endversion from the editor: your text, so no model or cost
         meta = [FINAL_LABEL]

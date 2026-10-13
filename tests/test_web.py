@@ -265,6 +265,17 @@ def test_listing_detail_escapes_and_shows_drafts(client):
     assert client.get("/listing/9999").status_code == 404
 
 
+def test_listing_hint_renders_markdown_but_the_draft_stays_raw(client):
+    login(client)
+    lid = add_listing()
+    db.add_draft(lid, "initial", "Guten Tag, **nicht fett**\n- kein Punkt", "claude-opus-5-5", cost_usd=0.01,
+                 hint="Vorher:\n- **Objekt-ID senden:** bitte <b>nicht</b>\n- Vermieter*innen anschreiben")
+    page = client.get(f"/listing/{lid}").text
+    assert ('<div class="md"><strong class="md-label">Hinweis:</strong> <p>Vorher:</p><ul><li><strong>Objekt-ID senden:'
+            '</strong> bitte &lt;b&gt;nicht&lt;/b&gt;</li><li>Vermieter*innen anschreiben</li></ul></div>') in page
+    assert ">Guten Tag, **nicht fett**\n- kein Punkt</pre>" in page  # sent and copied as it is
+
+
 def test_javascript_urls_not_rendered(client):
     login(client)
     lid = add_listing(url="javascript:alert(1)", image_url="javascript:alert(2)", fredy_url="JavaScript:alert(3)")

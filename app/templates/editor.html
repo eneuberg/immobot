@@ -90,7 +90,7 @@
         {% if version_no == 1 and not changed %}{# orientation for a fresh round only #}
         <p class="help ed-intro">Selbst ändern oder unten Claude überarbeiten lassen; „Fertig“ speichert die Endversion.</p>
         {% endif %}
-        {% if hint %}<div class="callout warn"><span><strong>Hinweis von Claude:</strong> <span class="pre-wrap">{{ hint }}</span></span></div>{% endif %}
+        {% if hint %}<div class="callout warn"><div class="md"><strong class="md-label">Hinweis von Claude:</strong> {{ hint|md }}</div></div>{% endif %}
         <textarea id="ed-text" name="text" rows="12" maxlength="20000" spellcheck="true" data-autosize>{{ text }}</textarea>
         <div class="ed-bar">
           <button type="button" class="secondary outline" data-copy-field="ed-text">Kopieren</button>
@@ -176,7 +176,7 @@
           <label class="sr-only" for="rule-{{ rule.id }}">Text der Regel</label>
           <textarea id="rule-{{ rule.id }}" name="text" rows="3" maxlength="300" data-autosize>{{ rule.text }}</textarea>
           {% endif %}
-          {% if rule.reason %}<p class="ed-reason">{{ rule.reason }}</p>{% endif %}
+          {% if rule.reason %}<div class="ed-reason md">{{ rule.reason|md }}</div>{% endif %}
           <div class="ed-actions">
             <button type="submit" name="decision" value="accept" class="btn-sm">✅ Übernehmen</button>
             <button type="submit" name="decision" value="reject" class="secondary outline btn-sm">❌ Verwerfen</button>

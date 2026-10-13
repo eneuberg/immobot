@@ -155,7 +155,7 @@
       <button type="button" class="secondary outline copy-btn" data-copy="draft-{{ d.id }}">Kopieren</button>
     </header>
     {% if d.instruction %}<p class="instruction"><span class="muted">Anweisung:</span> <span class="pre-wrap">{{ d.instruction }}</span></p>{% endif %}
-    {% if d.hint %}<div class="callout warn"><span><strong>Hinweis:</strong> <span class="pre-wrap">{{ d.hint }}</span></span></div>{% endif %}
+    {% if d.hint %}<div class="callout warn"><div class="md"><strong class="md-label">Hinweis:</strong> {{ d.hint|md }}</div></div>{% endif %}
     <pre class="draft" id="draft-{{ d.id }}">{{ d.text }}</pre>
     <footer class="chips">{{ draft_meta(d) }}</footer>
   </article>

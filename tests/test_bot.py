@@ -161,6 +161,35 @@ def test_draft_view_contents_and_escaping():
     assert "gekürzt" not in text
 
 
+def hint_line(hint):
+    """The "⚠️" line(s) of a draft view with this hint."""
+    draft = {"text": "Hallo **nicht fett**", "hint": hint, "model": "claude-opus-5-5", "cost_usd": 0, "kind": "initial"}
+    text, _ = bot.draft_view(listing_dict(), draft)
+    assert "\n\n<pre>Hallo **nicht fett**</pre>" in text  # the draft itself stays raw
+    return text.split("\n⚠️ ")[1].split("\n\n<pre>")[0]
+
+
+def test_draft_view_hint_markdown_as_telegram_html():
+    hint = "Zwei Dinge:\n\n- **Objekt-ID senden:** bitte *zusätzlich*\n- Vermieter*innen <nicht> anschreiben"
+    assert hint_line(hint) == ("Zwei Dinge:\n• <b>Objekt-ID senden:</b> bitte <i>zusätzlich</i>\n"
+                               "• Vermieter*innen &lt;nicht&gt; anschreiben")
+
+
+def test_draft_view_hint_cut_in_the_middle_of_a_bold_pair():
+    """Shortened before converting: the "**" whose partner was cut off stays literal, no tag is left open."""
+    pad = "y" * (bot.HINT_MAX - 10)
+    assert hint_line(pad + " **Objekt-ID senden:** bitte") == pad + " **Objekt…"
+
+
+@pytest.mark.parametrize("cut", range(bot.HINT_MAX - 33, bot.HINT_MAX + 1))
+def test_draft_view_hint_cut_anywhere_stays_balanced(cut):
+    hint = "x" * cut + " **Objekt-ID** und *kursiv* Ende"
+    line = hint_line(hint)
+    plain = line.replace("<b>", "").replace("</b>", "").replace("<i>", "").replace("</i>", "")
+    assert len(plain) <= bot.HINT_MAX and line.endswith("…") == (len(hint) > bot.HINT_MAX)
+    assert line.count("<b>") == line.count("</b>") <= 1 and line.count("<i>") == line.count("</i>") <= 1
+
+
 def test_draft_view_unknown_model_shows_raw_name():
     draft = {"text": "x", "hint": None, "model": "claude-foo", "cost_usd": 0, "kind": "custom"}
     text, _ = bot.draft_view(listing_dict(), draft)

@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import bot, db, is24, learning, llm, media, portals, settings, textdiff, vault
+from . import bot, db, is24, learning, llm, media, portals, settings, textdiff, textfmt, vault
 
 log = logging.getLogger(__name__)
 
@@ -129,6 +129,7 @@ templates.env.filters["as_bool"] = settings.as_bool
 templates.env.filters["safe_url"] = portals.safe_url  # untrusted listing URLs -> http(s) or None
 templates.env.filters["word_diff"] = textdiff.word_diff  # {{ text_diff(old|word_diff(new)) }}, macros.html
 templates.env.filters["trim_diff"] = textdiff.trim_equal  # {{ text_diff(old|word_diff(new)|trim_diff) }}
+templates.env.filters["md"] = textfmt.basic_markdown  # Claude's notes only (hint, reasons), never a draft
 templates.env.globals["STATUSES"] = settings.STATUSES
 # Content hash in the /static URLs: browsers may cache the files for a day, a deploy still takes effect at once.
 templates.env.globals["STATIC_VERSION"] = hashlib.sha256(

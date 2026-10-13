@@ -211,6 +211,15 @@ article > :last-child { margin-bottom: 0; }
 .callout.info { background: var(--info-soft); border-color: var(--info-line); }
 .callout > :last-child, .flash > :last-child { margin-bottom: 0; }
 .callout p { margin: 0 0 .4rem; }
+/* Claude's notes with simple Markdown (filter "md", textfmt.py): the hint callouts and the reasons of proposals */
+.md { min-width: 0; overflow-wrap: anywhere; }
+.md > p, .md > ul, .md > ol { margin: 0; }
+.md > * + p, .md > * + ul, .md > * + ol { margin-top: .4em; }
+.md > .md-label + p { display: inline; }  /* "Hinweis: …" on one line; a list starts below the label */
+.md > .md-label + ul, .md > .md-label + ol { margin-top: .2em; }
+.md ul, .md ol { padding-left: 1.2em; }
+.md li { margin: .15em 0 0; }
+.md li::marker { color: var(--pico-muted-color); }
 
 /* ---------- badges & chips ---------- */
 .badge {

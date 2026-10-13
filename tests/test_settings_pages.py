@@ -374,7 +374,8 @@ def test_rules_list_on_verhalten(client):
     proposed = card.split("Warten auf deine Entscheidung")[1].split('<ul class="rule-list">')[1].split("</ul>")[0]
     assert f'action="/settings/rules/{ids["new"]}/decide"' in proposed and "Neue Regel" in proposed
     assert "Regel ändern – bisher: <span class=\"old\">„Formuliere den Einzug als „ab sofort“.“</span>" in proposed
-    assert "Warum: Zahlen gestrichen." in proposed and f'href="/listing/{ids["lid"]}">„Altbau“</a>' in proposed
+    assert '<span class="md-label">Warum:</span> <p>Zahlen gestrichen.</p>' in proposed  # reason via the md filter
+    assert f'href="/listing/{ids["lid"]}">„Altbau“</a>' in proposed
     in_use = re.findall(r'action="/settings/rules/(\d+)/active">\s*<label><input type="checkbox" role="switch" name="active" '
                         r'value="1" data-autosubmit\s*(checked)?', card)
     assert in_use == [(str(ids["active"]), "checked"), (str(ids["off"]), "")]

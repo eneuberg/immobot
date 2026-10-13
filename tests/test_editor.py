@@ -577,6 +577,22 @@ def test_diff_shows_changes_to_claudes_original(client, lid):
     assert word_diff("a", "a") == [("equal", "a")]
 
 
+def test_hint_and_rule_reasons_render_markdown_texts_stay_raw(client, lid, fake_rules):
+    db.add_draft(lid, "initial", "Text mit **Sternen**", "claude-opus-5-5", hint="Bitte **Codewort** nennen")
+    login(client)
+    page, fields = open_editor(client, lid)
+    hint = '<strong class="md-label">Hinweis von Claude:</strong> <p>Bitte <strong>Codewort</strong> nennen</p>'
+    assert hint in page.text
+    assert ">Text mit **Sternen**</textarea>" in page.text
+    post(client, lid, "finish", fields, text="Mit *Stern*")
+    session = db.latest_session(lid)
+    assert wait_for_rules(client, lid) == "done"
+    db.add_rule("Schreib **so**.", reason="Du hast *zweimal* gekürzt.", session_id=session["id"])
+    page = client.get(f"/editor/{lid}").text
+    assert '<div class="ed-reason md"><p>Du hast <em>zweimal</em> gekürzt.</p></div>' in page
+    assert ">Mit *Stern*</pre>" in page and ">Schreib **so**.</textarea>" in page
+
+
 def test_finish_and_reopen_refresh_the_telegram_message(client, lid, fake_rules, monkeypatch):
     refreshed = []
     monkeypatch.setattr(bot, "schedule_refresh", refreshed.append)

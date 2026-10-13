@@ -63,7 +63,7 @@
   {% if not e.applicable and e.problem %}<p class="edit-note error">Nicht anwendbar: {{ e.problem }}</p>{% endif %}
   {% if not e.old and e.field != "target_words" and not (pending and e.applicable) %}<p class="edit-note">Wird ans Ende angehängt:</p>{% endif %}
   {{ text_diff(e.before|word_diff(e.after)|trim_diff, "edit-diff") }}
-  {% if e.reason %}<p class="edit-reason">{{ e.reason }}</p>{% endif %}
+  {% if e.reason %}<div class="edit-reason md">{{ e.reason|md }}</div>{% endif %}
   {% if e.evidence_items %}
   <ul class="evidence" aria-label="Belege">
     {% for item in e.evidence_items %}<li>{{ item }}</li>{% endfor %}

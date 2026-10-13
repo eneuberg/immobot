@@ -649,8 +649,9 @@ def test_deutschlandgpt_request_has_no_schema_betas_or_fallbacks(monkeypatch):
     assert body["thinking"] == {"type": "adaptive"}
     assert body["output_config"] == {"effort": "medium"}  # no "format": DeutschlandGPT ignores it on most models
     assert body["system"].endswith("\n\n" + llm.DELIMITER_INSTRUCTION)
-    assert llm.DELIMITER_INSTRUCTION == ("Antworte exakt in diesem Format, ohne Zeichen davor oder danach:\n"
-                                         "<<<ENTWURF>>>\n(Nachrichtentext)\n<<<HINWEIS>>>\n(kurzer Hinweis oder leer)")
+    assert llm.DELIMITER_INSTRUCTION.endswith("Antworte exakt in diesem Format, ohne Zeichen davor oder danach:\n"
+                                              "<<<ENTWURF>>>\n(Nachrichtentext)\n<<<HINWEIS>>>\n(kurzer Hinweis oder leer)")
+    assert "reiner Text ohne Markdown" in llm.DELIMITER_INSTRUCTION  # the draft is sent as it is; the hint may use it
     assert (result.text, result.hint, result.provider) == ("Guten Tag", "Codewort Linde", "deutschlandgpt")
 
 

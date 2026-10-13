@@ -36,7 +36,7 @@
     <div><span class="badge accent">Test-Entwurf</span><span class="when">für „{{ test.listing.title or "(ohne Titel)" }}“</span></div>
     <button type="button" class="secondary outline copy-btn" data-copy="draft-test">Kopieren</button>
   </header>
-  {% if test.draft.hint %}<div class="callout warn"><span><strong>Hinweis:</strong> <span class="pre-wrap">{{ test.draft.hint }}</span></span></div>{% endif %}
+  {% if test.draft.hint %}<div class="callout warn"><div class="md"><strong class="md-label">Hinweis:</strong> {{ test.draft.hint|md }}</div></div>{% endif %}
   <pre class="draft" id="draft-test">{{ test.draft.text }}</pre>
   <footer class="chips">{{ draft_meta(test.draft) }}</footer>
 </article>
