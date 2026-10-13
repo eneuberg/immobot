@@ -150,7 +150,7 @@
 
   {% if rules_in_use %}
   {% if rules_proposed %}<h3 class="rule-list-title">Deine Regeln</h3>{% endif %}
-  <p class="help">Gelten für jeden neuen Entwurf. Die Schalter hier speichern sofort.</p>
+  <p class="help">{% if values.use_rules|as_bool %}Aktive Regeln gelten für jeden neuen Entwurf. {% endif %}Die Schalter hier speichern sofort.</p>
   <ul class="rule-list">
     {% for r in rules_in_use %}
     <li class="rule{% if r.status == 'inactive' %} is-off{% endif %}" id="regel-{{ r.id }}">

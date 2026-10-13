@@ -284,7 +284,8 @@ def test_save_needs_token_and_origin(client, lid):
 def test_revise_with_critique_and_history(client, lid, fake_generate):
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     editor_cookie(client, lid)
-    _, fields = open_editor(client, lid)
+    r, fields = open_editor(client, lid)
+    assert "„Fertig“ speichert die Endversion." in r.text  # orientation on a fresh round
     r = post(client, lid, "revise", fields, text="Original von Hand", critique="  ")
     assert r.status_code == 400 and "was Claude ändern soll" in r.text
     assert db.latest_session(lid)["current_text"] == "Original von Hand"  # hand edits saved anyway
@@ -295,6 +296,7 @@ def test_revise_with_critique_and_history(client, lid, fake_generate):
     assert "Fassung von Claude 1</textarea>" in page and "Fassung 2" in page
     assert "„Kürzer bitte“" in page and "Claudes Entwurf" in page  # history
     assert "Codewort Linde" in page  # Claude's hint for this text
+    assert "„Fertig“ speichert die Endversion." not in page  # not once you are working on it
     assert "Es gibt einen neueren Entwurf" not in page  # its own revision isn't a newer draft
     assert "Claude-Aufrufen" not in page  # the daily count only shows when the limit comes near
     editor.CALLS_SHOWN_FROM, shown_from = 1, editor.CALLS_SHOWN_FROM

@@ -87,8 +87,9 @@
           <span class="badge accent">Fassung {{ version_no }}</span>
           <span class="ed-unsaved" data-unsaved hidden>nicht gespeichert</span>
         </header>
-        <p class="help ed-intro">Ändere den Text selbst oder lass ihn unten von Claude überarbeiten. „Fertig“ speichert die
-          Endversion – daraus lernt Claude für künftige Entwürfe.</p>
+        {% if version_no == 1 and not changed %}{# orientation for a fresh round only #}
+        <p class="help ed-intro">Selbst ändern oder unten Claude überarbeiten lassen; „Fertig“ speichert die Endversion.</p>
+        {% endif %}
         {% if hint %}<div class="callout warn"><span><strong>Hinweis von Claude:</strong> <span class="pre-wrap">{{ hint }}</span></span></div>{% endif %}
         <textarea id="ed-text" name="text" rows="12" maxlength="20000" spellcheck="true" data-autosize>{{ text }}</textarea>
         <div class="ed-bar">
