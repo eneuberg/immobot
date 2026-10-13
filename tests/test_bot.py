@@ -88,9 +88,10 @@ def callback_data(markup):
 
 @pytest.fixture
 def tg(fresh_vault, monkeypatch):
-    """Fake Telegram bot + our chat id (no allowlist); returns the fake bot."""
+    """Fake Telegram bot + our chat id, the owner on the allowlist; returns the fake bot."""
     monkeypatch.setattr(bot, "configured_chat_id", lambda: CHAT)
     monkeypatch.setattr(bot, "_locks", {})
+    fresh_vault.set("telegram_allowed_user_ids", str(OWNER))
     return FakeBot()
 
 
@@ -251,25 +252,45 @@ def test_draft_keyboard_omits_url_button_without_contact_url(monkeypatch):
     assert [b.callback_data for b in rows[3]] == ["img:12"]
 
 
-def test_draft_keyboard_with_editor_button(fresh_vault, monkeypatch):
+def texts(markup):
+    return [[b.text for b in row] for row in markup.inline_keyboard]
+
+
+def test_draft_keyboard_editor_first(fresh_vault, monkeypatch):
+    """With a usable "📝 Bearbeiten" button the editor replaces Neu / Kürzer / Förmlicher / Anpassen."""
     monkeypatch.setattr(portals, "contact_url", lambda provider, url: "https://example.org/contact")
     monkeypatch.setattr(bot, "_public_base", "https://immobot.example.com")
     rows = bot.draft_keyboard(listing_dict(id=12)).inline_keyboard
-    assert [b.callback_data for b in rows[0]] == ["new:12", "short:12", "formal:12"]
-    editor, adjust = rows[1]
-    assert editor.text == "📝 Editor" and editor.login_url.url.startswith("https://immobot.example.com/e/12/")
-    assert adjust.callback_data == "edit:12"
-    assert [(b.text, b.url) for b in rows[2]] == [("📨 Inserat öffnen ↗", "https://example.org/contact")]
-    assert [b.callback_data for b in rows[3]] == ["sent:12", "skip:12"]
-    assert rows[4][-1].text == "🔗 Dashboard"
+    assert texts(bot.draft_keyboard(listing_dict(id=12))) == [
+        ["📝 Bearbeiten", "📨 Inserat öffnen ↗"], ["✅ Gesendet", "❌ Uninteressant"], ["🖼 Bilder", "🔗 Dashboard"]]
+    editor, open_listing = rows[0]
+    assert editor.login_url.url.startswith("https://immobot.example.com/e/12/") and editor.callback_data is None
+    assert open_listing.url == "https://example.org/contact"
+    assert [b.callback_data for b in rows[1]] == ["sent:12", "skip:12"]
     monkeypatch.setattr(portals, "contact_url", lambda provider, url: None)
-    rows = bot.draft_keyboard(listing_dict(id=12)).inline_keyboard
-    assert [b.text for b in rows[1]] == ["📝 Editor", "✏️ Anpassen"] and rows[2][0].callback_data == "sent:12"
-    stripped = bot.without_login_url(bot.draft_keyboard(listing_dict(id=12))).inline_keyboard
-    assert [[b.text for b in row] for row in stripped[1:3]] == [["✏️ Anpassen"], ["✅ Gesendet", "❌ Uninteressant"]]
+    assert texts(bot.draft_keyboard(listing_dict(id=12)))[0] == ["📝 Bearbeiten"]
     # follow-up and collapsed messages never carry it
     assert not any(b.login_url for markup in (bot.followup_view(listing_dict())[1], bot.collapsed_view(listing_dict())[1])
                    for row in markup.inline_keyboard for b in row)
+
+
+def test_draft_keyboard_full_layout_while_telegram_rejects_the_button(fresh_vault, monkeypatch):
+    monkeypatch.setattr(portals, "contact_url", lambda provider, url: "https://example.org/contact")
+    monkeypatch.setattr(bot, "_public_base", "https://immobot.example.com")
+    bot.db.set_meta(bot.EDITOR_BUTTON_ERROR_META, "2026-10-13T07:12:00+00:00 Telegram lehnt den Editor-Button ab.")
+    rows = bot.draft_keyboard(listing_dict(id=12)).inline_keyboard
+    # the full layout, still trying the button so that it notices when the domain is linked
+    assert [[b.text for b in row] for row in rows] == [
+        ["🔁 Neu", "✂️ Kürzer", "🎩 Förmlicher"], ["📝 Bearbeiten", "✏️ Anpassen"], ["📨 Inserat öffnen ↗"],
+        ["✅ Gesendet", "❌ Uninteressant"], ["🖼 Bilder", "🔗 Dashboard"]]
+    assert rows[1][0].login_url is not None and rows[1][1].callback_data == "edit:12"
+    # the retry after a rejection: the full layout without it, as without a public address (minus "🔗 Dashboard")
+    full = [["🔁 Neu", "✂️ Kürzer", "🎩 Förmlicher"], ["✏️ Anpassen", "📨 Inserat öffnen ↗"],
+            ["✅ Gesendet", "❌ Uninteressant"]]
+    assert texts(bot.draft_keyboard(listing_dict(id=12), editor=False)) == full + [["🖼 Bilder", "🔗 Dashboard"]]
+    monkeypatch.setattr(bot, "_public_base", None)
+    bot.db.delete_meta(bot.EDITOR_BUTTON_ERROR_META)
+    assert texts(bot.draft_keyboard(listing_dict(id=12))) == full + [["🖼 Bilder"]]
 
 
 class PickyBot(FakeBot):
@@ -300,19 +321,22 @@ def test_rejected_editor_button_falls_back_and_is_noted(tg, monkeypatch):
     db.add_draft(listing_id, "initial", "Entwurf", "claude-opus-5-5")
     fake_llm(monkeypatch, db)
     picky = PickyBot()
-    press(picky, f"short:{listing_id}")
+    press(picky, f"short:{listing_id}")  # an old message's button keeps working
     final = picky.edits[-1]
     assert "<pre>" in final["text"] and picky.rejected == 2  # "⏳ schreibe …" and the draft, each retried once
-    texts = [b.text for row in final["reply_markup"].inline_keyboard for b in row]
-    assert "📝 Editor" not in texts and "✏️ Anpassen" in texts and "📨 Inserat öffnen ↗" in texts
+    full = [["🔁 Neu", "✂️ Kürzer", "🎩 Förmlicher"], ["✏️ Anpassen", "📨 Inserat öffnen ↗"],
+            ["✅ Gesendet", "❌ Uninteressant"], ["🔗 Dashboard"]]
+    assert texts(picky.edits[0]["reply_markup"]) == texts(final["reply_markup"]) == full  # never without a way to change it
     at, reason = bot.editor_button_error()
     assert "/setdomain" in reason and at.startswith(db.now_iso()[:10])
     assert db.get_meta("editor_login_url_error").startswith(at + " ")
 
     picky.error = None  # domain linked now: the next message keeps the button and the note goes away
     press(picky, f"formal:{listing_id}")
-    texts = [b.text for row in picky.edits[-1]["reply_markup"].inline_keyboard for b in row]
-    assert "📝 Editor" in texts and bot.editor_button_error() is None
+    assert texts(picky.edits[-2]["reply_markup"])[1] == ["📝 Bearbeiten", "✏️ Anpassen"]  # full layout, button accepted
+    assert bot.editor_button_error() is None
+    assert texts(picky.edits[-1]["reply_markup"]) == [  # from then on: editor first
+        ["📝 Bearbeiten", "📨 Inserat öffnen ↗"], ["✅ Gesendet", "❌ Uninteressant"], ["🔗 Dashboard"]]
 
 
 def test_editor_button_fallback_when_sending_and_other_errors(tg, monkeypatch, fresh_vault):
@@ -413,6 +437,7 @@ def run_guard(update, tg=None) -> bool:
 
 def test_guard_drops_foreign_updates(fresh_vault, monkeypatch):
     monkeypatch.setattr(bot, "configured_chat_id", lambda: CHAT)
+    fresh_vault.set("telegram_allowed_user_ids", str(OWNER))
     monkeypatch.setitem(bot._state, "last_update_at", None)
     assert not run_guard(text_update("hi", chat_id=43))
     assert bot.status()["last_update_at"] is not None
@@ -508,6 +533,35 @@ def test_gen_shows_generating_then_draft(tg, monkeypatch):
     assert "<pre>Guten Tag &lt;Frau Müller&gt;</pre>" in final["text"]
     assert final["reply_markup"].inline_keyboard[0][0].callback_data == f"new:{listing_id}"
     assert db.get_listing(listing_id)["status"] == "drafted"
+
+
+def test_gen_shows_an_existing_draft_instead_of_writing_one(tg, monkeypatch):
+    """"✍️ Anschreiben" on a message that still shows it, while a draft was written in the dashboard or editor: no
+    Claude call, the message shows that draft (with the editor layout when the button can be used)."""
+    db = bot.db
+    monkeypatch.setattr(bot, "_public_base", "https://immobot.example.com")
+    listing_id = add_listing(db)
+    calls = fake_llm(monkeypatch, db)
+    db.add_draft(listing_id, "test", "Testentwurf", "claude-opus-5-5")  # a test draft from the settings doesn't count
+    press(tg, f"gen:{listing_id}")
+    assert calls == [(listing_id, "initial", None)]
+
+    other = add_listing(db, fredy_id="f2", tg_message_id=556)
+    db.add_draft(other, "initial", "Aus dem <Dashboard>", "claude-opus-5-5")
+    db.set_listing_status(other, "drafted")
+    query = press(tg, f"gen:{other}")
+    assert len(calls) == 1 and query.answers == [None]
+    final = tg.edits[-1]
+    assert final["message_id"] == 556 and "<pre>Aus dem &lt;Dashboard&gt;</pre>" in final["text"]
+    assert final["text"].endswith("\n\n⚠️ " + bot.DRAFT_EXISTS)
+    assert texts(final["reply_markup"])[0] == ["📝 Bearbeiten", "📨 Inserat öffnen ↗"]
+
+    finished = db.latest_draft(other)  # a finished editor session: its Endversion is shown
+    session_id = db.create_session(other, finished["id"], finished["text"], None)
+    db.update_session(session_id, status="done", final_text="Meine Endversion", finished_at=db.now_iso())
+    press(tg, f"gen:{other}")
+    assert len(calls) == 1 and "<pre>Meine Endversion</pre>" in tg.edits[-1]["text"]
+    assert bot.has_draft(other) and not bot.has_draft(add_listing(db, fredy_id="f3"))
 
 
 @pytest.mark.parametrize("action,kind", [("new", "regenerate"), ("short", "shorter"), ("formal", "formal")])
@@ -817,6 +871,7 @@ def test_is_pair_command_ignores_button_presses():
 
 def test_pair_traffic_never_reaches_other_handlers(fresh_vault):
     fresh_vault.set("telegram_chat_id", str(CHAT))
+    fresh_vault.set("telegram_allowed_user_ids", str(OWNER))
     owner_pair, replies = pair_update("/pair 1234abcd", CHAT)
     assert not run_guard(owner_pair) and replies == [bot.PAIR_FAILED]  # even from the owner, even with no pairing
     assert not run_guard(text_update("/pair 1234abcd", chat_id=43, reply_to=101))  # foreign "/pair" replies too
@@ -883,9 +938,9 @@ def test_pair_wrong_codes_silent_to_strangers_and_cancel_after_five(fresh_vault)
 def test_pair_wrong_code_from_owner_gets_an_answer(fresh_vault):
     fresh_vault.set("telegram_chat_id", str(CHAT))
     fresh_vault.start_pairing("immo_test_bot")
-    assert send_pair(FakeBot(), "00000000", chat_id=CHAT) == [bot.PAIR_FAILED]
-    assert send_pair(FakeBot(), "00000000", chat_id=CHAT, user_id=STRANGER) == [bot.PAIR_FAILED]  # no allowlist yet
+    assert send_pair(FakeBot(), "00000000", chat_id=CHAT) == []  # no allowlist yet: nobody is known, so silence
     fresh_vault.set("telegram_allowed_user_ids", str(OWNER))
+    assert send_pair(FakeBot(), "00000000", chat_id=CHAT) == [bot.PAIR_FAILED]
     assert send_pair(FakeBot(), "00000000", chat_id=CHAT, user_id=STRANGER) == []  # not on the allowlist: silence
 
 
@@ -985,7 +1040,7 @@ def test_check_connection(fresh_vault, monkeypatch):
 # --- user allowlist --------------------------------------------------------------
 
 def test_is_allowed_user():
-    assert bot.is_allowed_user(text_update("hi", user_id=STRANGER), set())  # empty allowlist: everyone
+    assert not bot.is_allowed_user(text_update("hi", user_id=OWNER), set())  # empty allowlist: nobody (required)
     assert bot.is_allowed_user(text_update("hi", user_id=OWNER), {OWNER})
     assert not bot.is_allowed_user(text_update("hi", user_id=STRANGER), {OWNER})
     assert bot.is_allowed_user(callback_update(FakeQuery("gen:1", user_id=OWNER)), {OWNER, 5})
@@ -1034,10 +1089,26 @@ def test_guard_with_allowlist(fresh_vault):
     assert foreign_press.answers == []
 
 
-def test_guard_without_allowlist_keeps_old_behaviour(fresh_vault):
+def test_guard_without_allowlist_lets_nobody_in_but_pairing_fills_it(fresh_vault):
+    """The allowlist is required: while it is empty nobody may press buttons or reply, and a press says how to fix
+    it. "/pair CODE" still works (that is how the list gets filled), and from then on that user may."""
     fresh_vault.set("telegram_chat_id", str(CHAT))
-    assert run_guard(callback_update(FakeQuery("gen:1", user_id=STRANGER)))
-    assert run_guard(text_update("hi", user_id=STRANGER))
+    assert bot.allowed_user_ids() == set()
+    press = FakeQuery("gen:1", user_id=OWNER)
+    assert not run_guard(callback_update(press))
+    assert press.answers == [bot.NO_USERS_YET] and "/pair" in bot.NO_USERS_YET and "Zugänge" in bot.NO_USERS_YET
+    for update in [text_update("hi", user_id=OWNER), text_update("anders bitte", reply_to=101, user_id=OWNER)]:
+        assert not run_guard(update)  # messages and "Anpassen" replies: ignored
+    foreign = FakeQuery("gen:1", chat_id=43, user_id=OWNER)
+    assert not run_guard(callback_update(foreign)) and foreign.answers == []  # other chats still get nothing
+
+    tg = FakeBot()
+    assert send_pair(tg, "00000000", chat_id=CHAT) == []  # a wrong code: silence (nobody is known yet)
+    assert send_pair(tg, vault.start_pairing("immo_test_bot"), chat_id=CHAT) == [bot.PAIR_OK]
+    assert bot.allowed_user_ids() == {OWNER} and vault.get("telegram_allowed_user_ids") == str(OWNER)
+    assert run_guard(callback_update(FakeQuery("gen:1", user_id=OWNER)))
+    stranger = FakeQuery("gen:1", user_id=STRANGER)
+    assert not run_guard(callback_update(stranger)) and stranger.answers == [bot.NOT_OWNER]
 
 
 def test_pair_adds_user_to_allowlist_once(fresh_vault):

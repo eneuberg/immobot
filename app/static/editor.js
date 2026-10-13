@@ -214,4 +214,17 @@
   if (form && text && window.location.hash === "#text" && window.matchMedia("(min-width: 768px)").matches) {
     text.focus({ preventScroll: true });
   }
+
+  // --- quick buttons: "Ganz neu schreiben" asks first while the text differs from Claude's original ----------------
+  // (the server sets data-confirm for the saved text; app.js asks on click, here it follows the typing)
+  var regen = document.querySelector("[data-confirm-changed]");
+  var original = diffBox ? diffBox.dataset.original || "" : null;
+  if (regen && text && original !== null) {
+    var syncConfirm = function () {
+      if (text.value !== original) regen.dataset.confirm = regen.dataset.confirmChanged;
+      else delete regen.dataset.confirm;
+    };
+    text.addEventListener("input", syncConfirm);
+    syncConfirm();
+  }
 })();

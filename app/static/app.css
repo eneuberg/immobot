@@ -825,3 +825,7 @@ details.notes-box .notes { margin: 0; font-size: .9rem; }
 /* The editor's final version on the listing page. */
 .draft-final { border-color: var(--ok-line); }
 .draft-card > footer a { font-size: .88rem; }
+/* Editor: quick buttons next to the critique field ("Kürzer", "Förmlicher", "Ganz neu schreiben"). */
+.ed-quick { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; margin: .8rem 0 0; }
+.ed-quick-label { flex: 1 0 100%; font-size: .8rem; color: var(--pico-muted-color); }
+.ed-quick button { flex: 1 1 auto; width: auto; margin: 0; padding: .45rem .7rem; font-size: .88rem; white-space: nowrap; }

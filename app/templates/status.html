@@ -42,15 +42,15 @@
     <p>
       {% if allowlist_warning %}<span class="error">⚠ {{ allowlist_warning }}</span>
       {% elif allowed_user_ids %}{{ allowed_user_ids|join(", ") }}
-      {% else %}<span class="error">Nicht gesetzt</span> – {{ open_chat_note }}{% endif %}
+      {% else %}<span class="error">Nicht gesetzt</span> – {{ empty_allowlist_note }}{% endif %}
     </p>
-    {% if allowlist_warning or not allowed_user_ids %}<p><a href="/settings/zugaenge#telegram_allowed_user_ids">Eintragen</a> (Pflicht für den 📝 Editor)</p>{% endif %}
+    {% if allowlist_warning or not allowed_user_ids %}<p><a href="/settings/zugaenge#telegram_allowed_user_ids">Eintragen</a> oder den Chat per Code verbinden (Pflicht)</p>{% endif %}
   {% endcall %}
 
   {% if editor_login_error %}
   {% call tile("warn", "📝 Editor-Button") %}
     <p>Telegram hat den Button abgelehnt{% if editor_login_error.at %} ({{ editor_login_error.at|local_time }}){% endif %}: {{ editor_login_error.text }}</p>
-    <p>Entwürfe kommen ohne den Button an.{% if "Domain" not in editor_login_error.text %} Meist fehlt die Domain beim Bot (@BotFather <code>/setdomain</code>).{% endif %} <a href="/settings/zugaenge#editor-login">So behebst du es</a></p>
+    <p>Entwürfe kommen ohne den Button an (mit „Neu“, „Kürzer“, „Förmlicher“, „Anpassen“).{% if "Domain" not in editor_login_error.text %} Meist fehlt die Domain beim Bot (@BotFather <code>/setdomain</code>).{% endif %} <a href="/settings/zugaenge#editor-login">So behebst du es</a></p>
   {% endcall %}
   {% endif %}
 

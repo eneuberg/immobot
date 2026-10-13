@@ -1,8 +1,9 @@
 # immobot
 
 Kleiner Begleitdienst zu [Fredy](https://github.com/orangecoding/fredy). Unter jedes Fredy-Inserat in Telegram setzt immobot eine
-Nachricht mit **✍️ Anschreiben** / **❌ Uninteressant**. Auf Knopfdruck schreibt Claude einen Anschreiben-Entwurf, mit
-**Neu / Kürzer / Förmlicher / Anpassen**. Ein Dashboard (mit Passwort) zeigt Inserate, alle Entwürfe und die API-Kosten
+Nachricht mit **✍️ Anschreiben** / **❌ Uninteressant**. Auf Knopfdruck schreibt Claude einen Anschreiben-Entwurf, den du
+mit **📝 Bearbeiten** im Entwurfs-Editor fertig machst (ohne Editor-Button: **Neu / Kürzer / Förmlicher / Anpassen** direkt
+in Telegram). Ein Dashboard (mit Passwort) zeigt Inserate, alle Entwürfe und die API-Kosten
 und die Einstellungen in drei Reitern: **Profil** (Über mich, Wünsche, Stil, System-Prompt, Verlauf), **Verhalten**
 (Denkaufwand, Budget, Fotos, Bot, Lernen) und **Zugänge** (Anbieter Anthropic oder DeutschlandGPT samt API-Key und Modell,
 Telegram, Fredy).
@@ -33,11 +34,11 @@ Fredy ──Telegram-Adapter──▶ Telegram  (Inserat wie bisher)
    | Anthropic- **oder** DeutschlandGPT-API-Key | Pflicht ist nur der Key des gewählten Anbieters |
    | Telegram-Bot-Token | Pflicht: **derselbe** Token wie in Fredys Telegram-Adapter |
    | Telegram-Chat-ID | Pflicht: **dieselbe** Chat-ID wie in Fredys Telegram-Adapter – oder per Code verbinden (siehe unten) |
-   | Erlaubte Telegram-User-IDs | Pflicht für den 📝 Editor (Login über Telegram): wer im Chat Buttons drücken darf (kommagetrennt); trägt das Pairing automatisch ein. Leer = jedes Mitglied des Chats darf Buttons drücken |
+   | Erlaubte Telegram-User-IDs | Pflicht: wer im Chat die Buttons drücken und den 📝 Editor aus Telegram öffnen darf (kommagetrennt); trägt das Pairing automatisch ein. Leer = niemand |
    | Fredy-Webhook-Token | Pflicht: **Neu erzeugen** klicken, den einmal angezeigten Token in Fredys HTTP-Adapter eintragen |
 
    Jede Änderung verlangt dein Dashboard-Passwort. Danach mit **testen** prüfen. Fehlt noch etwas Pflichtiges, zeigt
-   „Zugänge“ in der Navigation einen roten Punkt. Für den 📝 Editor-Button einmal bei @BotFather `/setdomain` senden, den
+   „Zugänge“ in der Navigation einen roten Punkt. Für den Button „📝 Bearbeiten“ einmal bei @BotFather `/setdomain` senden, den
    Bot wählen und die Domain des Dashboards eintragen (Anleitung unter Zugänge → Telegram).
 5. `https://immobot.<domain>/status` sollte „Telegram-Bot läuft“ zeigen.
 
@@ -60,7 +61,8 @@ Alte Installationen mit `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHA
 (der Dashboard-Wert hat Vorrang), mit „Verbindung testen“ prüfen und danach die Variable in Coolify löschen und neu deployen.
 Beim Webhook-Token entweder den bisherigen Wert eintragen oder „Neu erzeugen“ und den neuen Token in Fredy hinterlegen.
 Danach einmal **Chat per Code verbinden** ausführen (im bisherigen Chat), damit deine Telegram-User-ID auf die Liste der
-erlaubten User kommt. Solange die Liste leer ist, darf jedes Mitglied des Chats Buttons drücken (Hinweis unter Status).
+erlaubten User kommt. Solange die Liste leer ist, kann niemand die Buttons nutzen (Hinweis unter Status); das Pairing
+geht trotzdem.
 Nach dem ersten Deploy mit Session-Timeouts musst du dich einmal neu anmelden.
 
 ### SESSION_SECRET nicht rotieren
@@ -203,6 +205,8 @@ Eine Seite pro Inserat (`/editor/<id>`), auf dem Handy gut bedienbar, zum Fertig
 
 - Text von Hand ändern, mit „Kopieren“ und „Speichern“; „Änderungen zum Original“ zeigt den Wort-Diff zu Claudes Entwurf.
 - „Was soll Claude ändern?“: Claude überarbeitet den aktuellen Text samt deiner Änderungen (beliebig oft, mit Verlauf).
+  Ohne Tippen gehen „Kürzer“ und „Förmlicher“ (wie die Telegram-Buttons) und „Ganz neu schreiben“: ein neuer Entwurf,
+  mit dem eine neue Runde beginnt (fragt vorher, wenn du den Text geändert hast).
 - „Fertig“ speichert die Endversion. Sie dient künftig als Stil-Beispiel, und Claude schlägt (wenn „Gelernte Regeln
   nutzen“ an ist) bis zu 3 Regeln für künftige Entwürfe vor, die du übernimmst, umformulierst oder verwirfst. Steht beim
   „Fertig“ noch eine nicht geschickte Kritik im Feld, wird sie als Rückmeldung gespeichert und fließt in die
@@ -211,7 +215,7 @@ Eine Seite pro Inserat (`/editor/<id>`), auf dem Handy gut bedienbar, zum Fertig
 - Monatsbudget und höchstens 30 Claude-Aufrufe pro Inserat und Tag gelten auch hier.
 
 Aufrufen lässt er sich über „📝 Im Editor bearbeiten“ auf der Inseratsseite (mit Dashboard-Login) oder über den Button
-„📝 Editor“ unter einem Entwurf in Telegram, ohne Dashboard-Passwort:
+„📝 Bearbeiten“ unter einem Entwurf in Telegram, ohne Dashboard-Passwort:
 
 1. **Einmalig:** Bei [@BotFather](https://t.me/BotFather) `/setdomain` senden, den Bot wählen und die Domain des
    Dashboards eintragen (z. B. `immobot.example.com`, ohne `https://`). Das ist je Bot nötig, also auch für jede weitere
@@ -224,9 +228,19 @@ Aufrufen lässt er sich über „📝 Im Editor bearbeiten“ auf der Inseratsse
    `immobot_editor`). Einstellungen, andere Inserate und die Regel-Liste bleiben hinter dem Dashboard-Login. Ist die Zeit
    um, kommt „Sitzung abgelaufen – bitte anmelden“; mit dem Dashboard-Login geht es auf derselben Seite weiter.
 
-Lehnt Telegram den Button ab (meist: Domain nicht per `/setdomain` verknüpft), schickt immobot die Nachricht ohne
-„📝 Editor“ und zeigt auf der Status- und der Zugänge-Seite einen Hinweis. Sobald die Domain verknüpft ist, ist der
-Button bei der nächsten Nachricht wieder da. Ohne bekannte öffentliche Adresse (`IMMOBOT_PUBLIC_URL` oder ein Aufruf
+Die Telegram-Nachricht unter einem Entwurf hat zwei Formen:
+
+- **Editor zuerst** (sobald der Button geht): „📝 Bearbeiten“ und „📨 Inserat öffnen“, „✅ Gesendet“ / „❌ Uninteressant“,
+  „🖼 Bilder“ / „🔗 Dashboard“. Kürzer, förmlicher, neu und eigene Wünsche gibt es im Editor.
+- **Ohne Editor** (Rückfall): „🔁 Neu“ / „✂️ Kürzer“ / „🎩 Förmlicher“, „✏️ Anpassen“ (Wunsch als Antwort schreiben) und
+  „📨 Inserat öffnen“, dazu Gesendet / Uninteressant und Bilder / Dashboard. Die Buttons älterer Nachrichten gehen weiter.
+
+„✍️ Anschreiben“ schreibt nur, wenn es noch keinen Entwurf gibt; sonst zeigt die Nachricht den vorhandenen (oder die
+Endversion aus dem Editor). Ein Entwurf von der Inseratsseite oder aus dem Editor aktualisiert die Nachricht gleich mit.
+
+Lehnt Telegram den Button ab (meist: Domain nicht per `/setdomain` verknüpft), schickt immobot die Nachricht ohne Editor
+und zeigt auf der Status- und der Zugänge-Seite einen Hinweis. immobot versucht den Button weiter; sobald die Domain
+verknüpft ist, gilt wieder „Editor zuerst“. Ohne bekannte öffentliche Adresse (`IMMOBOT_PUBLIC_URL` oder ein Aufruf
 des Dashboards über die Domain) gibt es den Button nicht.
 
 ## Sicherheit
@@ -256,10 +270,10 @@ des Dashboards über die Domain) gibt es den Button nicht.
 - uvicorn glaubt `X-Forwarded-For` nur von privaten Adressen (dem Reverse Proxy im Docker-Netz). So kann niemand seine IP
   fälschen, um das Login-Limit zu umgehen.
 - `/hook/fredy` verlangt den Bearer-Token (ohne gespeicherten Token: 503). `/healthz` ist offen, gibt aber nichts preis.
-- Der Bot reagiert nur auf den eingestellten Chat. Ist die Liste erlaubter Telegram-User gefüllt, dürfen dort nur diese
-  User Buttons drücken und antworten. Andere bekommen beim Button „Nur für den Besitzer dieses Bots.“, alles andere wird
-  ignoriert. Ist die gespeicherte Liste nicht entschlüsselbar (`SESSION_SECRET` geändert), darf niemand, bis sie neu
-  eingetragen oder ein Pairing gemacht wurde.
+- Der Bot reagiert nur auf den eingestellten Chat. Dort dürfen nur die erlaubten Telegram-User Buttons drücken und
+  antworten. Andere bekommen beim Button „Nur für den Besitzer dieses Bots.“, alles andere wird ignoriert. Ist die Liste
+  leer, darf niemand (ein Button-Druck sagt, wie man sie füllt); ist sie nicht entschlüsselbar (`SESSION_SECRET`
+  geändert), ebenso. Das gilt, bis sie eingetragen oder ein Pairing gemacht wurde.
 - `/pair` wird komplett vorab geprüft und erreicht nie die übrigen Bot-Funktionen. Fremde Chats bekommen auf falsche Codes
   keine Antwort.
 - Ein neuer Bot-Token startet den Bot im Hintergrund neu; das Speichern wartet nicht darauf. Eine neue Chat-ID gilt sofort,

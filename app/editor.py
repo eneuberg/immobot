@@ -4,7 +4,7 @@ and mark the listing as sent.
 
 Two ways in, one page:
 - dashboard login: /editor/{id} (button on the listing page);
-- Telegram: the "📝 Editor" login_url button opens /e/{id}/{exp}/{sig}?<login data>. editor_access.py checks link
+- Telegram: the "📝 Bearbeiten" login_url button opens /e/{id}/{exp}/{sig}?<login data>. editor_access.py checks link
   and login; on success the browser gets an editor session (cookie EDITOR_COOKIE, this listing only, until the
   link's first use + 24 h) and is redirected to the clean /editor/{id}.
 An editor session only reaches this page for its own listing: no navigation, settings, other listings, rule list or
@@ -58,10 +58,13 @@ MESSAGES = {
     "rejected": "Vorschlag verworfen.",
     "sent": "Als gesendet markiert.",
     "draft": "Entwurf erzeugt.",
+    "shorter": "Claude hat den Text gekürzt.",
+    "formal": "Claude hat den Text förmlicher formuliert.",
+    "regenerate": "Claude hat den Text ganz neu geschrieben. Das ist jetzt Fassung 1 einer neuen Runde.",
 }
 
 LOGIN_AGAIN = "Im Dashboard anmelden"
-TAP_AGAIN = "Bitte in Telegram noch einmal auf „📝\u00a0Editor“ tippen oder im Dashboard anmelden."
+TAP_AGAIN = "Bitte in Telegram noch einmal auf „📝\u00a0Bearbeiten“ tippen oder im Dashboard anmelden."
 # /e/ errors (editor_access.ERROR_CODES): status code, title, text. Never contains anything from the request.
 LINK_ERRORS = {
     "bad_link": (400, "Link ungültig", "Dieser Editor-Link ist ungültig oder unvollständig. " + TAP_AGAIN),
@@ -69,13 +72,13 @@ LINK_ERRORS = {
                                              "Telegram einen neuen Entwurf anfordern."),
     "bad_login": (400, "Anmeldung ungültig", "Die Anmeldedaten von Telegram ließen sich nicht prüfen. " + TAP_AGAIN),
     "login_stale": (410, "Link abgelaufen", "Die Anmeldung aus Telegram gilt nur 10 Minuten. " + TAP_AGAIN),
-    "login_reused": (410, "Link schon benutzt", "Jeder Tipp auf „📝\u00a0Editor“ öffnet den Editor genau einmal – "
+    "login_reused": (410, "Link schon benutzt", "Jeder Tipp auf „📝\u00a0Bearbeiten“ öffnet den Editor genau einmal – "
                                                 "kopierte oder weitergeleitete Links gehen nicht. " + TAP_AGAIN),
     "not_allowed": (403, "Kein Zugriff", "Dieses Telegram-Konto darf den Editor nicht öffnen."),
     "allowlist_missing": (403, "Erst erlaubte User-IDs eintragen",
                           "Der Editor aus Telegram ist nur für eingetragene Telegram-Konten. Im Dashboard unter "
                           "Einstellungen → Zugänge bei „Erlaubte Telegram-User-IDs“ deine User-ID eintragen (oder den "
-                          "Chat per Code neu verbinden, das trägt sie ein). Danach in Telegram erneut auf „📝\u00a0Editor“ "
+                          "Chat per Code neu verbinden, das trägt sie ein). Danach in Telegram erneut auf „📝\u00a0Bearbeiten“ "
                           "tippen."),
     "window_over": (410, "Link abgelaufen", "Über einen Editor-Button lässt sich der Editor 24 Stunden lang öffnen, "
                                             "gerechnet ab dem ersten Tipp. Im Dashboard anmelden oder in Telegram "
@@ -83,7 +86,7 @@ LINK_ERRORS = {
 }
 EXPIRED = (401, "Sitzung abgelaufen – bitte anmelden",
            "Der Editor aus Telegram gilt einen Tag. Danach geht es mit dem Dashboard-Login weiter – oder in Telegram "
-           "unter einem neuen Entwurf noch einmal auf „📝\u00a0Editor“ tippen.")
+           "unter einem neuen Entwurf noch einmal auf „📝\u00a0Bearbeiten“ tippen.")
 NOT_FOUND = (404, "Inserat nicht gefunden", "Dieses Inserat gibt es nicht (mehr).")
 
 RULE_ACTION_LABELS = {"add": "Neue Regel", "update": "Regel ändern", "remove": "Regel streichen"}
@@ -166,7 +169,7 @@ def _gate(request: Request, raw_id: str, form_token: str | None = None):
 
 @router.get("/e/{listing_id}/{exp}/{sig}")
 def editor_link(request: Request, listing_id: str, exp: str, sig: str):
-    """The "📝 Editor" button: check link and Telegram login (editor_access), start the editor browser session."""
+    """The "📝 Bearbeiten" button: check link and Telegram login (editor_access), start the editor browser session."""
     cookie, error = editor_access.start_editor_browser_session(listing_id, exp, sig, dict(request.query_params))
     lid = _listing_id(listing_id)
     if error:
@@ -222,7 +225,8 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
     if session is not None:
         text = session["final_text"] if session["status"] == "done" else session["current_text"]
         feedback = list(reversed(db.list_feedback(session_id=session["id"])))  # oldest first
-        history = [f for f in feedback if f["kind"] == "critique"]  # one per revision by Claude
+        history = [{**f, "quick_label": learning.QUICK_LABELS.get(f["text"]) if f["kind"] == "quick" else None}
+                   for f in feedback if f["kind"] in ("critique", "quick")]  # one per revision by Claude
         notes = [f for f in feedback if f["kind"] == "note"]  # typed but not sent before "Fertig"
         last_draft = db.get_draft(session["last_draft_id"]) if session["last_draft_id"] else None
         newer = learning.newer_draft(session)
@@ -252,11 +256,12 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
 
 
 @router.get("/editor/{listing_id}")
-def editor_page(request: Request, listing_id: str, m: str | None = None):
+def editor_page(request: Request, listing_id: str, m: str | None = None, k: str | None = None):
+    """k: a critique kept across a quick button (editor_quick), by a one-time id; the text never is in the URL."""
     listing, mode, denied = _gate(request, listing_id)
     if denied is not None:
         return denied
-    return _render(request, listing, mode, message=MESSAGES.get(m or ""))
+    return _render(request, listing, mode, message=MESSAGES.get(m or ""), critique=web._take_once(k) if k else None)
 
 
 @router.get("/editor/{listing_id}/rules/status")
@@ -338,6 +343,29 @@ async def editor_revise(request: Request, listing_id: str, token: str = Form("")
     except Exception as exc:
         return _failed(request, listing, mode, exc, critique=critique)
     return _back(listing["id"], "revised", "text")
+
+
+# --- quick buttons next to the critique field ("Kürzer", "Förmlicher", "Ganz neu schreiben") ---------------------
+
+@router.post("/editor/{listing_id}/quick", dependencies=ACTION)
+async def editor_quick(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
+                       text: str = Form(""), critique: str = Form(""), kind: str = Form("")):
+    """A quick button (learning.quick_in_editor): Claude shortens or formalises the current text like Telegram's
+    buttons, or writes a new draft that starts a new round. Hand edits are saved first; a critique typed into the
+    field but not sent stays there afterwards."""
+    listing, mode, denied = _gate(request, listing_id, token)
+    if denied is not None:
+        return denied
+    session = _current_session(listing, session_id)
+    if session is None:
+        return _stale(request, listing, mode, text)
+    try:
+        learning.save_text(session["id"], text)
+        await learning.quick_in_editor(session["id"], text, kind)
+    except Exception as exc:
+        return _failed(request, listing, mode, exc, critique=critique)
+    keep = f"&k={web._stash_once(critique)}" if critique.strip() else ""
+    return RedirectResponse(f"/editor/{listing['id']}?m={kind}{keep}#text", status_code=303)
 
 
 def _start_rule_job(session_id: int) -> None:

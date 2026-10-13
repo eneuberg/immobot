@@ -74,8 +74,8 @@ SECTION_FIELDS = {
 }
 FIELD_SECTION = {field: section for section, fields in SECTION_FIELDS.items() for field in fields}
 AI_CREDENTIALS = {info["credential"]: provider for provider, info in settings.PROVIDERS.items()}  # "Zugänge" → KI-Anbieter
-# Credentials that may stay empty. None at the moment: the allowlist is required since the editor login from
-# Telegram checks it (with an empty list the bot still lets every chat member press its buttons).
+# Credentials that may stay empty. None at the moment: the allowlist is required (with an empty list nobody may
+# press the bot's buttons or open the editor from Telegram).
 OPTIONAL_CREDENTIALS: set[str] = set()
 
 GENERIC_DRAFT_ERROR = "Unerwarteter Fehler beim Generieren – Details im Log."
@@ -586,6 +586,7 @@ async def listing_create_draft(request: Request, listing_id: int):
             log.exception("Draft generation failed for listing %s", listing_id)
         context = _listing_context(_listing_or_404(listing_id), error=redact(request, message))
         return render(request, "listing.html", context)
+    bot.schedule_refresh(listing_id)  # the Telegram message shows the draft instead of "✍️ Anschreiben"
     anchor = f"d{draft['id']}" if isinstance(draft, dict) and draft.get("id") else "entwuerfe"
     return RedirectResponse(f"/listing/{listing_id}#{anchor}", status_code=303)
 
@@ -1298,15 +1299,15 @@ def settings_example_on(request: Request, session_id: int):
 CREDENTIAL_HELP = {  # the AI keys are explained in their provider panel
     "telegram_bot_token": "Derselbe Token wie in Fredys Telegram-Adapter (von @BotFather).",
     "telegram_chat_id": "Dieselbe Chat-ID wie in Fredys Telegram-Adapter – oder per Code verbinden (Bot muss laufen).",
-    "telegram_allowed_user_ids": ("Wer im Chat Buttons drücken darf, kommagetrennt. Nötig für den 📝 Editor: nur diese "
-                                  "User können ihn aus Telegram öffnen. Ohne Liste darf jedes Mitglied des Chats die "
-                                  "Buttons drücken. „Chat per Code verbinden“ trägt dich automatisch ein."),
+    "telegram_allowed_user_ids": ("Wer im Chat die Buttons drücken und den 📝 Editor aus Telegram öffnen darf, "
+                                  "kommagetrennt. Ohne Liste kann niemand die Buttons nutzen. „Chat per Code "
+                                  "verbinden“ trägt dich automatisch ein."),
     "fredy_webhook_token": "Mindestens 32 Zeichen. Am einfachsten „Neu erzeugen“ und in Fredys HTTP-Adapter eintragen.",
 }
 # test -> credential named in the audit log when it fails
 CONNECTION_TESTS = {"anthropic": "anthropic_api_key", "deutschlandgpt": "deutschlandgpt_api_key", "telegram": "telegram_bot_token"}
 EVENT_NAME_LABELS = {**vault.LABELS, "dashboard": "Dashboard-Login"}
-OPEN_CHAT_NOTE = "jedes Mitglied des Chats darf Buttons drücken, und der 📝 Editor lässt sich aus Telegram nicht öffnen."
+EMPTY_ALLOWLIST_NOTE = "niemand kann die Buttons in Telegram nutzen, auch nicht den 📝 Editor."
 LOCKED_CHAT_WARNING = ("Die Liste erlaubter Telegram-User ist nicht entschlüsselbar (SESSION_SECRET geändert?) – "
                        "niemand darf Buttons drücken. Pairing erneut ausführen oder User-ID neu eintragen.")
 EDITOR_LOGIN_ERROR_META = "editor_login_url_error"  # set by the editor feature when Telegram rejects the login button
@@ -1316,7 +1317,8 @@ _one_time: dict[str, tuple[float, str]] = {}  # one-time id -> (monotonic expiry
 
 
 def _allowlist_warning() -> str | None:
-    """An unreadable list locks everyone out; an empty one is "missing" (required) but the bot still works."""
+    """An unreadable list locks everyone out (warning). An empty one does too, but it is simply "missing" (required,
+    EMPTY_ALLOWLIST_NOTE)."""
     return LOCKED_CHAT_WARNING if bot.allowed_user_ids() is None else None
 
 
@@ -1554,7 +1556,7 @@ def status_page(request: Request):
         "chat_connected": bot.configured_chat_id() is not None,
         "allowed_user_ids": sorted(bot.allowed_user_ids() or ()),  # not secret
         "allowlist_warning": _allowlist_warning(),
-        "open_chat_note": OPEN_CHAT_NOTE,
+        "empty_allowlist_note": EMPTY_ALLOWLIST_NOTE,
         "bot_last_update_at": bot_status.get("last_update_at"),
         "bot_last_error": redact(request, str(last_error)) if last_error else None,
         # Names, sources and dates only - never any part of a secret.

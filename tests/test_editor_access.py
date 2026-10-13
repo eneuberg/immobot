@@ -158,7 +158,7 @@ def test_editor_button(fresh_vault, monkeypatch):
     assert bot.editor_url(5) is None and bot.editor_button(5) is None  # public address unknown
     monkeypatch.setattr(bot, "_public_base", "https://immobot.example.com")
     button = bot.editor_button(5)
-    assert button.text == "📝 Editor" and button.url is None and button.callback_data is None
+    assert button.text == "📝 Bearbeiten" and button.url is None and button.callback_data is None
     url = button.login_url.url
     assert url.startswith("https://immobot.example.com/e/5/")
     _, _, listing, exp, sig = url.removeprefix("https://immobot.example.com").split("/")
