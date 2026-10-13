@@ -253,6 +253,22 @@ def test_javascript_urls_not_rendered(client):
     assert "<img" not in r.text and "Inserat öffnen" not in r.text and "In Fredy öffnen" not in r.text
 
 
+def test_fredy_link_built_from_the_fredy_address(client):
+    """With "Adresse deiner Fredy-Instanz" set, "In Fredy öffnen" points there instead of the stored fredyUrl -
+    but only for listings from a Fredy job; one without job_id keeps its stored link."""
+    login(client)
+    hook(client, {"jobId": "job1", "provider": "immowelt", "listings": [fredy_listing("a/1")]})
+    lid = next(row["id"] for row in db.list_listings() if row["fredy_id"] == "a/1")
+    other = add_listing(fredy_id="m1", fredy_url="https://fredy.example/listings/m1")  # no job_id
+    assert 'href="https://fredy.example/listings/1"' in client.get(f"/listing/{lid}").text  # not set: as Fredy sent it
+
+    db.update_settings({"fredy_base_url": "https://new-fredy.example.com/app"})
+    r = client.get(f"/listing/{lid}")
+    assert 'href="https://new-fredy.example.com/app/#/listings/listing/a%2F1"' in r.text and "In Fredy öffnen" in r.text
+    assert "fredy.example/listings/1" not in r.text
+    assert 'href="https://fredy.example/listings/m1"' in client.get(f"/listing/{other}").text
+
+
 def test_only_safe_urls_with_stored_pictures(client):
     """With stored ImmoScout24 pictures the pages show images, but only from the local media route; Fredy's
     unsafe URLs (data:, javascript:, credentials in the URL) never become an image or a link."""
@@ -458,6 +474,61 @@ def test_settings_validation(client, field, value):
     r = client.post("/settings", data=valid_settings(**{field: value}))
     assert r.status_code == 400 and "Nicht gespeichert" in r.text
     assert db.get_settings() == before
+
+
+def post_telegram(client, **fields):
+    return client.post("/settings", data={"section": "telegram", "followup_delay_s": "4", **fields})
+
+
+@pytest.mark.parametrize("entered,stored", [
+    ("https://fredy.example.com", "https://fredy.example.com"),
+    ("  https://fredy.example.com//  ", "https://fredy.example.com"),  # whitespace and trailing slashes go
+    ("https://example.com/fredy/", "https://example.com/fredy"),  # a path prefix stays
+    ("http://192.168.1.10:9998", "http://192.168.1.10:9998"),  # Fredy's own example
+    ("", ""),  # empty: the links Fredy sent
+    ("  ", ""),
+])
+def test_fredy_base_url_saved(client, entered, stored):
+    login(client)
+    db.update_settings({"fredy_base_url": "https://old.example.com"})
+    r = post_telegram(client, fredy_base_url=entered)
+    assert r.status_code == 303 and r.headers["location"] == "/settings/telegram?saved=1"
+    assert db.get_settings()["fredy_base_url"] == stored
+
+
+@pytest.mark.parametrize("entered,message", [
+    ("ftp://fredy.example.com", "Volle Adresse mit http(s)://"),
+    ("javascript:alert(1)", "Volle Adresse mit http(s)://"),
+    ("fredy.example.com", "Volle Adresse mit http(s)://"),
+    ("https://", "Volle Adresse mit http(s)://"),
+    ("https://fredy.example.com/?a=1", "ohne „?…“ oder „#…“"),
+    ("https://fredy.example.com/#/listings/listing/abc", "ohne „?…“ oder „#…“"),
+    ("https://fredy.example.com#", "ohne „?…“ oder „#…“"),
+    ("https://user:pw@fredy.example.com", "Ohne Benutzername und Passwort."),
+    ("https://fredy.example.com@evil.example", "Ohne Benutzername und Passwort."),
+    ("https://fredy.example.com/" + "x" * 200, "Höchstens 200 Zeichen."),
+])
+def test_fredy_base_url_rejected(client, entered, message):
+    login(client)
+    before = db.get_settings()
+    r = post_telegram(client, fredy_base_url=entered)
+    assert r.status_code == 400 and "Nicht gespeichert" in r.text and message in r.text
+    assert '<a href="/settings/telegram" aria-current="page">' in r.text  # back on the page with the field
+    field = re.search(r'<input[^>]*name="fredy_base_url"[^>]*>', r.text).group(0)
+    assert 'aria-invalid="true"' in field and 'value=""' not in field  # the input is shown again, marked
+    assert db.get_settings() == before
+
+
+def test_fredy_base_url_leaves_other_settings_alone(client):
+    login(client)
+    db.update_settings({"send_image": "1", "is24_fetch": "0", "paused": "1", "followup_delay_s": "7", "profile": "Erika"})
+    before = db.get_settings()
+    r = post_telegram(client, followup_delay_s="7", paused="1", fredy_base_url="https://fredy.example.com/")
+    assert r.status_code == 303
+    assert db.get_settings() == {**before, "fredy_base_url": "https://fredy.example.com"}
+    assert 'name="fredy_base_url" value="https://fredy.example.com"' in client.get("/settings/telegram").text
+    client.post("/settings", data={"section": "ki", "monthly_budget_eur": "3", "send_image": "1"})  # other sub-page
+    assert db.get_settings()["fredy_base_url"] == "https://fredy.example.com"
 
 
 def test_settings_unknown_keys_ignored(client):

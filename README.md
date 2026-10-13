@@ -153,6 +153,9 @@ Im Fredy-Job unter *Notification Adapter* **zusätzlich** zum Telegram-Adapter d
 - Endpoint URL: `https://immobot.<domain>/hook/fredy`
 - Auth Token: der Fredy-Webhook-Token (Einstellungen → Telegram & Fredy → **Neu erzeugen**; wird nur einmal angezeigt)
 
+Optional: Mit der **Adresse deiner Fredy-Instanz** (Einstellungen → Telegram & Fredy, z. B. `https://fredy.example.com`) baut
+immobot die Links „In Fredy öffnen“ selbst, etwa wenn Fredy umgezogen ist. Leer = die Links, die Fredy mitschickt.
+
 Empfohlen: In Fredys Einstellungen die Detailseiten (`provider_details`) für deine Portale aktivieren. Sonst bekommt Claude nur den
 kurzen Text aus der Suchliste. Nachteil: Fredy wird etwas leichter als Bot erkannt.
 

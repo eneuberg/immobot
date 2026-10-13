@@ -1,5 +1,5 @@
 {# Einstellungen → Telegram & Fredy: bot token, chat, allowed users, Fredy webhook token (status only, never
-   values), plus how the bot behaves. The AI keys are on "KI & Kosten". #}
+   values), the address of the Fredy instance, plus how the bot behaves. The AI keys are on "KI & Kosten". #}
 {% extends "settings_base.html" %}
 {% from "macros.html" import cred_badge, howto %}
 {% from "settings_macros.html" import field_error, need_tag with context %}
@@ -128,8 +128,20 @@
   {% for c in credentials if c.name == "fredy_webhook_token" %}{{ cred_card(c) }}{% endfor %}
 </div>
 
+{# The form starts here so that the Fredy address (still in the "Fredy" section) is saved with the bot settings. #}
 <form id="telegram-form" method="post" action="/settings">
   <input type="hidden" name="section" value="telegram">
+  <article id="fredy-adresse" class="setting-card">
+    <label>Adresse deiner Fredy-Instanz {{ need_tag("optional") }}
+      <small>Für die Links „In Fredy öffnen“. Leer = die Links, die Fredy mitschickt.</small>
+      <input type="text" inputmode="url" name="fredy_base_url" value="{{ values.fredy_base_url }}"
+        placeholder="https://fredy.example.com" autocomplete="off" spellcheck="false" autocapitalize="off"
+        {% if errors.fredy_base_url %}aria-invalid="true"{% endif %}>
+      {{ field_error("fredy_base_url") }}
+    </label>
+    <p class="help">Die Links, die Fredy selbst mitschickt, baut Fredy aus seiner eigenen „Basis-URL“
+      (in Fredy unter Einstellungen → System).</p>
+  </article>
   <article id="verhalten" class="setting-card">
     <h2>Verhalten des Bots</h2>
     <label>Verzögerung nach Fredys Nachricht <small>in Sekunden, 0–60 – damit die Buttons direkt unter Fredys Inserat erscheinen</small>

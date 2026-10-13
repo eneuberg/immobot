@@ -1,6 +1,6 @@
 import pytest
 
-from app.portals import contact_url, provider_label, safe_url
+from app.portals import contact_url, fredy_url, provider_label, safe_url
 
 
 @pytest.mark.parametrize("url", [
@@ -95,6 +95,41 @@ def test_contact_url_rejects_unsafe_urls(provider):
 def test_contact_url_ignores_provider_host_mismatch():
     url = "https://evil.example/expose/123"
     assert contact_url("immoscout", url) == url
+
+
+# A listing from a Fredy job, with the link Fredy sent from its own (old) base URL.
+FROM_FREDY = {"fredy_id": "abc123", "job_id": "job1", "fredy_url": "https://old-fredy.example.com/#/listings/listing/abc123"}
+
+
+@pytest.mark.parametrize("base", ["https://fredy.example.com", "https://fredy.example.com/"])
+def test_fredy_url_built_from_base(base):
+    assert fredy_url(FROM_FREDY, base) == "https://fredy.example.com/#/listings/listing/abc123"
+
+
+def test_fredy_url_keeps_path_prefix():
+    assert fredy_url(FROM_FREDY, "https://example.com/fredy") == "https://example.com/fredy/#/listings/listing/abc123"
+
+
+@pytest.mark.parametrize("base", ["", None, "javascript:alert(1)", "https://user:pw@evil.example"])
+def test_fredy_url_without_usable_base_uses_stored_link(base):
+    assert fredy_url(FROM_FREDY, base) == FROM_FREDY["fredy_url"]
+
+
+@pytest.mark.parametrize("missing", ["job_id", "fredy_id"])
+def test_fredy_url_only_for_listings_from_fredy(missing):
+    """A listing that didn't come from a Fredy job (e.g. added by hand) has no page in Fredy to build a link to."""
+    listing = {**FROM_FREDY, missing: None}
+    assert fredy_url(listing, "https://fredy.example.com") == FROM_FREDY["fredy_url"]
+    assert fredy_url({**listing, "fredy_url": None}, "https://fredy.example.com") is None
+
+
+def test_fredy_url_escapes_the_id():
+    listing = {**FROM_FREDY, "fredy_id": "a/b?c#d e&f"}
+    assert fredy_url(listing, "https://fredy.example.com") == "https://fredy.example.com/#/listings/listing/a%2Fb%3Fc%23d%20e%26f"
+
+
+def test_fredy_url_stored_link_must_be_safe():
+    assert fredy_url({**FROM_FREDY, "job_id": None, "fredy_url": "JavaScript:alert(1)"}, "https://fredy.example.com") is None
 
 
 def test_provider_label():

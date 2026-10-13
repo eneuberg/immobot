@@ -1,7 +1,7 @@
-"""Portal helpers: URL validation, contact deep links and display names per Fredy provider id."""
+"""Portal helpers: URL validation, contact deep links, links into Fredy and display names per Fredy provider id."""
 
 import re
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 # Fredy provider id -> display name. Unknown ids are shown as-is.
 PROVIDER_LABELS = {
@@ -65,6 +65,16 @@ def contact_url(provider: str | None, url: str | None) -> str | None:
     if provider == "mcMakler" and host.endswith("mcmakler.de"):
         return urlunsplit(parts._replace(fragment="expose-section-anfrage"))
     return url
+
+
+def fredy_url(listing: dict, base_url: str | None) -> str | None:
+    """"In Fredy öffnen": with the address of the Fredy instance (setting "fredy_base_url") built the way Fredy
+    builds its own links (lib/notification/adapter/http.js), so the links survive a move of Fredy. Otherwise,
+    and for listings that didn't come from a Fredy job (no job_id), the link Fredy sent. Always via safe_url."""
+    base = safe_url(base_url)
+    if base and listing.get("fredy_id") and listing.get("job_id"):
+        return safe_url(f"{base.rstrip('/')}/#/listings/listing/{quote(str(listing['fredy_id']), safe='')}")
+    return safe_url(listing.get("fredy_url"))
 
 
 def provider_label(provider: str | None) -> str:

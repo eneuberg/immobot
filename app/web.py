@@ -56,6 +56,7 @@ TEXT_SETTINGS = ["system_prompt", "profile", "wishes", "style"]  # textareas, ea
 CHECKBOX_SETTINGS = ["send_image", "paused", "is24_fetch"]
 TEXT_SETTING_LABELS = {"system_prompt": "System-Prompt", "profile": "Über mich", "wishes": "Wünsche", "style": "Schreibstil"}
 MAX_TEXT_CHARS = 20_000
+FREDY_BASE_URL_MAX = 200
 
 # "Einstellungen" has three sub-pages. Each form posts its section, so it saves only its own checkboxes.
 SETTINGS_SECTIONS = {
@@ -66,7 +67,7 @@ SETTINGS_SECTIONS = {
 SECTION_FIELDS = {
     "texte": [*TEXT_SETTINGS, "target_words"],
     "ki": ["provider", "model", "effort", "monthly_budget_eur", "eur_usd_rate", "send_image", "llm_max_images", "is24_fetch"],
-    "telegram": ["followup_delay_s", "paused"],
+    "telegram": ["followup_delay_s", "paused", "fredy_base_url"],
 }
 FIELD_SECTION = {field: section for section, fields in SECTION_FIELDS.items() for field in fields}
 AI_CREDENTIALS = {info["credential"]: provider for provider, info in settings.PROVIDERS.items()}  # managed on "KI & Kosten"
@@ -483,7 +484,7 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
         # Only http(s) URLs become links/images; contact_url's output is checked as well.
         "image_url": portals.safe_url(listing["image_url"]),
         "contact_url": portals.safe_url(portals.contact_url(listing["provider"], listing["url"])),
-        "fredy_url": portals.safe_url(listing["fredy_url"]),
+        "fredy_url": portals.fredy_url(listing, db.get_settings()["fredy_base_url"]),
         "drafts": [_draft_view(d) for d in db.list_drafts(listing["id"])],
         "error": error,
     }
@@ -632,10 +633,33 @@ def validate_settings(form: dict[str, str], current: dict[str, str],
         else:
             values["eur_usd_rate"] = f"{rate:.10g}"
 
+    if "fredy_base_url" in form:  # empty: the links Fredy sent are used
+        values["fredy_base_url"] = form["fredy_base_url"].strip().rstrip("/")
+        error = _fredy_base_url_error(values["fredy_base_url"]) if values["fredy_base_url"] else None
+        if error:
+            errors["fredy_base_url"] = error
+
     for key in CHECKBOX_SETTINGS:
         if section is None or key in SECTION_FIELDS[section]:
             values[key] = "1" if form.get(key) else "0"
     return values, errors
+
+
+def _fredy_base_url_error(url: str) -> str | None:
+    """Why `url` can't be the address of the Fredy instance, or None. Wanted: http(s)://host[:port][/path]."""
+    if len(url) > FREDY_BASE_URL_MAX:
+        return f"Höchstens {FREDY_BASE_URL_MAX} Zeichen."
+    try:
+        with_login = "@" in urlsplit(url).netloc
+    except ValueError:  # e.g. an unclosed [IPv6 bracket; safe_url rejects it below
+        with_login = False
+    if with_login:
+        return "Ohne Benutzername und Passwort."
+    if portals.safe_url(url) is None:
+        return "Volle Adresse mit http(s)://, z. B. https://fredy.example.com."
+    if "?" in url or "#" in url:  # also a bare "?" or "#", which urlsplit reports as empty
+        return "Nur die Adresse von Fredy, ohne „?…“ oder „#…“."
+    return None
 
 
 def _ai_status(current: dict) -> dict:

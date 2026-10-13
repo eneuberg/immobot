@@ -138,6 +138,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "is24_fetch": "1",  # media.py: fetch exposé + pictures from ImmoScout24 when Fredy sends no pictures
     "followup_delay_s": "4",
     "paused": "0",
+    "fredy_base_url": "",  # portals.fredy_url: own "In Fredy öffnen" links; empty = the fredyUrl Fredy sent
 }
 
 
