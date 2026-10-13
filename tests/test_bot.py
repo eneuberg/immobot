@@ -222,6 +222,115 @@ def test_draft_keyboard_omits_url_button_without_contact_url(monkeypatch):
     assert [b.callback_data for b in rows[3]] == ["img:12"]
 
 
+def test_draft_keyboard_with_editor_button(fresh_vault, monkeypatch):
+    monkeypatch.setattr(portals, "contact_url", lambda provider, url: "https://example.org/contact")
+    monkeypatch.setattr(bot, "_public_base", "https://immobot.example.com")
+    rows = bot.draft_keyboard(listing_dict(id=12)).inline_keyboard
+    assert [b.callback_data for b in rows[0]] == ["new:12", "short:12", "formal:12"]
+    editor, adjust = rows[1]
+    assert editor.text == "📝 Editor" and editor.login_url.url.startswith("https://immobot.example.com/e/12/")
+    assert adjust.callback_data == "edit:12"
+    assert [(b.text, b.url) for b in rows[2]] == [("📨 Inserat öffnen ↗", "https://example.org/contact")]
+    assert [b.callback_data for b in rows[3]] == ["sent:12", "skip:12"]
+    assert rows[4][-1].text == "🔗 Dashboard"
+    monkeypatch.setattr(portals, "contact_url", lambda provider, url: None)
+    rows = bot.draft_keyboard(listing_dict(id=12)).inline_keyboard
+    assert [b.text for b in rows[1]] == ["📝 Editor", "✏️ Anpassen"] and rows[2][0].callback_data == "sent:12"
+    stripped = bot.without_login_url(bot.draft_keyboard(listing_dict(id=12))).inline_keyboard
+    assert [[b.text for b in row] for row in stripped[1:3]] == [["✏️ Anpassen"], ["✅ Gesendet", "❌ Uninteressant"]]
+    # follow-up and collapsed messages never carry it
+    assert not any(b.login_url for markup in (bot.followup_view(listing_dict())[1], bot.collapsed_view(listing_dict())[1])
+                   for row in markup.inline_keyboard for b in row)
+
+
+class PickyBot(FakeBot):
+    """Rejects messages with a login_url button, like Telegram while the domain isn't linked (@BotFather /setdomain)."""
+
+    def __init__(self, error="Bot_domain_invalid"):
+        super().__init__()
+        self.error, self.rejected = error, 0
+
+    def _check(self, kwargs):
+        if self.error and any(b.login_url for row in kwargs["reply_markup"].inline_keyboard for b in row):
+            self.rejected += 1
+            raise BadRequest(self.error)
+
+    async def send_message(self, **kwargs):
+        self._check(kwargs)
+        return await super().send_message(**kwargs)
+
+    async def edit_message_text(self, **kwargs):
+        self._check(kwargs)
+        return await super().edit_message_text(**kwargs)
+
+
+def test_rejected_editor_button_falls_back_and_is_noted(tg, monkeypatch):
+    db = bot.db
+    monkeypatch.setattr(bot, "_public_base", "https://immobot.example.com")
+    listing_id = add_listing(db)
+    db.add_draft(listing_id, "initial", "Entwurf", "claude-opus-5-5")
+    fake_llm(monkeypatch, db)
+    picky = PickyBot()
+    press(picky, f"short:{listing_id}")
+    final = picky.edits[-1]
+    assert "<pre>" in final["text"] and picky.rejected == 2  # "⏳ schreibe …" and the draft, each retried once
+    texts = [b.text for row in final["reply_markup"].inline_keyboard for b in row]
+    assert "📝 Editor" not in texts and "✏️ Anpassen" in texts and "📨 Inserat öffnen ↗" in texts
+    at, reason = bot.editor_button_error()
+    assert "/setdomain" in reason and at.startswith(db.now_iso()[:10])
+    assert db.get_meta("editor_login_url_error").startswith(at + " ")
+
+    picky.error = None  # domain linked now: the next message keeps the button and the note goes away
+    press(picky, f"formal:{listing_id}")
+    texts = [b.text for row in picky.edits[-1]["reply_markup"].inline_keyboard for b in row]
+    assert "📝 Editor" in texts and bot.editor_button_error() is None
+
+
+def test_editor_button_fallback_when_sending_and_other_errors(tg, monkeypatch, fresh_vault):
+    monkeypatch.setattr(bot, "_public_base", "https://immobot.example.com")
+    keyboard = bot.draft_keyboard(listing_dict(id=12))
+    picky = PickyBot("Button_url_invalid")
+    message = asyncio.run(bot._send(picky, CHAT, "Text", keyboard))
+    assert message.message_id == picky._next_id and picky.rejected == 1
+    assert not any(b.login_url for row in picky.sent[-1]["reply_markup"].inline_keyboard for b in row)
+    assert "Button_url_invalid" in bot.editor_button_error()[1]
+
+    other = PickyBot("Message to edit not found")  # not about the button: raised as before, nothing noted
+    bot.db.delete_meta("editor_login_url_error")
+    with pytest.raises(BadRequest):
+        asyncio.run(bot._edit(other, listing_dict(id=12), "Text", keyboard))
+    assert other.edits == [] and bot.editor_button_error() is None
+    failing = FakeBot()
+    calls = []
+
+    async def edit_message_text(**kwargs):
+        calls.append(kwargs)
+        raise BadRequest("Wrong url host")
+
+    failing.edit_message_text = edit_message_text
+    with pytest.raises(BadRequest):  # a keyboard without the button: no second try
+        asyncio.run(bot._edit(failing, listing_dict(id=12), "T", bot.without_login_url(keyboard)))
+    assert len(calls) == 1
+
+
+def test_schedule_refresh_shows_the_current_state(tg, monkeypatch):
+    db = bot.db
+    listing_id = add_listing(db, title="A & B")
+    bot.schedule_refresh(listing_id)  # bot not running: nothing happens
+    assert bot._tasks == set()
+    monkeypatch.setattr(bot, "_app", SimpleNamespace(bot=tg))
+    db.set_listing_status(listing_id, "sent")
+
+    async def main():
+        bot.schedule_refresh(listing_id)
+        bot.schedule_refresh(add_listing(db, fredy_id="f2", tg_message_id=None))  # no message: nothing to edit
+        await asyncio.gather(*list(bot._tasks))
+
+    asyncio.run(main())
+    assert len(tg.edits) == 1 and tg.edits[0]["message_id"] == 555
+    assert tg.edits[0]["text"] == "✅ Gesendet · A &amp; B"
+
+
 def test_all_callback_data_fits_telegram_limit():
     listing = listing_dict(id=999_999_999_999)
     markups = [bot.followup_view(listing)[1], bot.draft_keyboard(listing), bot.collapsed_view(listing)[1]]
@@ -1129,7 +1238,7 @@ def test_pictures_button_works_while_a_draft_is_generated(tg, album_listing):
     assert len(album_bot.albums) == 1
 
 
-def test_keyboards_have_pictures_and_dashboard_buttons(monkeypatch):
+def test_keyboards_have_pictures_and_dashboard_buttons(fresh_vault, monkeypatch):
     is24_listing = listing_dict(id=12, url=IS24_URL)
     other = listing_dict(id=13, provider="immowelt", url="https://www.immowelt.de/expose/x")
     assert bot.followup_view(other)[1].inline_keyboard[-1][-1].callback_data == "skip:13"  # no extra row
