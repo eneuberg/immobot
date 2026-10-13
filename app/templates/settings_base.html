@@ -1,0 +1,27 @@
+{# The three "Einstellungen" pages: heading, sub-navigation (a dot where a required value is missing), messages. #}
+{% extends "base.html" %}
+{% from "macros.html" import flashes %}
+{% block title %}{{ sections[section].label }} · Einstellungen{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Einstellungen</h1>
+    <p>{% block intro %}{% endblock %}</p>
+  </div>
+</div>
+
+<nav class="subnav" aria-label="Bereiche der Einstellungen">
+  {% for key, s in sections.items() %}
+  <a href="{{ s.path }}" {% if key == section %}aria-current="page"{% endif %}>{{ s.label }}
+    {%- if alerts[key] %}<span class="alert-dot" aria-hidden="true"></span><span class="sr-only"> (fehlt noch etwas)</span>{% endif %}</a>
+  {% endfor %}
+</nav>
+
+{{ flashes(message, error) }}
+{% if test_result %}
+<div class="flash bare {{ 'ok' if test_result.ok else 'err' }}" role="status">{{ "✓" if test_result.ok else "✗" }} {{ test_result.text }}</div>
+{% endif %}
+
+{% block section %}{% endblock %}
+{% endblock %}

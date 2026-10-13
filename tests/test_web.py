@@ -108,7 +108,8 @@ def test_security_headers(client):
 
 
 @pytest.mark.parametrize("method,path", [
-    ("get", "/"), ("get", "/listing/1"), ("get", "/settings"), ("get", "/status"),
+    ("get", "/"), ("get", "/listing/1"), ("get", "/settings"), ("get", "/settings/ki"), ("get", "/settings/telegram"),
+    ("get", "/status"),
     ("post", "/settings"), ("post", "/settings/test"), ("post", "/settings/reset/profile"),
     ("post", "/listing/1/status"), ("post", "/listing/1/draft"),
     ("get", "/credentials"), ("post", "/credentials/save/anthropic_api_key"), ("post", "/credentials/clear/anthropic_api_key"),
@@ -371,16 +372,60 @@ def valid_settings(**overrides):
     return form
 
 
-def test_settings_page_renders_all_fields(client):
+def field_names(key):
+    return [f"model_{provider}" for provider in settings.PROVIDERS] if key == "model" else [key]  # one select per panel
+
+
+def test_settings_pages_render_all_fields(client):
     login(client)
-    r = client.get("/settings")
-    assert r.status_code == 200
-    for key in settings.DEFAULT_SETTINGS:
-        if key == "model":  # one model select per provider panel
-            assert all(f'name="model_{provider}"' in r.text for provider in settings.PROVIDERS)
-        else:
-            assert f'name="{key}"' in r.text
-    assert "Opus 5.5 – 4,00 $ / 20,00 $" in r.text and "Sonnet 5.5 – 3,30 € / 16,50 €" in r.text
+    assert set(web.FIELD_SECTION) == set(settings.DEFAULT_SETTINGS)  # every setting lives on exactly one sub-page
+    pages = {section: client.get(info["path"]) for section, info in web.SETTINGS_SECTIONS.items()}
+    for section, r in pages.items():
+        assert r.status_code == 200
+        assert f'<input type="hidden" name="section" value="{section}">' in r.text
+        assert f'<a href="{web.SETTINGS_SECTIONS[section]["path"]}" aria-current="page">' in r.text  # sub-navigation
+        assert '<a href="/settings" aria-current="page">Einstellungen</a>' in r.text  # main navigation
+        assert 'href="/credentials"' not in r.text and ">Zugänge</a>" not in r.text  # no separate tab anymore
+    for key, section in web.FIELD_SECTION.items():
+        for name in field_names(key):
+            assert f'name="{name}"' in pages[section].text, key
+            assert all(f'name="{name}"' not in r.text for other, r in pages.items() if other != section), key
+    ki = pages["ki"].text
+    assert "Opus 5.5 – 4,00 $ / 20,00 $" in ki and "Sonnet 5.5 – 3,30 € / 16,50 €" in ki
+    texte = pages["texte"].text  # the texts stay on their own page, without keys or tokens around them
+    assert "Über mich" in texte and "System-Prompt" in texte and "API-Key" not in texte and "Token" not in texte
+
+
+def test_old_credentials_url_redirects(client):
+    login(client)
+    r = client.get("/credentials")
+    assert r.status_code == 303 and r.headers["location"] == "/settings/telegram"
+
+
+def test_each_sub_page_saves_only_its_own_checkboxes(client):
+    login(client)
+    db.update_settings({"send_image": "1", "paused": "1", "is24_fetch": "1"})
+    r = client.post("/settings", data={"section": "texte", "profile": "Neu", "target_words": "100"})
+    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=1"
+    stored = db.get_settings()
+    assert stored["profile"] == "Neu" and (stored["send_image"], stored["paused"], stored["is24_fetch"]) == ("1", "1", "1")
+    r = client.post("/settings", data={"section": "telegram", "followup_delay_s": "5"})  # "Pause" switched off
+    assert r.headers["location"] == "/settings/telegram?saved=1" and "Gespeichert." in client.get(r.headers["location"]).text
+    stored = db.get_settings()
+    assert stored["followup_delay_s"] == "5" and (stored["send_image"], stored["paused"], stored["is24_fetch"]) == ("1", "0", "1")
+    r = client.post("/settings", data={"section": "ki", "monthly_budget_eur": "3"})  # both photo switches off
+    assert r.headers["location"] == "/settings/ki?saved=1"
+    stored = db.get_settings()
+    assert (stored["send_image"], stored["paused"], stored["is24_fetch"]) == ("0", "0", "0")
+
+
+def test_validation_error_shows_the_page_with_the_field(client):
+    login(client)
+    r = client.post("/settings", data={"section": "telegram", "followup_delay_s": "99"})
+    assert r.status_code == 400 and 'name="followup_delay_s" min="0" max="60" step="1" value="99"' in r.text
+    assert '<a href="/settings/telegram" aria-current="page">' in r.text
+    r = client.post("/settings", data=valid_settings(model="gpt-4"))  # no section: the page of the bad field
+    assert r.status_code == 400 and '<a href="/settings/ki" aria-current="page">' in r.text and "Unbekanntes Modell" in r.text
 
 
 def test_settings_save(client):
@@ -463,7 +508,9 @@ def test_status_page_bot_states_and_sources(client, monkeypatch):
     vault.init(TEST_SECRETS["SESSION_SECRET"], {})  # nothing in env
     r = client.get("/status")
     assert "nicht konfiguriert" in r.text
-    assert r.text.count("nicht gesetzt") == 6 and "Kein Anthropic-API-Key hinterlegt" in r.text  # + AI warning
+    assert r.text.count('<span class="error">nicht gesetzt</span>') == 4  # the required ones
+    assert "nicht gesetzt (optional)" in r.text and "nicht gesetzt (nur für den anderen KI-Anbieter nötig)" in r.text
+    assert "Kein Anthropic-API-Key hinterlegt" in r.text
     save_credential(client, "anthropic_api_key", DASHBOARD_SECRETS["anthropic_api_key"])
     save_credential(client, "telegram_bot_token", DASHBOARD_SECRETS["telegram_bot_token"])
     monkeypatch.setattr(bot, "status", lambda: {"running": True, "last_update_at": None, "last_error": None})
@@ -490,7 +537,8 @@ def test_no_secret_in_any_response(client, fake_llm, monkeypatch):
     responses.append(client.post("/login", data={"password": PASSWORD}))
     lid = db.list_listings()[0]["id"]
     responses += [client.post(f"/listing/{lid}/draft"), client.post("/settings/test")]
-    for path in ["/", "/?status=new", f"/listing/{lid}", "/settings", "/settings?saved=1", "/login"]:
+    for path in ["/", "/?status=new", f"/listing/{lid}", "/settings", "/settings?saved=1", "/settings/ki", "/settings/telegram",
+                 "/login"]:
         responses.append(client.get(path))
     status = client.get("/status")
     assert "läuft" in status.text and "***" in status.text  # bot status rendered, token redacted
@@ -512,7 +560,8 @@ def test_no_secret_in_any_response(client, fake_llm, monkeypatch):
         "running": True, "last_update_at": None,
         "last_error": f"getUpdates failed for bot{DASHBOARD_SECRETS['telegram_bot_token']} / {TEST_SECRETS['TELEGRAM_BOT_TOKEN']}",
     })
-    for path in ["/credentials", "/credentials?saved=anthropic_api_key", "/status", "/settings", "/", "/?status=new",
+    for path in ["/settings/telegram", "/settings/telegram?saved=telegram_bot_token", "/settings/ki",
+                 "/settings/ki?show=anthropic&saved=anthropic_api_key", "/status", "/settings", "/", "/?status=new",
                  f"/listing/{lid}"]:
         responses.append(client.get(path))
     rejected_value = "INVALID-" + DASHBOARD_SECRETS["telegram_bot_token"]
@@ -543,9 +592,11 @@ def test_no_secret_in_any_response(client, fake_llm, monkeypatch):
     for secret in secrets:
         assert secret not in regenerated.text
     secrets.append(new_token)
-    responses += [client.get("/credentials"), client.get("/status"), client.get(redirect.headers["location"])]
+    responses += [client.get("/settings/telegram"), client.get("/settings/ki"), client.get("/status"),
+                  client.get(redirect.headers["location"])]
     responses.append(client.post("/credentials/clear/anthropic_api_key", data={"password": PASSWORD}))
-    responses += [client.get("/credentials?cleared=anthropic_api_key"), client.post("/logout"), client.get("/login")]
+    responses += [client.get("/settings/ki?show=anthropic&cleared=anthropic_api_key"), client.post("/logout"),
+                  client.get("/login")]
 
     for r in responses:
         assert r.status_code < 500, r.request.url
@@ -618,31 +669,55 @@ def events():
 
 def test_credentials_page_shows_status_never_values(client):
     login(client)
-    r = client.get("/credentials")
+    r = client.get("/settings/telegram")
     assert r.status_code == 200
-    assert r.text.count("aus Env-Variable – im Dashboard überschreiben und danach in Coolify löschen") == 4
+    assert r.text.count("aus Env-Variable – hier eintragen und danach in Coolify löschen") == 3  # bot token, chat, webhook
     assert "Aktuelle Chat-ID: <code>42</code>" in r.text  # the chat id is not secret
-    assert "SESSION_SECRET" in r.text and 'href="/credentials" aria-current="page"' in r.text
+    assert "SESSION_SECRET" in r.text and "API-Key" not in r.text.split("<summary>Wichtig")[0]  # AI keys: "KI & Kosten"
 
+    save_credential(client, "telegram_bot_token", DASHBOARD_SECRETS["telegram_bot_token"])
     save_credential(client, "anthropic_api_key", DASHBOARD_SECRETS["anthropic_api_key"])
-    r = client.get("/credentials")
-    assert "gesetzt über Dashboard am" in r.text
-    value_inputs = re.findall(r"<input[^>]*name=\"value\"[^>]*>", r.text)
-    assert len(value_inputs) == 6
-    for tag in value_inputs:
-        assert " value=" not in tag  # never prefilled
-        # No second password field: password managers would offer to save the API key as the site password.
-        assert 'type="text"' in tag and 'autocomplete="off"' in tag and 'spellcheck="false"' in tag
-    assert sum('class="masked"' in tag for tag in value_inputs) == 4  # the secrets, masked by CSS
-    password_inputs = re.findall(r"<input[^>]*type=\"password\"[^>]*>", r.text)
-    assert len(password_inputs) == 6 and all('name="password"' in tag and "current-password" in tag for tag in password_inputs)
-    assert DASHBOARD_SECRETS["anthropic_api_key"] not in r.text
+    pages = {path: client.get(path).text for path in ["/settings/telegram", "/settings/ki"]}
+    assert "gesetzt über Dashboard am" in pages["/settings/telegram"]
+    for path, page, values, masked in [("/settings/telegram", pages["/settings/telegram"], 4, 2), ("/settings/ki", pages["/settings/ki"], 2, 2)]:
+        value_inputs = re.findall(r"<input[^>]*name=\"value\"[^>]*>", page)
+        assert len(value_inputs) == values, path
+        for tag in value_inputs:
+            assert " value=" not in tag  # never prefilled
+            # No second password field: password managers would offer to save the API key as the site password.
+            assert 'type="text"' in tag and 'autocomplete="off"' in tag and 'spellcheck="false"' in tag
+        assert sum('class="masked"' in tag for tag in value_inputs) == masked, path  # the secrets, masked by CSS
+        password_inputs = re.findall(r"<input[^>]*type=\"password\"[^>]*>", page)
+        assert len(password_inputs) == values, path
+        assert all('name="password"' in tag and "current-password" in tag for tag in password_inputs)
+        for value in DASHBOARD_SECRETS.values():
+            assert value == DASHBOARD_SECRETS["telegram_chat_id"] or value not in page
+
+
+def test_required_and_optional_credentials_are_marked(client):
+    login(client)
+    page = client.get("/settings/telegram").text
+    for label in ["Telegram-Bot-Token", "Telegram-Chat-ID", "Fredy-Webhook-Token"]:
+        assert f'<strong>{label}</strong><span class="need">Pflicht</span>' in page
+    assert '<strong>Erlaubte Telegram-User-IDs</strong><span class="need optional">optional</span>' in page
+    assert '<span class="badge dot">nicht gesetzt</span>' in page and ">fehlt<" not in page  # empty is fine here
+    assert 'class="alert-dot"' not in page  # everything required is set (env)
+    ki = client.get("/settings/ki").text
+    assert "Nötig ist nur der API-Key des gewählten Anbieters." in ki
+    assert '<strong>Anthropic-API-Key</strong> <span class="need">Pflicht</span>' in provider_panel(ki, "anthropic")
+
+    vault.init(TEST_SECRETS["SESSION_SECRET"], {})  # nothing in env: required values missing
+    page = client.get("/settings/telegram").text
+    assert page.count('<span class="badge err dot">fehlt</span>') == 3 and page.count('class="alert-dot"') == 2  # both tabs
+    assert '<span class="badge dot">nicht gesetzt</span>' in page  # the optional one still isn't "missing"
+    vault.set("anthropic_api_key", DASHBOARD_SECRETS["anthropic_api_key"])  # the DeutschlandGPT key isn't needed
+    assert client.get("/settings/telegram").text.count('class="alert-dot"') == 1
 
 
 def test_save_credential_with_audit_and_notice(client, notices):
     login(client)
     r = save_credential(client, "anthropic_api_key", "  " + DASHBOARD_SECRETS["anthropic_api_key"] + "  ")
-    assert r.status_code == 303 and r.headers["location"] == "/credentials?saved=anthropic_api_key"
+    assert r.status_code == 303 and r.headers["location"] == "/settings/ki?show=anthropic&saved=anthropic_api_key"
     assert vault.get("anthropic_api_key") == DASHBOARD_SECRETS["anthropic_api_key"]
     assert vault.source("anthropic_api_key") == "dashboard"
     assert events() == [("anthropic_api_key", "set", "testclient")]
@@ -697,10 +772,23 @@ def test_clear_credential_falls_back_to_env(client, notices):
     login(client)
     save_credential(client, "fredy_webhook_token", DASHBOARD_SECRETS["fredy_webhook_token"])
     r = client.post("/credentials/clear/fredy_webhook_token", data={"password": PASSWORD})
-    assert r.status_code == 303 and r.headers["location"] == "/credentials?cleared=fredy_webhook_token"
+    assert r.status_code == 303 and r.headers["location"] == "/settings/telegram?cleared=fredy_webhook_token"
     assert vault.get("fredy_webhook_token") == TOKEN and vault.source("fredy_webhook_token") == "env"
     assert [e[:2] for e in events()] == [("fredy_webhook_token", "clear"), ("fredy_webhook_token", "set")]
     assert "entfernt" in notices[-1][0]
+
+
+def test_ai_key_errors_and_removal_stay_on_the_ki_page(client, notices):
+    login(client)
+    r = save_credential(client, "anthropic_api_key", "sk-ant-x", password="wrong")
+    assert r.status_code == 403 and 'id="anbieter"' in r.text
+    save_credential(client, "anthropic_api_key", DASHBOARD_SECRETS["anthropic_api_key"])
+    assert 'formaction="/credentials/clear/anthropic_api_key" formnovalidate' in provider_panel(
+        client.get("/settings/ki").text, "anthropic")
+    r = client.post("/credentials/clear/anthropic_api_key", data={"password": PASSWORD})
+    assert r.status_code == 303 and r.headers["location"] == "/settings/ki?show=anthropic&cleared=anthropic_api_key"
+    assert "„Anthropic-API-Key“ entfernt." in client.get(r.headers["location"]).text
+    assert vault.source("anthropic_api_key") == "env"
 
 
 def test_bot_credential_changes_dont_block_the_request(client, monkeypatch, notices):
@@ -750,7 +838,7 @@ def test_regenerated_webhook_token_is_shown_once(client, notices):
     token = vault.get("fredy_webhook_token")
     assert r.status_code == 303 and token != TOKEN and len(token) >= 43
     location = r.headers["location"]
-    assert location.startswith("/credentials?token=") and token not in location  # post/redirect/get
+    assert location.startswith("/settings/telegram?token=") and token not in location  # post/redirect/get
     assert all(token not in v for k, v in r.headers.items())  # not in the redirect, not in the cookie
     page = client.get(location)
     assert f'<pre class="draft" id="new-token-value">{token}</pre>' in page.text and "HTTP-Adapter" in page.text
@@ -758,7 +846,7 @@ def test_regenerated_webhook_token_is_shown_once(client, notices):
     again = client.get(location)  # F5 / back: shown only once, and nothing is rotated
     assert token not in again.text and "schon angezeigt" in again.text
     assert vault.get("fredy_webhook_token") == token
-    assert token not in client.get("/credentials").text and token not in client.get("/status").text
+    assert token not in client.get("/settings/telegram").text and token not in client.get("/status").text
     assert [e[:2] for e in events()] == [("fredy_webhook_token", "regenerate")]
     assert "neu erzeugt" in notices[0][0] and token not in notices[0][0]
     # Fredy must use the new token now.
@@ -811,10 +899,11 @@ def test_connection_tests(client, monkeypatch):
     monkeypatch.setattr(llm, "check_api_key", anthropic_ok)
     monkeypatch.setattr(bot, "check_connection", telegram_fails)
     r = client.post("/credentials/test/anthropic")  # no step-up needed
-    assert r.status_code == 200 and "✓ Anthropic-API-Key funktioniert." in r.text
+    assert r.status_code == 200 and "✓ Anthropic-API-Key funktioniert." in r.text and 'id="anbieter"' in r.text
     assert events() == []
     r = client.post("/credentials/test/telegram")
     assert r.status_code == 200 and "✗ Telegram lehnt den Bot-Token ab." in r.text
+    assert '<a href="/settings/telegram" aria-current="page">' in r.text
     assert events() == [("telegram_bot_token", "test_failed", "testclient")]
 
 
@@ -851,7 +940,7 @@ def test_pairing_start(client, monkeypatch, notices):
     assert stored["bot_username"] == "immo_test_bot"
     assert events() == [("telegram_chat_id", "pair_start", "testclient")]
     assert "Pairing gestartet" in notices[0][0]
-    page = client.get("/credentials").text
+    page = client.get("/settings/telegram").text
     assert code not in page and "Pairing-Code für @immo_test_bot ist noch bis" in page
     assert vault.check_pairing_code(code)
 
@@ -860,25 +949,27 @@ def test_credentials_page_shows_last_pairing(client):
     login(client)
     detail = "Chat „<i>Wohnung</i>“ (group, -100777) · User Erika (@erika_m, 1001)"
     db.add_credential_event("telegram_chat_id", "pair", "Telegram", detail)
-    page = client.get("/credentials").text
+    page = client.get("/settings/telegram").text
     escaped = "Chat „&lt;i&gt;Wohnung&lt;/i&gt;“ (group, -100777) · User Erika (@erika_m, 1001)"
-    assert "Zuletzt per Pairing verbunden am" in page and page.count(escaped) == 2  # chat box + audit log
-    assert "<i>Wohnung</i>" not in page  # names from Telegram are escaped
+    assert "Zuletzt per Pairing verbunden am" in page and page.count(escaped) == 1  # in the chat box
+    status = client.get("/status").text
+    assert status.count(escaped) == 1  # audit log
+    assert "<i>Wohnung</i>" not in page + status  # names from Telegram are escaped
 
 
 # --- Telegram user allowlist in the dashboard ----------------------------------------
 
-def test_allowlist_warning_and_value(client, notices):
+def test_allowlist_is_optional_and_shown(client, notices):
     login(client)
-    warning = "Jedes Mitglied des Chats kann Buttons drücken – Pairing erneut ausführen oder User-ID eintragen"
-    assert warning in client.get("/credentials").text and warning in client.get("/status").text
+    assert web.OPEN_CHAT_NOTE in client.get("/status").text  # a hint, not a warning
+    assert 'class="flash warn"' not in client.get("/settings/telegram").text
     r = save_credential(client, "telegram_allowed_user_ids", " 1001, 2002,1001 ")
-    assert r.status_code == 303
+    assert r.status_code == 303 and r.headers["location"] == "/settings/telegram?saved=telegram_allowed_user_ids"
     assert vault.get("telegram_allowed_user_ids") == "1001,2002"
-    page = client.get("/credentials").text
-    assert warning not in page and "Aktuell erlaubt: <code>1001,2002</code>" in page
+    page = client.get("/settings/telegram").text
+    assert "Aktuell erlaubt: <code>1001,2002</code>" in page
     status = client.get("/status").text
-    assert warning not in status and "1001, 2002" in status
+    assert web.OPEN_CHAT_NOTE not in status and "1001, 2002" in status
     assert "Erlaubte Telegram-User-IDs – gespeichert" in notices[-1][0]
     assert save_credential(client, "telegram_allowed_user_ids", "-5").status_code == 400
     assert save_credential(client, "telegram_allowed_user_ids", "abc").status_code == 400
@@ -889,10 +980,11 @@ def test_undecryptable_allowlist_is_explained(client):
     save_credential(client, "telegram_allowed_user_ids", "1001")
     vault.init("rotated-session-secret-" + "z" * 40, main.app.state.config.env_credentials())
     login(client)  # SESSION_SECRET "changed" only for the vault here; the session itself is still valid
-    for path in ["/credentials", "/status"]:
+    for path in ["/settings/telegram", "/status"]:
         page = client.get(path).text
         assert "nicht entschlüsselbar (SESSION_SECRET geändert?) – niemand darf Buttons drücken" in page, path
-        assert "Jedes Mitglied des Chats" not in page, path
+        assert web.OPEN_CHAT_NOTE not in page, path
+    assert 'class="alert-dot"' in client.get("/settings/telegram").text
 
 
 def test_allowlist_change_needs_step_up_and_no_bot_restart(client, monkeypatch):
@@ -1088,7 +1180,7 @@ def test_step_up_failures_trigger_alert(client, notices):
         save_credential(client, "anthropic_api_key", "sk-ant-x", password="falsches-pw")
     assert len(notices) == 1 and "3 fehlgeschlagene Dashboard-Logins" in notices[0][0]
     assert "falsches-pw" not in notices[0][0]
-    page = client.get("/credentials").text
+    page = client.get("/status").text
     assert "Dashboard-Login" in page and "wiederholt falsches Passwort" in page
 
 
@@ -1109,7 +1201,7 @@ def test_dockerfile_trusts_only_private_proxies():
     assert "172.18.0.2" in trusted and "203.0.113.9" not in trusted
 
 
-# --- AI provider (Einstellungen → KI-Anbieter) ------------------------------------------
+# --- AI provider (Einstellungen → KI & Kosten) ------------------------------------------
 
 DGPT_KEY = "dgpt_qz7Xv9Mk3Jw8Lp0r4Tn6Yb2WXYZ"  # no common words: every 6-character piece is distinctive
 
@@ -1137,13 +1229,13 @@ def model_options(html, provider="anthropic"):
 
 
 def provider_panel(html, provider):
-    """The HTML of one provider's panel on /settings."""
+    """The HTML of one provider's panel on /settings/ki."""
     return re.search(rf'<section class="provider-panel[^"]*" data-provider-panel="{provider}".*?</section>', html, re.S).group(0)
 
 
 def save_provider(client, provider, model=None):
-    """Choose a provider (and optionally a model in its panel) and save, like the settings form does."""
-    form = valid_settings(provider=provider)
+    """Choose a provider (and optionally a model in its panel) and save, like the "KI & Kosten" form does."""
+    form = valid_settings(provider=provider, section="ki")
     if model:
         form[f"model_{provider}"] = model
     return client.post("/settings", data=form)
@@ -1151,10 +1243,10 @@ def save_provider(client, provider, model=None):
 
 def test_settings_shows_provider_section(client):
     login(client)
-    r = client.get("/settings")
+    r = client.get("/settings/ki")
     page = r.text
-    assert 'id="ki"' in page and "KI-Anbieter" in page
-    assert '<select id="provider" name="provider" form="settings-form" data-provider-select data-saved="anthropic">' in page
+    assert 'id="anbieter"' in page and "Anbieter &amp; Modell" in page
+    assert '<select id="provider" name="provider" form="ki-form" data-provider-select data-saved="anthropic">' in page
     assert '<option value="anthropic" selected>Anthropic</option>' in page and ">DeutschlandGPT</option>" in page
     # Both panels are rendered (app.js shows the chosen one; without JS both are visible).
     assert 'class="provider-panel is-active" data-provider-panel="anthropic"' in page
@@ -1171,7 +1263,8 @@ def test_settings_shows_provider_section(client):
     assert "Modellliste nicht geprüft" in anthropic
     assert model_options(page, "anthropic") == list(settings.PRICES["anthropic"])  # unchecked: every priced model
     assert model_options(page, "deutschlandgpt") == list(settings.PRICES["deutschlandgpt"])
-    assert "Anbieter &amp; Modell speichern" in page and ">Wechseln<" not in page
+    assert 'form="test-anthropic"' in anthropic and 'action="/credentials/test/deutschlandgpt"' in page
+    assert ">Wechseln<" not in page and "Entfernen" not in anthropic  # an env key can't be removed here
     assert "data-provider-unsaved hidden" in page
     assert "Wechselkurs: 1 € = x $" in page and 'name="eur_usd_rate" value="1.10"' in page
     assert "Monatsbudget in €" in page and 'name="monthly_budget_eur" value="15"' in page
@@ -1181,11 +1274,11 @@ def test_switch_provider_with_the_settings_form(client, model_refreshes):
     login(client)
     client.post("/settings", data=valid_settings(model="claude-haiku-5-5"))
     r = save_provider(client, "deutschlandgpt")  # no model chosen in its panel: its default model
-    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=1"
+    assert r.status_code == 303 and r.headers["location"] == "/settings/ki?saved=1"
     stored = db.get_settings()
     assert stored["provider"] == "deutschlandgpt" and stored["model"] == "claude-sonnet-5.5"
     assert model_refreshes == []  # no DeutschlandGPT key yet: nothing to fetch
-    page = client.get("/settings").text
+    page = client.get("/settings/ki").text
     assert 'data-saved="deutschlandgpt"' in page and 'class="provider-panel is-active" data-provider-panel="deutschlandgpt"' in page
     assert "Noch kein DeutschlandGPT-API-Key hinterlegt" in provider_panel(page, "deutschlandgpt")
     assert "3,30 € / 16,50 €" in page
@@ -1235,20 +1328,20 @@ def test_model_select_is_live_list_intersected_with_prices(client):
     login(client)
     save_provider(client, "deutschlandgpt")
     cache_models("deutschlandgpt", ["claude-sonnet-5.5", "claude-haiku-5.5", "gpt-9-turbo", "claude-opus-4.5", "mistral-x"])
-    page = client.get("/settings").text
+    page = client.get("/settings/ki").text
     dgpt = provider_panel(page, "deutschlandgpt")
     assert model_options(page, "deutschlandgpt") == ["claude-sonnet-5.5", "claude-haiku-5.5"]
     assert "Modellliste von DeutschlandGPT geladen am" in dgpt and "nicht geprüft" not in dgpt
     assert "3 weitere Modelle verfügbar, aber nicht unterstützt (kein Preis hinterlegt)" in dgpt
     assert "gpt-9-turbo, claude-opus-4.5, mistral-x" in dgpt
     db.update_settings({"model": "claude-opus-4.8"})  # saved choice not in the live list: still selectable
-    assert model_options(client.get("/settings").text, "deutschlandgpt")[-1] == "claude-opus-4.8"
+    assert model_options(client.get("/settings/ki").text, "deutschlandgpt")[-1] == "claude-opus-4.8"
 
 
 def test_failed_model_list_shows_reason_and_all_priced_models(client):
     login(client)
     cache_models("anthropic", [], error="Anthropic-API-Key ungültig oder ohne Berechtigung.")
-    page = client.get("/settings").text
+    page = client.get("/settings/ki").text
     assert "Modellliste nicht geprüft: Anthropic-API-Key ungültig oder ohne Berechtigung." in provider_panel(page, "anthropic")
     assert model_options(page, "anthropic") == list(settings.PRICES["anthropic"])
 
@@ -1257,34 +1350,35 @@ def test_save_provider_key_needs_step_up_and_loads_models(client, notices, model
     login(client)  # Anthropic stays the saved provider: a panel's key form works for its own provider
     form = {"provider": "deutschlandgpt", "value": DGPT_KEY}
     r = client.post("/settings/provider-key", data={**form, "password": "wrong"})
-    assert r.status_code == 403 and "Dashboard-Passwort falsch" in r.text and 'id="ki"' in r.text
+    assert r.status_code == 403 and "Dashboard-Passwort falsch" in r.text and 'id="anbieter"' in r.text
     assert '<option value="deutschlandgpt" selected>' in r.text  # the error page shows that provider's panel
     assert vault.get("deutschlandgpt_api_key") is None and model_refreshes == []
     r = client.post("/settings/provider-key", data={**form, "value": "too short", "password": PASSWORD})
     assert r.status_code == 400 and "DeutschlandGPT-API-Key:" in r.text
     assert client.post("/settings/provider-key", data={**form, "provider": "openai", "password": PASSWORD}).status_code == 400
     r = client.post("/settings/provider-key", data={**form, "value": f"  {DGPT_KEY} ", "password": PASSWORD})
-    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=key&show=deutschlandgpt#ki"
+    assert r.status_code == 303 and r.headers["location"] == "/settings/ki?saved=key&show=deutschlandgpt"
     assert vault.get("deutschlandgpt_api_key") == DGPT_KEY and model_refreshes == ["deutschlandgpt"]
     assert db.get_settings()["provider"] == "anthropic"  # saving a key doesn't switch the provider
-    assert events() == [("deutschlandgpt_api_key", "set", "testclient")]  # same audit + notice as on /credentials
+    assert events() == [("deutschlandgpt_api_key", "set", "testclient")]  # same audit + notice as other credentials
     assert "DeutschlandGPT-API-Key – gespeichert" in notices[-1][0] and DGPT_KEY not in notices[-1][0]
-    page = client.get("/settings?saved=key&show=deutschlandgpt").text
+    page = client.get("/settings/ki?saved=key&show=deutschlandgpt").text
     assert "API-Key gespeichert." in page and '<option value="deutschlandgpt" selected>' in page
     assert 'class="provider-panel is-active" data-provider-panel="deutschlandgpt"' in page
     assert "Noch nicht gespeichert" in page and "data-provider-unsaved hidden" not in page  # select ≠ saved provider
     dgpt = provider_panel(page, "deutschlandgpt")
     assert "Key: <code>dgpt…WXYZ</code> · gesetzt am" in dgpt and "Noch kein DeutschlandGPT-API-Key" not in dgpt
-    assert '<option value="bogus"' not in client.get("/settings?show=bogus").text  # unknown: the saved provider
+    assert 'formaction="/credentials/clear/deutschlandgpt_api_key" formnovalidate' in dgpt  # a dashboard key can be removed
+    assert '<option value="bogus"' not in client.get("/settings/ki?show=bogus").text  # unknown: the saved provider
 
 
 def test_refresh_models_needs_login_but_no_step_up(client, model_refreshes):
     assert client.post("/settings/models/refresh", data={"provider": "anthropic"}).headers["location"] == "/login"
     login(client)
     r = client.post("/settings/models/refresh", data={"provider": "anthropic"})
-    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=models&show=anthropic#ki"
+    assert r.status_code == 303 and r.headers["location"] == "/settings/ki?saved=models&show=anthropic"
     r = client.post("/settings/models/refresh", data={"provider": "deutschlandgpt"})
-    assert r.headers["location"] == "/settings?saved=models&show=deutschlandgpt#ki"
+    assert r.headers["location"] == "/settings/ki?saved=models&show=deutschlandgpt"
     assert model_refreshes == ["anthropic", "deutschlandgpt"]
     assert client.post("/settings/models/refresh", data={"provider": "x"}).status_code == 400
     assert client.post("/settings/models/refresh", data={"provider": "anthropic"},
@@ -1295,10 +1389,11 @@ def test_no_key_warning_on_settings_and_status(client):
     login(client)
     vault.init(TEST_SECRETS["SESSION_SECRET"], {})
     assert "Kein Anthropic-API-Key hinterlegt – Entwürfe schlagen fehl." in client.get("/status").text
-    assert "Noch kein Anthropic-API-Key hinterlegt" in provider_panel(client.get("/settings").text, "anthropic")
+    assert "Noch kein Anthropic-API-Key hinterlegt" in provider_panel(client.get("/settings/ki").text, "anthropic")
+    assert "Unter Einstellungen → KI &amp; Kosten eintragen." in client.get("/status").text
     vault.set("anthropic_api_key", DASHBOARD_SECRETS["anthropic_api_key"])
     assert "Kein Anthropic-API-Key hinterlegt" not in client.get("/status").text
-    assert "Noch kein Anthropic-API-Key" not in client.get("/settings").text
+    assert "Noch kein Anthropic-API-Key" not in provider_panel(client.get("/settings/ki").text, "anthropic")
     db.update_settings({"provider": "deutschlandgpt"})
     status = client.get("/status").text
     assert "Kein DeutschlandGPT-API-Key hinterlegt" in status and "DeutschlandGPT · Claude Sonnet 5.5" in status
@@ -1309,16 +1404,16 @@ def test_key_hint_is_the_only_part_of_a_key_that_appears(client):
     vault.set("deutschlandgpt_api_key", DGPT_KEY)
     vault.set("anthropic_api_key", "sk-ant-api03-Hq8Zt5Rw2Nv7Kp4Xm9Jc6-A1B2")
     db.update_settings({"provider": "deutschlandgpt"})
-    pages = [client.get(p).text for p in ["/credentials", "/settings", "/status"]]
+    pages = [client.get(p).text for p in ["/settings/ki", "/settings/telegram", "/settings", "/status"]]
     for value in [DGPT_KEY, "sk-ant-api03-Hq8Zt5Rw2Nv7Kp4Xm9Jc6-A1B2"]:
         hint = vault.hint("deutschlandgpt_api_key" if value == DGPT_KEY else "anthropic_api_key", value)
-        assert all(hint in page for page in pages[:1])  # /credentials lists every key with its hint
+        assert hint in pages[0] and hint in pages[3]  # "KI & Kosten" (both panels) and the status page
         for page in pages:
             for i in range(len(value) - 5):  # no 6-character piece of the value outside the hint
                 chunk = value[i:i + 6]
                 if chunk not in hint:
                     assert chunk not in page, chunk
-    assert "Key: <code>dgpt…WXYZ</code>" in pages[1] and "Key: <code>dgpt…WXYZ</code>" in pages[2]
+    assert "Key: <code>dgpt…WXYZ</code>" in pages[0] and "Key: <code>dgpt…WXYZ</code>" in pages[3]
 
 
 def test_connection_test_for_deutschlandgpt(client, monkeypatch):
@@ -1332,8 +1427,9 @@ def test_connection_test_for_deutschlandgpt(client, monkeypatch):
     monkeypatch.setattr(llm, "check_api_key", check)
     r = client.post("/credentials/test/deutschlandgpt")
     assert seen == ["deutschlandgpt"] and "✗ DeutschlandGPT-Guthaben" in r.text
+    assert '<option value="deutschlandgpt" selected>' in r.text  # shown on "KI & Kosten" with that provider's panel
     assert events() == [("deutschlandgpt_api_key", "test_failed", "testclient")]
-    assert "DeutschlandGPT testen" in client.get("/credentials").text
+    assert "DeutschlandGPT testen" in client.get("/settings/ki").text
 
 
 def test_listing_shows_euro_costs_and_dollars_for_anthropic(client):
@@ -1464,7 +1560,7 @@ def test_public_url_remembered_from_trusted_requests(client):
     assert bot.dashboard_url(3) == "http://immobot.example.de/listing/3"
     client.get("/", headers={"host": "localhost:8000"})  # unusable for Telegram: kept the old one
     assert db.get_meta("public_base_url") == "http://immobot.example.de"
-    page = client.get("/settings").text
+    page = client.get("/settings/telegram").text
     assert "<code>http://immobot.example.de</code>" in page and "gemerkt aus deinen Dashboard-Aufrufen" in page
     assert "IMMOBOT_PUBLIC_URL" in page
 
@@ -1478,7 +1574,7 @@ def test_public_url_from_webhook(client):
 
 def test_settings_llm_max_images(client):
     login(client)
-    page = client.get("/settings").text
+    page = client.get("/settings/ki").text
     assert 'name="llm_max_images" min="0" max="20" step="1" value="10"' in page
     assert "Fotos für Claude pro Entwurf" in page and "Höchstens so viele Bilder" not in page
     assert ("Wie viele Inserat-Fotos Claude beim Schreiben mitbekommt – mehr Fotos = genauer, aber je Foto ca. 1.000 Tokens "

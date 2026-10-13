@@ -1,0 +1,9 @@
+{# Form helpers of the settings pages. Import "with context": field_error reads `errors`. #}
+{% macro field_error(key) %}{% if errors[key] %}<small class="error">{{ errors[key] }}</small>{% endif %}{% endmacro %}
+
+{# Whether a credential must be set: "required" -> Pflicht, "optional" -> optional, "unused" (key of the
+   provider that isn't selected) -> nothing. #}
+{% macro need_tag(need) -%}
+{% if need == "required" %}<span class="need">Pflicht</span>
+{%- elif need == "optional" %}<span class="need optional">optional</span>{% endif %}
+{%- endmacro %}

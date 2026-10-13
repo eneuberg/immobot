@@ -1,4 +1,4 @@
-"""Credential store for the API key and tokens that are managed on the dashboard page "Zugänge".
+"""Credential store for the API keys and tokens managed under "Einstellungen" (KI & Kosten, Telegram & Fredy).
 
 - Values are encrypted with AES-256-GCM before they go into the `credentials` table. The key is derived
   from SESSION_SECRET (HKDF-SHA256), so a copy of the database alone reveals nothing. The credential

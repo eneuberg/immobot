@@ -18,12 +18,13 @@
 <span class="badge dot st-{{ status }}">{{ STATUSES.get(status, status) }}</span>
 {%- endmacro %}
 
-{# Where a credential comes from, as a short badge. Never the value. #}
-{% macro cred_badge(c) -%}
+{# Where a credential comes from, as a short badge. Never the value. An unset optional one isn't "missing". #}
+{% macro cred_badge(c, need="required") -%}
 {% if c.undecryptable %}<span class="badge err">⚠ nicht lesbar</span>
 {%- elif c.source == "dashboard" %}<span class="badge ok dot">gesetzt</span>
 {%- elif c.source == "env" %}<span class="badge info dot">Env-Variable</span>
-{%- else %}<span class="badge err dot">fehlt</span>{% endif %}
+{%- elif need == "required" %}<span class="badge err dot">fehlt</span>
+{%- else %}<span class="badge dot">nicht gesetzt</span>{% endif %}
 {%- endmacro %}
 
 {# Model/provider, tokens and cost of a draft (view from web._draft_view) as subtle chips. #}
@@ -76,7 +77,7 @@
 {% elif name == "telegram_chat_id" %}
 <details class="howto"><summary>So bekommst du die Chat-ID</summary>
   <ol>
-    <li>Am einfachsten: „Chat per Code verbinden“ (unter „Ändern“) – der Bot trägt Chat-ID und deine User-ID selbst ein.</li>
+    <li>Am einfachsten: „Chat per Code verbinden“ (unter „Ändern“ bzw. „Eintragen“) – der Bot trägt Chat-ID und deine User-ID selbst ein.</li>
     <li>Manuell: dieselbe ID wie in Fredys Telegram-Adapter. Gruppen-IDs sind negativ (z. B. <code>-100…</code>).</li>
   </ol>
 </details>

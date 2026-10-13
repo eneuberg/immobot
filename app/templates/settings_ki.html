@@ -1,0 +1,147 @@
+{# Einstellungen → KI & Kosten: provider (with its API key), model, budget, and what Claude sees of a listing. #}
+{% extends "settings_base.html" %}
+{% from "macros.html" import key_line, howto %}
+{% from "settings_macros.html" import field_error with context %}
+
+{% block intro %}Wer die Entwürfe schreibt, was das kosten darf und was Claude vom Inserat sieht.{% endblock %}
+
+{% block section %}
+<article id="anbieter" class="setting-card">
+  <h2>Anbieter &amp; Modell</h2>
+  <p class="help">Beide Anbieter nutzen Claude-Modelle; abgerechnet wird beim jeweiligen Anbieter.
+    Nötig ist nur der API-Key des gewählten Anbieters.</p>
+
+  {# Provider, model and effort are saved with the form below (form="ki-form"). app.js shows only the panel of
+     the provider chosen here; without JS all panels stay visible. #}
+  <label for="provider">Anbieter</label>
+  <select id="provider" name="provider" form="ki-form" data-provider-select data-saved="{{ saved_provider }}">
+    {% for p in panels %}
+    <option value="{{ p.provider }}" {% if p.provider == shown_provider %}selected{% endif %}>{{ p.label }}</option>
+    {% endfor %}
+  </select>
+  <p class="help" data-provider-unsaved {% if shown_provider == saved_provider %}hidden{% endif %}>
+    Noch nicht gespeichert – unten mit „Speichern“ übernehmen.</p>
+
+  {% for p in panels %}
+  <section class="provider-panel{% if p.provider == shown_provider %} is-active{% endif %}" data-provider-panel="{{ p.provider }}"
+    aria-label="{{ p.label }}">
+    <h3>{{ p.label }} <small class="muted">· Preise und Abrechnung in {{ p.sign }}</small></h3>
+    {% if p.no_key_warning %}
+    <div class="flash warn" role="alert">Noch kein {{ p.label }}-API-Key hinterlegt – ohne Key schlagen Entwürfe mit {{ p.label }} fehl. Unten eintragen.</div>
+    {% endif %}
+    <p class="key-status"><strong>{{ p.label }}-API-Key</strong> <span class="need">Pflicht</span> <span>{{ key_line(p.key) }}</span></p>
+    <details class="disclosure" {% if not p.key.source %}open{% endif %}>
+      <summary>{{ "Key ersetzen oder entfernen" if p.key.source == "dashboard" or p.key.undecryptable else ("Key ersetzen" if p.key.source else "Key eintragen") }}</summary>
+      <div class="disclosure-body">
+        <form method="post" action="/settings/provider-key">
+          <input type="hidden" name="provider" value="{{ p.provider }}">
+          <div class="form-grid">
+            <label>{{ "Neuer" if p.key.source else "" }} {{ p.label }}-API-Key
+              {# type=text + CSS mask: the step-up field must stay the only password field (see settings_telegram.html). #}
+              <input type="text" name="value" class="masked" autocomplete="off" spellcheck="false" autocapitalize="off"
+                maxlength="500" data-1p-ignore data-lpignore="true" required>
+            </label>
+            <label>Dashboard-Passwort
+              <input type="password" name="password" autocomplete="current-password" required>
+            </label>
+          </div>
+          <p class="step-up">Zur Sicherheit bestätigst du jede Key-Änderung mit deinem Dashboard-Passwort (dasselbe wie beim Login).</p>
+          <div class="actions">
+            <button type="submit">Key speichern &amp; Modelle laden</button>
+            {% if p.key.source == "dashboard" or p.key.undecryptable %}
+            <button type="submit" formaction="/credentials/clear/{{ p.key.name }}" formnovalidate class="secondary outline"
+              data-confirm="„{{ p.key.label }}“ entfernen?{% if p.key.source == 'dashboard' %} Eine Env-Variable gilt dann wieder, falls gesetzt.{% endif %}">Entfernen</button>
+            {% endif %}
+          </div>
+        </form>
+        {{ howto(p.key.name) }}
+      </div>
+    </details>
+
+    <label>Modell <small>Preise in {{ p.sign }} pro 1 Mio. Tokens (Eingabe / Ausgabe)</small>
+      <select name="model_{{ p.provider }}" form="ki-form"
+        {% if errors.model and p.provider == shown_provider %}aria-invalid="true"{% endif %}>
+        {% for key, label in p.model_options %}
+        <option value="{{ key }}" {% if key == p.current_model %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      {% if p.provider == shown_provider %}{{ field_error("model") }}{% endif %}
+    </label>
+    <p class="help">
+      {% if p.models_checked %}Modellliste von {{ p.label }} geladen am {{ p.models_fetched_at|local_time }}.
+      {% else %}Modellliste nicht geprüft{% if p.models_error %}: {{ p.models_error }}{% endif %} – angezeigt werden alle Modelle mit hinterlegtem Preis.
+      {% endif %}
+    </p>
+    {% if p.unsupported_models %}
+    <details>
+      <summary><small>{{ p.unsupported_models|length }} weitere Modelle verfügbar, aber nicht unterstützt (kein Preis hinterlegt)</small></summary>
+      <p><small class="muted">{{ p.unsupported_models|join(", ") }}</small></p>
+    </details>
+    {% endif %}
+    <div class="actions">
+      <button type="submit" form="refresh-models-{{ p.provider }}" class="secondary outline btn-sm">Modelle neu laden</button>
+      <button type="submit" form="test-{{ p.provider }}" class="secondary outline btn-sm">{{ p.label }} testen</button>
+    </div>
+  </section>
+  {% endfor %}
+
+  <label>Denkaufwand (Effort) <small>höher = gründlicher, aber langsamer und teurer</small>
+    <select name="effort" form="ki-form" {% if errors.effort %}aria-invalid="true"{% endif %}>
+      {% for key, label in effort_options %}
+      <option value="{{ key }}" {% if values.effort == key %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    {{ field_error("effort") }}
+  </label>
+</article>
+
+<form id="ki-form" method="post" action="/settings">
+  <input type="hidden" name="section" value="ki">
+  <article id="kosten" class="setting-card">
+    <h2>Kosten</h2>
+    <div class="form-grid">
+      <label>Monatsbudget in € <small>0 = kein Limit; ist es erreicht, entstehen keine neuen Entwürfe mehr</small>
+        <input type="text" inputmode="decimal" name="monthly_budget_eur" value="{{ values.monthly_budget_eur }}"
+          {% if errors.monthly_budget_eur %}aria-invalid="true"{% endif %}>
+        {{ field_error("monthly_budget_eur") }}
+      </label>
+      <label>Wechselkurs: 1 € = x $ <small>rechnet in Dollar abgerechnete Kosten (Anthropic) in Euro um, z. B. 1,10</small>
+        <input type="text" inputmode="decimal" name="eur_usd_rate" value="{{ values.eur_usd_rate }}"
+          {% if errors.eur_usd_rate %}aria-invalid="true"{% endif %}>
+        {{ field_error("eur_usd_rate") }}
+      </label>
+    </div>
+  </article>
+
+  <article id="fotos" class="setting-card">
+    <h2>Fotos &amp; Exposé</h2>
+    <p class="help">Was Claude vom Inserat zu sehen bekommt.</p>
+    <label class="check">
+      <input type="checkbox" role="switch" name="send_image" value="1" {% if values.send_image|as_bool %}checked{% endif %}>
+      <span>Fotos des Inserats an Claude mitschicken <small>Claude sieht dann die Fotos und kann darauf eingehen (kostet Tokens, siehe unten).</small></span>
+    </label>
+    <label>Fotos für Claude pro Entwurf <small>Wie viele Inserat-Fotos Claude beim Schreiben mitbekommt – mehr Fotos = genauer, aber je Foto ca. 1.000 Tokens (≈ 0,1–4 ct je nach Modell). Das Telegram-Album zeigt unabhängig davon bis zu 10 Fotos (Telegram-Limit).</small>
+      <input type="number" name="llm_max_images" min="0" max="20" step="1" value="{{ values.llm_max_images }}"
+        {% if errors.llm_max_images %}aria-invalid="true"{% endif %}>
+      {{ field_error("llm_max_images") }}
+    </label>
+    <label class="check">
+      <input type="checkbox" role="switch" name="is24_fetch" value="1" {% if values.is24_fetch|as_bool %}checked{% endif %}>
+      <span>Bilder &amp; Details selbst von ImmoScout24 laden <small>Wenn Fredy keine Bilder mitschickt, holt immobot bei ImmoScout24-Inseraten das Exposé selbst (1 Abruf pro Inserat, nur bei Bedarf). Schickt Fredy die Bilder mit (Fredy-PR #489 bzw. gepatchtes Fredy), wird nichts zusätzlich abgerufen.</small></span>
+    </label>
+  </article>
+
+  <div class="savebar">
+    <small>Gilt für alle neuen Entwürfe.</small>
+    <button type="submit">Speichern</button>
+  </div>
+</form>
+
+{# Helper forms outside the main form; the buttons in the panels point here via form="…". #}
+{% for p in panels %}
+<form id="refresh-models-{{ p.provider }}" method="post" action="/settings/models/refresh">
+  <input type="hidden" name="provider" value="{{ p.provider }}">
+</form>
+<form id="test-{{ p.provider }}" method="post" action="/credentials/test/{{ p.provider }}" data-once></form>
+{% endfor %}
+{% endblock %}

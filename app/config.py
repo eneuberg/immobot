@@ -1,7 +1,7 @@
 """Runtime configuration from environment variables.
 
 Only DASHBOARD_PASSWORD and SESSION_SECRET are required. The API key, bot token, chat id, allowed
-Telegram user ids and webhook token are normally entered in the dashboard ("Zugänge", see vault.py);
+Telegram user ids and webhook token are normally entered in the dashboard (Einstellungen, see vault.py);
 the env variables of the same name still work as a fallback (that is how older deployments were set up).
 
 Secrets are never written to the database in plain text, never rendered in templates and never

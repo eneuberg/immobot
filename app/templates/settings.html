@@ -1,8 +1,7 @@
-{% extends "base.html" %}
-{% from "macros.html" import key_line, flashes, draft_meta, howto %}
-{% block title %}Einstellungen{% endblock %}
-
-{% macro field_error(key) %}{% if errors[key] %}<small class="error">{{ errors[key] }}</small>{% endif %}{% endmacro %}
+{# Einstellungen → Anschreiben: what the drafts say about you and how they sound. Nothing technical here. #}
+{% extends "settings_base.html" %}
+{% from "macros.html" import draft_meta %}
+{% from "settings_macros.html" import field_error with context %}
 
 {% macro reset_button(key, label) -%}
 <button type="submit" form="reset-{{ key }}" class="linkish"
@@ -21,15 +20,9 @@
 {{ field_error(key) }}
 {% endmacro %}
 
-{% block content %}
-<div class="page-head">
-  <div>
-    <h1>Einstellungen</h1>
-    <p>Wer die Anschreiben schreibt, was über dich drinsteht und wie sie klingen.</p>
-  </div>
-</div>
-{{ flashes(message, error) }}
+{% block intro %}Was über dich in den Anschreiben steht und wie sie klingen.{% endblock %}
 
+{% block section %}
 {% if test %}
 <article id="test" class="draft-card draft-new">
   <header>
@@ -42,101 +35,8 @@
 </article>
 {% endif %}
 
-<nav class="settings-nav" aria-label="Abschnitte">
-  <a href="#ki">KI-Anbieter</a><a href="#profil">Über mich</a><a href="#wuensche">Wünsche</a><a href="#stil">Schreibstil</a>
-  <a href="#verhalten">Budget &amp; Verhalten</a><a href="#prompt">System-Prompt</a><a href="#testen">Testen</a>
-</nav>
-
-<article id="ki" class="setting-card">
-  <h2>KI-Anbieter &amp; Modell</h2>
-  <p class="help">Wer die Entwürfe schreibt. Beide Anbieter nutzen Claude-Modelle; abgerechnet wird beim jeweiligen Anbieter.</p>
-
-  {# Provider and model are saved with the settings form below (form="settings-form"). app.js shows only the
-     panel of the provider chosen here; without JS all panels stay visible. #}
-  <label for="provider">Anbieter</label>
-  <select id="provider" name="provider" form="settings-form" data-provider-select data-saved="{{ saved_provider }}">
-    {% for p in panels %}
-    <option value="{{ p.provider }}" {% if p.provider == shown_provider %}selected{% endif %}>{{ p.label }}</option>
-    {% endfor %}
-  </select>
-  <p class="help" data-provider-unsaved {% if shown_provider == saved_provider %}hidden{% endif %}>
-    Noch nicht gespeichert – mit „Anbieter &amp; Modell speichern“ übernehmen.</p>
-
-  {% for p in panels %}
-  <section class="provider-panel{% if p.provider == shown_provider %} is-active{% endif %}" data-provider-panel="{{ p.provider }}"
-    aria-label="{{ p.label }}">
-    <h3>{{ p.label }} <small class="muted">· Preise und Abrechnung in {{ p.sign }}</small></h3>
-    {% if p.no_key_warning %}
-    <div class="flash warn" role="alert">Noch kein {{ p.label }}-API-Key hinterlegt – ohne Key schlagen Entwürfe mit {{ p.label }} fehl. Unten eintragen.</div>
-    {% endif %}
-    <p class="key-status"><strong>{{ p.label }}-API-Key:</strong> <span>{{ key_line(p.key) }}</span></p>
-    <details class="disclosure" {% if not p.key.source %}open{% endif %}>
-      <summary>{{ "Key ersetzen" if p.key.source else "Key eintragen" }}</summary>
-      <div class="disclosure-body">
-        <form method="post" action="/settings/provider-key">
-          <input type="hidden" name="provider" value="{{ p.provider }}">
-          <div class="form-grid">
-            <label>{{ "Neuer" if p.key.source else "" }} {{ p.label }}-API-Key
-              {# type=text + CSS mask: the step-up field must stay the only password field (see credentials.html). #}
-              <input type="text" name="value" class="masked" autocomplete="off" spellcheck="false" autocapitalize="off"
-                maxlength="500" data-1p-ignore data-lpignore="true" required>
-            </label>
-            <label>Dashboard-Passwort
-              <input type="password" name="password" autocomplete="current-password" required>
-            </label>
-          </div>
-          <p class="step-up">Zur Sicherheit bestätigst du jede Key-Änderung mit deinem Dashboard-Passwort (dasselbe wie beim Login).</p>
-          <button type="submit">Key speichern &amp; Modelle laden</button>
-        </form>
-        {{ howto(p.key.name) }}
-      </div>
-    </details>
-
-    <label>Modell <small>Preise in {{ p.sign }} pro 1 Mio. Tokens (Eingabe / Ausgabe)</small>
-      <select name="model_{{ p.provider }}" form="settings-form"
-        {% if errors.model and p.provider == shown_provider %}aria-invalid="true"{% endif %}>
-        {% for key, label in p.model_options %}
-        <option value="{{ key }}" {% if key == p.current_model %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-      {% if p.provider == shown_provider %}{{ field_error("model") }}{% endif %}
-    </label>
-    <p class="help">
-      {% if p.models_checked %}Modellliste von {{ p.label }} geladen am {{ p.models_fetched_at|local_time }}.
-      {% else %}Modellliste nicht geprüft{% if p.models_error %}: {{ p.models_error }}{% endif %} – angezeigt werden alle Modelle mit hinterlegtem Preis.
-      {% endif %}
-    </p>
-    {% if p.unsupported_models %}
-    <details>
-      <summary><small>{{ p.unsupported_models|length }} weitere Modelle verfügbar, aber nicht unterstützt (kein Preis hinterlegt)</small></summary>
-      <p><small class="muted">{{ p.unsupported_models|join(", ") }}</small></p>
-    </details>
-    {% endif %}
-    <div class="actions">
-      <button type="submit" form="refresh-models-{{ p.provider }}" class="secondary outline btn-sm">Modelle neu laden</button>
-    </div>
-  </section>
-  {% endfor %}
-
-  <label>Denkaufwand (Effort) <small>höher = gründlicher, aber langsamer und teurer</small>
-    <select name="effort" form="settings-form" {% if errors.effort %}aria-invalid="true"{% endif %}>
-      {% for key, label in effort_options %}
-      <option value="{{ key }}" {% if values.effort == key %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-    {{ field_error("effort") }}
-  </label>
-  <div class="actions">
-    <button type="submit" form="settings-form">Anbieter &amp; Modell speichern</button>
-  </div>
-</article>
-{% for p in panels %}
-<form id="refresh-models-{{ p.provider }}" method="post" action="/settings/models/refresh">
-  <input type="hidden" name="provider" value="{{ p.provider }}">
-</form>
-{% endfor %}
-
 <form id="settings-form" method="post" action="/settings">
+  <input type="hidden" name="section" value="texte">
   <article id="profil" class="setting-card">
     {{ textarea("profile", "Über mich", "Dein Steckbrief für die Anschreiben: Person, Job/Einkommen, Haushalt, Haustiere/Raucher, Einzug, Umzugsgrund, Unterlagen, Kontakt/Signatur. Was hier nicht steht, wird auch nicht behauptet.", 14) }}
   </article>
@@ -152,55 +52,6 @@
         {% if errors.target_words %}aria-invalid="true"{% endif %}>
       {{ field_error("target_words") }}
     </label>
-  </article>
-
-  <article id="verhalten" class="setting-card">
-    <h2>Budget &amp; Verhalten</h2>
-    <p class="help">Kostenbremse, wie viele Fotos Claude sieht, und wie sich der Telegram-Bot verhält.</p>
-    <h3>Kosten</h3>
-    <div class="form-grid">
-      <label>Monatsbudget in € <small>0 = kein Limit; ist es erreicht, entstehen keine neuen Entwürfe mehr</small>
-        <input type="text" inputmode="decimal" name="monthly_budget_eur" value="{{ values.monthly_budget_eur }}"
-          {% if errors.monthly_budget_eur %}aria-invalid="true"{% endif %}>
-        {{ field_error("monthly_budget_eur") }}
-      </label>
-      <label>Wechselkurs: 1 € = x $ <small>rechnet in Dollar abgerechnete Kosten (Anthropic) in Euro um, z. B. 1,10</small>
-        <input type="text" inputmode="decimal" name="eur_usd_rate" value="{{ values.eur_usd_rate }}"
-          {% if errors.eur_usd_rate %}aria-invalid="true"{% endif %}>
-        {{ field_error("eur_usd_rate") }}
-      </label>
-    </div>
-    <label class="check">
-      <input type="checkbox" role="switch" name="send_image" value="1" {% if values.send_image|as_bool %}checked{% endif %}>
-      <span>Fotos des Inserats an Claude mitschicken <small>Claude sieht dann die Fotos und kann darauf eingehen (kostet Tokens, siehe unten).</small></span>
-    </label>
-    <label>Fotos für Claude pro Entwurf <small>Wie viele Inserat-Fotos Claude beim Schreiben mitbekommt – mehr Fotos = genauer, aber je Foto ca. 1.000 Tokens (≈ 0,1–4 ct je nach Modell). Das Telegram-Album zeigt unabhängig davon bis zu 10 Fotos (Telegram-Limit).</small>
-      <input type="number" name="llm_max_images" min="0" max="20" step="1" value="{{ values.llm_max_images }}"
-        {% if errors.llm_max_images %}aria-invalid="true"{% endif %}>
-      {{ field_error("llm_max_images") }}
-    </label>
-    <label class="check">
-      <input type="checkbox" role="switch" name="is24_fetch" value="1" {% if values.is24_fetch|as_bool %}checked{% endif %}>
-      <span>Bilder &amp; Details selbst von ImmoScout24 laden <small>Wenn Fredy keine Bilder mitschickt, holt immobot bei ImmoScout24-Inseraten das Exposé selbst (1 Abruf pro Inserat, nur bei Bedarf). Schickt Fredy die Bilder mit (Fredy-PR #489 bzw. gepatchtes Fredy), wird nichts zusätzlich abgerufen.</small></span>
-    </label>
-
-    <h3>Telegram</h3>
-    <label>Verzögerung nach Fredys Nachricht <small>in Sekunden, 0–60 – damit die Buttons direkt unter Fredys Inserat erscheinen</small>
-      <input type="number" name="followup_delay_s" min="0" max="60" step="1" value="{{ values.followup_delay_s }}"
-        {% if errors.followup_delay_s %}aria-invalid="true"{% endif %}>
-      {{ field_error("followup_delay_s") }}
-    </label>
-    <label class="check">
-      <input type="checkbox" role="switch" name="paused" value="1" {% if values.paused|as_bool %}checked{% endif %}>
-      <span>Pause <small>Der Bot meldet sich nicht zu neuen Inseraten.</small></span>
-    </label>
-    <div class="callout {{ 'info' if public_url[0] else 'warn' }}">
-      <span><strong>Adresse für die „🔗 Dashboard“-Links:</strong>
-        {% if public_url[0] %}<code>{{ public_url[0] }}</code>
-          ({{ "aus IMMOBOT_PUBLIC_URL" if public_url[1] == "env" else "gemerkt aus deinen Dashboard-Aufrufen" }})
-        {% else %}noch unbekannt – wird beim nächsten Dashboard-Aufruf über die öffentliche Domain gemerkt{% endif %}.
-        Fest einstellen mit der Env-Variable <code>IMMOBOT_PUBLIC_URL</code> (z. B. <code>https://immobot.example.de</code>).</span>
-    </div>
   </article>
 
   <article id="prompt" class="setting-card">

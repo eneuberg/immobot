@@ -481,11 +481,32 @@ pre.draft {
 .lightbox .lb-count { position: absolute; top: 1.3rem; left: 1rem; font-size: .85rem; color: rgba(255, 255, 255, .8); }
 
 /* ---------- settings ---------- */
-.settings-nav { justify-content: flex-start; display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: none; margin: 0 calc(var(--pico-spacing) * -1) 1rem; padding: 0 var(--pico-spacing) .2rem; }
-.settings-nav::-webkit-scrollbar { display: none; }
-.settings-nav a { flex: none; font-size: .84rem; padding: .3rem .7rem; border-radius: 999px; background: var(--surface-2); color: var(--text); text-decoration: none; white-space: nowrap; }
-.settings-nav a:hover { background: var(--accent-soft); color: var(--accent-strong); }
-@media (min-width: 768px) { .settings-nav { flex-wrap: wrap; margin-left: 0; margin-right: 0; padding-left: 0; padding-right: 0; } }
+/* Sub-pages (Anschreiben · KI & Kosten · Telegram & Fredy) as a segmented control; a red dot = something required is missing. */
+.subnav {
+  display: flex; gap: .1rem; padding: .2rem; margin: 0 0 1.25rem; border-radius: 999px; background: var(--surface-2);
+  border: 1px solid var(--pico-muted-border-color); overflow-x: auto; scrollbar-width: none;
+}
+.subnav::-webkit-scrollbar { display: none; }
+.subnav a {
+  flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; gap: .25rem; white-space: nowrap;
+  text-decoration: none; padding: .42rem .35rem; border-radius: 999px; font-size: .8rem; font-weight: 500; color: var(--pico-muted-color);
+}
+.subnav a:hover { color: var(--text); }
+.subnav a[aria-current="page"] { background: var(--pico-card-background-color); color: var(--accent-strong); font-weight: 600; box-shadow: var(--pico-card-box-shadow); }
+.alert-dot { flex: none; width: .45rem; height: .45rem; border-radius: 50%; background: var(--err); }
+@media (max-width: 349px) { .subnav a { font-size: .72rem; padding: .4rem .25rem; } }
+@media (min-width: 400px) { .subnav a { font-size: .86rem; padding: .42rem .6rem; gap: .35rem; } }
+@media (min-width: 768px) { .subnav { display: inline-flex; gap: .2rem; padding: .25rem; } .subnav a { flex: 0 0 auto; padding: .42rem 1rem; font-size: .9rem; } }
+/* "Pflicht" / "optional" next to a credential's name. */
+.need {
+  display: inline-block; font-size: .68rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; line-height: 1.5;
+  padding: 0 .45rem; border-radius: 999px; color: var(--pico-muted-color); border: 1px solid var(--pico-muted-border-color);
+}
+.need.optional { border-style: dashed; }
+.cred-title { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .3rem .55rem; }
+.lead-note { font-size: .88rem; color: var(--pico-muted-color); margin: 0 0 .5rem; }
+details.notes-box { margin: 1.5rem 0 0; }
+details.notes-box .notes { margin: 0; font-size: .9rem; }
 .setting-card h2 { display: flex; align-items: center; gap: .5rem; }
 .setting-card h2 label { font-size: inherit; font-weight: inherit; margin: 0; cursor: pointer; }
 .field-head { display: flex; align-items: baseline; justify-content: space-between; gap: .25rem 1rem; }

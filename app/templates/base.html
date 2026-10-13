@@ -25,7 +25,6 @@
       <nav class="tabs" aria-label="Hauptmenü">
         <a href="/" {% if active == "listings" %}aria-current="page"{% endif %}>Inserate</a>
         <a href="/settings" {% if active == "settings" %}aria-current="page"{% endif %}>Einstellungen</a>
-        <a href="/credentials" {% if active == "credentials" %}aria-current="page"{% endif %}>Zugänge</a>
         <a href="/status" {% if active == "status" %}aria-current="page"{% endif %}>Status</a>
       </nav>
       <form class="logout" method="post" action="/logout"><button type="submit" title="Abmelden (beendet alle Sitzungen)">Abmelden</button></form>

@@ -2,7 +2,7 @@
 
 Security model (see PLAN.md section 3):
 - Every page needs a logged-in session, except /healthz, /login and /hook/fredy (Bearer token).
-- Secret values are never passed to templates: /credentials and /status only show whether and where a
+- Secret values are never passed to templates: the settings pages and /status only show whether and where a
   credential is set (the one exception is a freshly generated webhook token, shown once on the response
   that created it). Error texts shown on a page additionally go through redact().
 - Changing a credential needs the dashboard password again (step-up); wrong passwords count toward the
@@ -56,6 +56,21 @@ TEXT_SETTINGS = ["system_prompt", "profile", "wishes", "style"]  # textareas, ea
 CHECKBOX_SETTINGS = ["send_image", "paused", "is24_fetch"]
 TEXT_SETTING_LABELS = {"system_prompt": "System-Prompt", "profile": "Über mich", "wishes": "Wünsche", "style": "Schreibstil"}
 MAX_TEXT_CHARS = 20_000
+
+# "Einstellungen" has three sub-pages. Each form posts its section, so it saves only its own checkboxes.
+SETTINGS_SECTIONS = {
+    "texte": {"path": "/settings", "label": "Anschreiben", "template": "settings.html"},
+    "ki": {"path": "/settings/ki", "label": "KI & Kosten", "template": "settings_ki.html"},
+    "telegram": {"path": "/settings/telegram", "label": "Telegram & Fredy", "template": "settings_telegram.html"},
+}
+SECTION_FIELDS = {
+    "texte": [*TEXT_SETTINGS, "target_words"],
+    "ki": ["provider", "model", "effort", "monthly_budget_eur", "eur_usd_rate", "send_image", "llm_max_images", "is24_fetch"],
+    "telegram": ["followup_delay_s", "paused"],
+}
+FIELD_SECTION = {field: section for section, fields in SECTION_FIELDS.items() for field in fields}
+AI_CREDENTIALS = {info["credential"]: provider for provider, info in settings.PROVIDERS.items()}  # managed on "KI & Kosten"
+OPTIONAL_CREDENTIALS = {"telegram_allowed_user_ids"}
 
 GENERIC_DRAFT_ERROR = "Unerwarteter Fehler beim Generieren – Details im Log."
 
@@ -205,7 +220,7 @@ PAGE = [Depends(require_login)]
 ACTION = [Depends(same_origin), Depends(require_login)]
 
 
-# --- password checks (login form and step-up on /credentials share one per-IP limit) ----
+# --- password checks (login form and step-up for credential changes share one per-IP limit) ----
 
 def _client_ip(request: Request) -> str:
     # The proxy sets X-Forwarded-For and uvicorn trusts only private proxy addresses (Dockerfile),
@@ -544,10 +559,12 @@ async def listing_create_draft(request: Request, listing_id: int):
 
 # --- settings -------------------------------------------------------------------
 
-def validate_settings(form: dict[str, str], current: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
+def validate_settings(form: dict[str, str], current: dict[str, str],
+                      section: str | None = None) -> tuple[dict[str, str], dict[str, str]]:
     """Form fields -> (values to store, German error messages per field). Unknown keys are ignored.
 
-    Fields missing from the form keep their stored value (`current`); absent checkboxes mean "off" ("0").
+    Fields missing from the form keep their stored value (`current`); absent checkboxes mean "off" ("0") -
+    only those of `section` (the sub-page the form belongs to), or all of them without a section.
     """
     values: dict[str, str] = {}
     errors: dict[str, str] = {}
@@ -616,7 +633,8 @@ def validate_settings(form: dict[str, str], current: dict[str, str]) -> tuple[di
             values["eur_usd_rate"] = f"{rate:.10g}"
 
     for key in CHECKBOX_SETTINGS:
-        values[key] = "1" if form.get(key) else "0"
+        if section is None or key in SECTION_FIELDS[section]:
+            values[key] = "1" if form.get(key) else "0"
     return values, errors
 
 
@@ -632,7 +650,7 @@ def _ai_status(current: dict) -> dict:
         "model_label": settings.model_label(provider, settings.model_of(current)),
         "key": key,
         "no_key_warning": (f"Kein {info['label']}-API-Key hinterlegt – Entwürfe schlagen fehl. "
-                           "Unter Einstellungen → KI-Anbieter eintragen.") if key["source"] is None else None,
+                           "Unter Einstellungen → KI & Kosten eintragen.") if key["source"] is None else None,
     }
 
 
@@ -663,8 +681,8 @@ def _model_choices(request: Request, provider: str, model: str) -> dict:
 
 
 def _provider_panels(request: Request, current: dict) -> list[dict]:
-    """Everything /settings shows per provider (key status + hint, models, warning). Both panels are rendered;
-    app.js shows the one chosen in the select (without JS both stay visible)."""
+    """Everything "KI & Kosten" shows per provider (key status + hint, models, warning). Both panels are
+    rendered; app.js shows the one chosen in the select (without JS both stay visible)."""
     saved_provider, saved_model = settings.provider_of(current), settings.model_of(current)
     panels = []
     for provider, info in settings.PROVIDERS.items():
@@ -674,24 +692,53 @@ def _provider_panels(request: Request, current: dict) -> list[dict]:
     return panels
 
 
-def _render_settings(request: Request, values: dict, *, errors=None, message=None, error=None, test=None,
-                     show: str | None = None, status_code=200):
-    """`show`: provider to preselect in the select (e.g. after saving its key); the saved one otherwise."""
+def _credential_need(name: str, provider: str) -> str:
+    """"required", "optional", or "unused" for the API key of the provider that isn't selected."""
+    if name in OPTIONAL_CREDENTIALS:
+        return "optional"
+    if name in AI_CREDENTIALS and AI_CREDENTIALS[name] != provider:
+        return "unused"
+    return "required"
+
+
+def _settings_alerts(current: dict) -> dict[str, bool]:
+    """Per sub-page: is a required credential missing or unreadable? Marked with a dot in the sub-navigation."""
+    provider = settings.provider_of(current)
+    alerts = {section: False for section in SETTINGS_SECTIONS}
+    for c in vault.status():
+        if c["undecryptable"] or (c["source"] is None and _credential_need(c["name"], provider) == "required"):
+            alerts["ki" if c["name"] in AI_CREDENTIALS else "telegram"] = True
+    return alerts
+
+
+def _render_section(request: Request, section: str, *, values: dict | None = None, errors=None, message=None,
+                    error=None, show: str | None = None, status_code=200, **extra):
+    """One of the three "Einstellungen" pages. `values`: what its form shows (the stored settings, or the
+    user's input after a validation error). `show`: provider to preselect on "KI & Kosten" (e.g. after
+    saving its key); the saved one otherwise. Never gets a secret value."""
     current = db.get_settings()
-    saved_provider = settings.provider_of(current)
-    return render(request, "settings.html", {
+    context = {
         "active": "settings",
-        "values": values,
+        "section": section,
+        "sections": SETTINGS_SECTIONS,
+        "alerts": _settings_alerts(current),
+        "values": values or current,
         "errors": errors or {},
         "message": message,
         "error": error,
-        "test": test,
-        "panels": _provider_panels(request, current),
-        "saved_provider": saved_provider,
-        "shown_provider": show if show in settings.PROVIDERS else saved_provider,
-        "public_url": bot.public_url_info(),
-        "effort_options": [(e, EFFORT_LABELS.get(e, e)) for e in settings.EFFORTS],
-    }, status_code=status_code)
+        **extra,
+    }
+    if section == "ki":
+        saved_provider = settings.provider_of(current)
+        context.update(
+            panels=_provider_panels(request, current),
+            saved_provider=saved_provider,
+            shown_provider=show if show in settings.PROVIDERS else saved_provider,
+            effort_options=[(e, EFFORT_LABELS.get(e, e)) for e in settings.EFFORTS],
+        )
+    elif section == "telegram":
+        context.update(_telegram_context(request, current))
+    return render(request, SETTINGS_SECTIONS[section]["template"], context, status_code=status_code)
 
 
 SETTINGS_MESSAGES = {
@@ -702,13 +749,25 @@ SETTINGS_MESSAGES = {
 
 
 @router.get("/settings", dependencies=PAGE)
-def settings_page(request: Request, saved: str | None = None, reset: str | None = None, show: str | None = None):
+def settings_page(request: Request, saved: str | None = None, reset: str | None = None):
     message = None
     if saved:
-        message = SETTINGS_MESSAGES.get(saved, SETTINGS_MESSAGES["saved"])
+        message = SETTINGS_MESSAGES["saved"]
     elif reset in TEXT_SETTING_LABELS:
         message = f"„{TEXT_SETTING_LABELS[reset]}“ auf Standard zurückgesetzt."
-    return _render_settings(request, db.get_settings(), message=message, show=show)
+    return _render_section(request, "texte", message=message)
+
+
+@router.get("/settings/ki", dependencies=PAGE)
+def settings_ki_page(request: Request, saved: str | None = None, cleared: str | None = None, show: str | None = None):
+    message = None
+    if saved in AI_CREDENTIALS:
+        message = f"„{vault.LABELS[saved]}“ gespeichert."
+    elif saved:
+        message = SETTINGS_MESSAGES.get(saved, SETTINGS_MESSAGES["saved"])
+    elif cleared in AI_CREDENTIALS:
+        message = f"„{vault.LABELS[cleared]}“ entfernt."
+    return _render_section(request, "ki", message=message, show=show)
 
 
 async def _refresh_models_quietly(provider: str) -> None:
@@ -732,10 +791,7 @@ async def settings_provider_key(request: Request, provider: str = Form(""), valu
     Doesn't switch the provider: that is saved with the settings form."""
     provider = _form_provider(provider)
     name = settings.PROVIDERS[provider]["credential"]
-
-    def error_page(request: Request, *, error: str, status_code: int):
-        return _render_settings(request, db.get_settings(), error=error, show=provider, status_code=status_code)
-
+    error_page = _error_page_for(name)
     denied = await _step_up(request, password, error_page)
     if denied is not None:
         return denied
@@ -744,31 +800,33 @@ async def settings_provider_key(request: Request, provider: str = Form(""), valu
     except vault.InvalidValue as exc:  # the message never contains the value
         return error_page(request, error=f"{vault.LABELS[name]}: {exc}", status_code=400)
     await _refresh_models_quietly(provider)
-    return RedirectResponse(f"/settings?saved=key&show={provider}#ki", status_code=303)
+    return RedirectResponse(f"/settings/ki?saved=key&show={provider}", status_code=303)
 
 
 @router.post("/settings/models/refresh", dependencies=ACTION)
 async def settings_models_refresh(provider: str = Form("")):
     provider = _form_provider(provider)
     await _refresh_models_quietly(provider)
-    return RedirectResponse(f"/settings?saved=models&show={provider}#ki", status_code=303)
+    return RedirectResponse(f"/settings/ki?saved=models&show={provider}", status_code=303)
 
 
 @router.post("/settings", dependencies=ACTION)
 async def settings_save(request: Request):
     form = {key: value for key, value in (await request.form()).items() if isinstance(value, str)}
+    section = form.get("section") if form.get("section") in SETTINGS_SECTIONS else None
     current = db.get_settings()
-    values, errors = validate_settings(form, current)
+    values, errors = validate_settings(form, current, section)
     if errors:
         shown = {**current, **values}  # keep the user's input in the form
-        return _render_settings(request, shown, errors=errors, error="Nicht gespeichert, bitte Eingaben prüfen.",
-                                show=values.get("provider"), status_code=400)
+        page = section or FIELD_SECTION[next(iter(errors))]  # without a section: the page of the first bad field
+        return _render_section(request, page, values=shown, errors=errors, error="Nicht gespeichert, bitte Eingaben prüfen.",
+                               show=values.get("provider"), status_code=400)
     db.update_settings(values)
     provider = values.get("provider")
     if (provider and provider != settings.provider_of(current) and llm.cached_models(provider) is None
             and vault.get(settings.PROVIDERS[provider]["credential"])):
         await _refresh_models_quietly(provider)  # first switch to a provider: check which models its key offers
-    return RedirectResponse("/settings?saved=1", status_code=303)
+    return RedirectResponse(SETTINGS_SECTIONS[section or "texte"]["path"] + "?saved=1", status_code=303)
 
 
 @router.post("/settings/reset/{key}", dependencies=ACTION)
@@ -783,22 +841,20 @@ def settings_reset(key: str):
 async def settings_test(request: Request):
     listing = db.latest_listing()
     if listing is None:
-        return _render_settings(request, db.get_settings(), error="Noch kein Inserat vorhanden – der Test braucht mindestens eins.")
+        return _render_section(request, "texte", error="Noch kein Inserat vorhanden – der Test braucht mindestens eins.")
     try:
         draft = await llm.create_and_store_draft(listing["id"], "test")
     except Exception as exc:
         message = str(exc) if isinstance(exc, llm.LLMError) else GENERIC_DRAFT_ERROR
         if not isinstance(exc, llm.LLMError):
             log.exception("Test draft failed")
-        return _render_settings(request, db.get_settings(), error=redact(request, message))
-    return _render_settings(request, db.get_settings(), test={"listing": listing, "draft": _draft_view(draft)})
+        return _render_section(request, "texte", error=redact(request, message))
+    return _render_section(request, "texte", test={"listing": listing, "draft": _draft_view(draft)})
 
 
-# --- credentials ("Zugänge") -------------------------------------------------------
+# --- credentials (API keys on "KI & Kosten", the rest on "Telegram & Fredy") ---------------
 
-CREDENTIAL_HELP = {
-    "anthropic_api_key": "Von console.anthropic.com → API Keys, beginnt mit „sk-ant-“.",
-    "deutschlandgpt_api_key": "Aus dem DeutschlandGPT-Dashboard (API-Keys). Welcher Anbieter genutzt wird, steht unter Einstellungen.",
+CREDENTIAL_HELP = {  # the AI keys are explained on "KI & Kosten" itself
     "telegram_bot_token": "Derselbe Token wie in Fredys Telegram-Adapter (von @BotFather).",
     "telegram_chat_id": "Dieselbe Chat-ID wie in Fredys Telegram-Adapter – oder per Code verbinden (Bot muss laufen).",
     "telegram_allowed_user_ids": ("Wer im Chat Buttons drücken darf, kommagetrennt. Leer = jedes Mitglied des Chats. "
@@ -808,7 +864,7 @@ CREDENTIAL_HELP = {
 # test -> credential named in the audit log when it fails
 CONNECTION_TESTS = {"anthropic": "anthropic_api_key", "deutschlandgpt": "deutschlandgpt_api_key", "telegram": "telegram_bot_token"}
 EVENT_NAME_LABELS = {**vault.LABELS, "dashboard": "Dashboard-Login"}
-OPEN_CHAT_WARNING = "Jedes Mitglied des Chats kann Buttons drücken – Pairing erneut ausführen oder User-ID eintragen."
+OPEN_CHAT_NOTE = "Optional, nicht gesetzt: jedes Mitglied des Chats darf Buttons drücken."
 LOCKED_CHAT_WARNING = ("Die Liste erlaubter Telegram-User ist nicht entschlüsselbar (SESSION_SECRET geändert?) – "
                        "niemand darf Buttons drücken. Pairing erneut ausführen oder User-ID neu eintragen.")
 ONE_TIME_TTL_S = 300
@@ -816,10 +872,8 @@ _one_time: dict[str, tuple[float, str]] = {}  # one-time id -> (monotonic expiry
 
 
 def _allowlist_warning() -> str | None:
-    allowed = bot.allowed_user_ids()
-    if allowed is None:
-        return LOCKED_CHAT_WARNING
-    return None if allowed else OPEN_CHAT_WARNING
+    """Only an unreadable list is a problem; an empty one is allowed (the setting is optional)."""
+    return LOCKED_CHAT_WARNING if bot.allowed_user_ids() is None else None
 
 
 def _stash_once(value: str) -> str:
@@ -846,33 +900,49 @@ def _credential_events() -> list[dict]:
     ]
 
 
-def _render_credentials(request: Request, *, message=None, error=None, new_token=None, pairing_code=None,
-                        test_result=None, status_code=200):
-    """The page never gets a secret value; `new_token` is the one-time display after "Neu erzeugen"."""
-    return render(request, "credentials.html", {
-        "active": "credentials",
-        "credentials": [{**c, "help": CREDENTIAL_HELP[c["name"]]} for c in vault.status()],
+def _hook_url(request: Request) -> str:
+    return f"https://{request.headers.get('host', 'immobot.<domain>')}/hook/fredy"
+
+
+def _telegram_context(request: Request, current: dict) -> dict:
+    """What "Telegram & Fredy" shows besides its form: credential status (never values), pairing, hook URL."""
+    provider = settings.provider_of(current)
+    return {
+        "credentials": [{**c, "help": CREDENTIAL_HELP[c["name"]], "need": _credential_need(c["name"], provider)}
+                        for c in vault.status() if c["name"] not in AI_CREDENTIALS],
         "chat_id": vault.get("telegram_chat_id"),  # not secret
         "allowed_user_ids": vault.get("telegram_allowed_user_ids"),  # not secret
         "allowlist_warning": _allowlist_warning(),
         "pairing": vault.pairing_info(),
         "last_pairing": db.last_credential_event("telegram_chat_id", "pair"),
-        "events": _credential_events(),
         "bot_disabled": request.app.state.config.disable_bot,
         "secret_names": vault.SECRET_NAMES,
-        "message": message,
-        "error": error,
-        "new_token": new_token,
-        "pairing_code": pairing_code,
-        "test_result": test_result,
-    }, status_code=status_code)
+        "public_url": bot.public_url_info(),
+        "hook_url": _hook_url(request),
+    }
+
+
+def _render_telegram(request: Request, **kwargs):
+    """`new_token` (keyword) is the one-time display after "Neu erzeugen"; nothing else is ever a secret."""
+    return _render_section(request, "telegram", **kwargs)
+
+
+def _error_page_for(name: str):
+    """Error pages of a credential change: the page the credential is managed on."""
+    if name in AI_CREDENTIALS:
+        return lambda request, **kwargs: _render_section(request, "ki", show=AI_CREDENTIALS[name], **kwargs)
+    return _render_telegram
+
+
+def _credential_page(name: str) -> str:
+    return f"/settings/ki?show={AI_CREDENTIALS[name]}&" if name in AI_CREDENTIALS else "/settings/telegram?"
 
 
 async def _step_up(request: Request, password: str, error_page=None):
-    """Re-check the dashboard password before a credential change. Returns an error page (by default the
-    credentials page), or None if ok. Wrong passwords count toward the login limit; once it is reached
+    """Re-check the dashboard password before a credential change. Returns an error page (by default
+    "Telegram & Fredy"), or None if ok. Wrong passwords count toward the login limit; once it is reached
     every attempt is refused."""
-    error_page = error_page or _render_credentials
+    error_page = error_page or _render_telegram
     client = _client_ip(request)
     if _too_many_failures(client):
         return error_page(request, error="Zu viele Fehlversuche – bitte ein paar Minuten warten.", status_code=429)
@@ -909,41 +979,51 @@ def _known_credential(name: str) -> str:
     return name
 
 
-@router.get("/credentials", dependencies=PAGE)
-def credentials_page(request: Request, saved: str | None = None, cleared: str | None = None, token: str | None = None):
+@router.get("/settings/telegram", dependencies=PAGE)
+def settings_telegram_page(request: Request, saved: str | None = None, cleared: str | None = None,
+                           token: str | None = None):
     message = error = new_token = None
     if saved in vault.LABELS:
         message = f"„{vault.LABELS[saved]}“ gespeichert."
+    elif saved:
+        message = SETTINGS_MESSAGES["saved"]
     elif cleared in vault.LABELS:
         message = f"„{vault.LABELS[cleared]}“ entfernt."
     elif token is not None:
         new_token = _take_once(token)
         if new_token is None:
             error = "Der neue Webhook-Token wurde schon angezeigt (oder die 5 Minuten sind um). Bei Bedarf neu erzeugen."
-    return _render_credentials(request, message=message, error=error, new_token=new_token)
+    return _render_telegram(request, message=message, error=error, new_token=new_token)
+
+
+@router.get("/credentials", dependencies=PAGE)
+def credentials_moved(request: Request):
+    """The former "Zugänge" page, now part of "Einstellungen" (old bookmarks)."""
+    return RedirectResponse("/settings/telegram", status_code=303)
 
 
 @router.post("/credentials/save/{name}", dependencies=ACTION)
 async def credentials_save(request: Request, name: str, value: str = Form(""), password: str = Form("")):
     name = _known_credential(name)
-    denied = await _step_up(request, password)
+    error_page = _error_page_for(name)
+    denied = await _step_up(request, password, error_page)
     if denied is not None:
         return denied
     try:
         await _change(request, name, "set", lambda: vault.set(name, value))
     except vault.InvalidValue as exc:  # the message never contains the value
-        return _render_credentials(request, error=f"{vault.LABELS[name]}: {exc}", status_code=400)
-    return RedirectResponse(f"/credentials?saved={name}", status_code=303)
+        return error_page(request, error=f"{vault.LABELS[name]}: {exc}", status_code=400)
+    return RedirectResponse(f"{_credential_page(name)}saved={name}", status_code=303)
 
 
 @router.post("/credentials/clear/{name}", dependencies=ACTION)
 async def credentials_clear(request: Request, name: str, password: str = Form("")):
     name = _known_credential(name)
-    denied = await _step_up(request, password)
+    denied = await _step_up(request, password, _error_page_for(name))
     if denied is not None:
         return denied
     await _change(request, name, "clear", lambda: vault.clear(name))
-    return RedirectResponse(f"/credentials?cleared={name}", status_code=303)
+    return RedirectResponse(f"{_credential_page(name)}cleared={name}", status_code=303)
 
 
 @router.post("/credentials/regenerate-webhook-token", dependencies=ACTION)
@@ -955,7 +1035,7 @@ async def credentials_regenerate_webhook_token(request: Request, password: str =
     await _change(request, "fredy_webhook_token", "regenerate", lambda: vault.set("fredy_webhook_token", token))
     # Post/redirect/get, so F5 or "back" can't rotate the token again. The page after the redirect shows it
     # exactly once; until then it only exists in server memory under a random one-time id.
-    return RedirectResponse(f"/credentials?token={_stash_once(token)}", status_code=303)
+    return RedirectResponse(f"/settings/telegram?token={_stash_once(token)}", status_code=303)
 
 
 @router.post("/credentials/pair", dependencies=ACTION)
@@ -965,10 +1045,10 @@ async def credentials_pair(request: Request, password: str = Form("")):
         return denied
     bot_username = None if request.app.state.config.disable_bot else bot.username()
     if not bot_username:
-        return _render_credentials(request, error="Der Telegram-Bot läuft nicht – zuerst einen gültigen Bot-Token speichern.",
-                                   status_code=409)
+        return _render_telegram(request, error="Der Telegram-Bot läuft nicht – zuerst einen gültigen Bot-Token speichern.",
+                                status_code=409)
     code = await _change(request, "telegram_chat_id", "pair_start", lambda: vault.start_pairing(bot_username))
-    return _render_credentials(request, pairing_code=code)
+    return _render_telegram(request, pairing_code=code)
 
 
 @router.post("/credentials/test/{target}", dependencies=ACTION)
@@ -989,7 +1069,9 @@ async def credentials_test(request: Request, target: str):
     if not result["ok"]:
         db.add_credential_event(CONNECTION_TESTS[target], "test_failed", _client_ip(request))
     result["text"] = redact(request, result["text"])
-    return _render_credentials(request, test_result=result)
+    if target in settings.PROVIDERS:
+        return _render_section(request, "ki", test_result=result, show=target)
+    return _render_telegram(request, test_result=result)
 
 
 # --- status ---------------------------------------------------------------------
@@ -999,6 +1081,8 @@ def status_page(request: Request):
     config = request.app.state.config
     bot_status = bot.status() or {}
     last_error = bot_status.get("last_error")
+    current = db.get_settings()
+    provider = settings.provider_of(current)
     return render(request, "status.html", {
         "active": "status",
         "last_webhook_at": db.get_meta("last_webhook_at"),
@@ -1008,16 +1092,19 @@ def status_page(request: Request):
         "chat_connected": bot.configured_chat_id() is not None,
         "allowed_user_ids": sorted(bot.allowed_user_ids() or ()),  # not secret
         "allowlist_warning": _allowlist_warning(),
+        "open_chat_note": OPEN_CHAT_NOTE,
         "bot_last_update_at": bot_status.get("last_update_at"),
         "bot_last_error": redact(request, str(last_error)) if last_error else None,
         # Names, sources and dates only - never any part of a secret.
-        "credentials": vault.status(),
-        "ai": _ai_status(db.get_settings()),
+        "credentials": [{**c, "need": _credential_need(c["name"], provider),
+                         "page": "/settings/ki" if c["name"] in AI_CREDENTIALS else "/settings/telegram"}
+                        for c in vault.status()],
+        "ai": _ai_status(current),
         "media_last_error": db.get_meta("media_last_error"),
         "fredy_images": {"last_webhook": db.get_meta("last_webhook_had_images"),
                          "last_at": db.get_meta("fredy_images_last_at")},
         "events": _credential_events(),
         "version": settings.APP_VERSION,
         "stats": db.stats(),
-        "hook_url": f"https://{request.headers.get('host', 'immobot.<domain>')}/hook/fredy",
+        "hook_url": _hook_url(request),
     })

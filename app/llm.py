@@ -97,7 +97,7 @@ def max_images(settings: dict) -> int:
 
 
 def no_key_message(provider: str) -> str:
-    return "Kein " + PROVIDERS[provider]["label"] + "-API-Key hinterlegt – im Dashboard unter Zugänge eintragen."
+    return "Kein " + PROVIDERS[provider]["label"] + "-API-Key hinterlegt – im Dashboard unter Einstellungen → KI & Kosten eintragen."
 
 
 def _get_client(provider: str) -> anthropic.AsyncAnthropic:

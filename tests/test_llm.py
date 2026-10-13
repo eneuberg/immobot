@@ -239,7 +239,7 @@ def test_generate_draft_unknown_model_and_effort_use_defaults(fake_client):
 
 def test_generate_draft_without_api_key(fresh_vault, monkeypatch):
     monkeypatch.setattr(llm, "_clients", {})
-    with pytest.raises(llm.LLMError, match="Kein Anthropic-API-Key hinterlegt – im Dashboard unter Zugänge eintragen."):
+    with pytest.raises(llm.LLMError, match="Kein Anthropic-API-Key hinterlegt – im Dashboard unter Einstellungen → KI & Kosten eintragen."):
         asyncio.run(llm.generate_draft(LISTING, settings_with(), "initial"))
     with pytest.raises(llm.LLMError, match="Kein Anthropic-API-Key"):
         asyncio.run(llm.check_api_key("anthropic"))
