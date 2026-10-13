@@ -215,7 +215,9 @@
   <div class="flash warn" role="alert"><span><strong>Telegram hat den „📝 Editor“-Button abgelehnt</strong>
     {%- if editor_login_error.at %} (zuletzt am {{ editor_login_error.at|local_time }}){% endif %}: {{ editor_login_error.text }}
     {%- if not editor_login_error.text.endswith(".") %}.{% endif %}
-    Entwürfe kommen trotzdem an, nur ohne diesen Button. Meist fehlt die Domain beim Bot – die Schritte unten beheben das.</span></div>
+    Entwürfe kommen trotzdem an, nur ohne diesen Button.
+    {% if "Domain" in editor_login_error.text %}Die Schritte unten beheben das.
+    {%- else %}Meist fehlt die Domain beim Bot; die Schritte unten beheben das.{% endif %}</span></div>
   {% endif %}
   <div class="callout {{ 'info' if public_url[0] else 'warn' }}">
     <span><strong>Adresse für „🔗 Dashboard“ und „📝 Editor“:</strong>
