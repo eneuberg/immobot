@@ -16,6 +16,8 @@ services:
   immobot2:
     build: .
     restart: unless-stopped
+    expose:
+      - "8000"  # internal only, for Coolify's proxy; no host port (Coolify itself uses 8000 on the host)
     environment:
       DASHBOARD_PASSWORD: ${SERVICE_PASSWORD_IMMOBOT2}
       SESSION_SECRET: ${SERVICE_HEX_64_IMMOBOT2}
