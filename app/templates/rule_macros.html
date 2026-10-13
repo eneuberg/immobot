@@ -1,0 +1,17 @@
+{# A rule of the user's own: "Regel selbst eintragen" in the editor, "Regel hinzufügen" in Verhalten → Lernen
+   (learning.add_manual_rule: active at once). The form posts `text`; the caller adds its hidden fields:
+   {% call manual_rule_form(action, field_id, summary, open=…) %}<hidden inputs>{% endcall %} #}
+{% macro manual_rule_form(action, field_id, summary, open=False, value="", max_chars=300, prominent=False) %}
+<details class="rule-add{% if prominent %} is-prominent{% endif %}"{% if open %} open{% endif %}>
+  <summary>{{ summary }}</summary>
+  <form method="post" action="{{ action }}">
+    {{ caller() }}
+    <label for="{{ field_id }}">Deine Regel</label>
+    <textarea id="{{ field_id }}" name="text" rows="2" maxlength="{{ max_chars }}" required aria-describedby="{{ field_id }}-howto" data-autosize>{{ value }}</textarea>
+    <p class="help rule-howto" id="{{ field_id }}-howto">Ein kurzer Satz als Anweisung an Claude, in Du-Form – eine Regel pro Eintrag.
+      Allgemein formulieren: Sie gilt für alle künftigen Anschreiben, nichts nur zu dieser Wohnung.
+      Beispiel: „Schreib ‚Viele Grüße‘ statt ‚Mit freundlichen Grüßen‘.“ Claudes Vorschläge haben dasselbe Format.</p>
+    <button type="submit" class="btn-sm">Regel speichern</button>
+  </form>
+</details>
+{% endmacro %}

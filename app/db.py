@@ -6,7 +6,8 @@ Tables:
   listing_media    pictures of a listing, from Fredy or ImmoScout24 (files under DATA_DIR/media/<listing id>/;
                    `file` is "" until the picture is downloaded)
   drafts           every generated message, with provider, model, tokens and cost in the provider's currency
-                   (cost_native/currency; euro values are computed with cost_eur_sql, cost_usd is legacy)
+                   (cost_native/currency; euro values are computed with cost_eur_sql, cost_usd is legacy) and where
+                   it was asked for (source telegram | dashboard | editor; NULL for drafts from before)
   settings         user-editable, non-secret settings (key/value strings)
   meta             internal state such as last_webhook_at and a pending Telegram pairing
   pending_prompts  Telegram "Anpassen" questions waiting for the user's reply
@@ -19,7 +20,8 @@ Learning (see learning.py; the current profile itself stays in `settings`):
                      status open | done | superseded (an open round replaced by a new one from a newer draft)
   feedback           critiques and quick buttons ("Kürzer", ...) from editor, Telegram and dashboard; never test drafts
   learned_rules      rules proposed on "Fertig" and their decisions (proposed / active / inactive / rejected / merged /
-                     replaced); update and remove proposals point at their rule with replaces_rule_id
+                     replaced); update and remove proposals point at their rule with replaces_rule_id; rules the user
+                     wrote are active from the start and have no proposed_text
   rewrite_proposals  "Aus Rückmeldungen verbessern": a list of small edits to the profile and what became of them
   llm_usage          tokens and cost of the learning calls (rules, rewrite); counts toward budget and totals like drafts
 
@@ -90,7 +92,8 @@ CREATE TABLE IF NOT EXISTS drafts (
     created_at TEXT NOT NULL,
     provider TEXT NOT NULL DEFAULT 'anthropic',
     currency TEXT NOT NULL DEFAULT 'USD',
-    cost_native REAL
+    cost_native REAL,
+    source TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_drafts_listing ON drafts(listing_id);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -137,7 +140,8 @@ CREATE TABLE IF NOT EXISTS edit_sessions (
     finished_at TEXT,
     rules_basis TEXT,
     processed_version_id INTEGER REFERENCES profile_versions(id),
-    last_draft_id INTEGER REFERENCES drafts(id)
+    last_draft_id INTEGER REFERENCES drafts(id),
+    rules_note TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_edit_sessions_listing ON edit_sessions(listing_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_edit_sessions_open ON edit_sessions(listing_id) WHERE status = 'open';
@@ -229,9 +233,10 @@ ADDED_COLUMNS = {
         ("provider", "TEXT NOT NULL DEFAULT 'anthropic'"),
         ("currency", "TEXT NOT NULL DEFAULT 'USD'"),
         ("cost_native", "REAL"),
+        ("source", "TEXT"),  # telegram | dashboard | editor; NULL for older drafts (count as "Entwürfe")
     ],
     "credentials": [("hint", "TEXT")],
-    "edit_sessions": [("last_draft_id", "INTEGER REFERENCES drafts(id)")],
+    "edit_sessions": [("last_draft_id", "INTEGER REFERENCES drafts(id)"), ("rules_note", "TEXT")],
 }
 
 LISTING_FIELDS = ["fredy_id", "job_id", "provider", "title", "price", "size", "address", "description", "image_url", "url", "fredy_url"]
@@ -474,17 +479,19 @@ def add_draft(
     provider: str = "anthropic",
     currency: str = "USD",
     cost_native: float | None = None,
+    source: str | None = None,
 ) -> int:
-    """cost_usd counts toward budget and totals; cost_native is what the provider bills, in `currency`."""
+    """cost_usd counts toward budget and totals; cost_native is what the provider bills, in `currency`.
+    source: where the draft was asked for (telegram | dashboard | editor), for the cost breakdown."""
     with connect() as conn:
         cur = conn.execute(
             """INSERT INTO drafts (listing_id, kind, instruction, text, hint, model, input_tokens, output_tokens,
                                    cache_read_tokens, cache_write_tokens, cost_usd, created_at,
-                                   provider, currency, cost_native)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   provider, currency, cost_native, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (listing_id, kind, instruction, text, hint, model, input_tokens, output_tokens,
              cache_read_tokens, cache_write_tokens, cost_usd, now_iso(),
-             provider, currency, cost_usd if cost_native is None else cost_native),
+             provider, currency, cost_usd if cost_native is None else cost_native, source),
         )
         return cur.lastrowid
 
@@ -519,17 +526,49 @@ _COST_SUM_SQL = ("SELECT (SELECT COALESCE(SUM({cost}), 0) FROM drafts{where})"
                  " + (SELECT COALESCE(SUM({cost}), 0) FROM llm_usage{where})")
 
 
+def current_month() -> str:
+    """"2026-10": the budget month (UTC, like the stored times)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
 def cost_this_month() -> float:
     """Costs of the current month in euros, drafts and learning calls (the monthly budget is checked against this)."""
-    month_prefix, rate = datetime.now(timezone.utc).strftime("%Y-%m"), _rate()
+    month_prefix, rate = current_month(), _rate()
     sql = _COST_SUM_SQL.format(cost=cost_eur_sql(), where=" WHERE created_at LIKE ?")
     with connect() as conn:
         return float(conn.execute(sql, (rate, month_prefix + "%", rate, month_prefix + "%")).fetchone()[0])
 
 
+COST_SOURCES = ("drafts", "editor", "rules", "rewrite", "test", "other")
+# A month's costs by source, in euros; parameters: rate, month prefix, rate, month prefix.
+_COST_BY_SOURCE_SQL = """
+    SELECT CASE WHEN kind = 'test' THEN 'test'
+                WHEN source = 'editor' AND kind != 'initial' THEN 'editor'
+                ELSE 'drafts' END AS part, SUM({cost}) AS eur
+    FROM drafts WHERE created_at LIKE ? GROUP BY part
+    UNION ALL
+    SELECT CASE WHEN purpose IN ('rules', 'rewrite') THEN purpose ELSE 'other' END AS part, SUM({cost}) AS eur
+    FROM llm_usage WHERE created_at LIKE ? GROUP BY part
+"""
+
+
+def cost_by_source(month: str | None = None) -> dict[str, float]:
+    """A month's costs ("2026-10", default the current one) in euros by source, every COST_SOURCES key present:
+    drafts (Telegram / dashboard, and drafts from before sources were stored), editor (revisions in the editor; its
+    "Entwurf erzeugen" is a draft), test (test drafts from the settings), rules / rewrite (learning calls in
+    llm_usage), other (llm_usage with another purpose). Sums up to cost_this_month() for the current month."""
+    month_prefix, rate = month or current_month(), _rate()
+    parts = dict.fromkeys(COST_SOURCES, 0.0)
+    with connect() as conn:
+        for row in conn.execute(_COST_BY_SOURCE_SQL.format(cost=cost_eur_sql()),
+                                (rate, month_prefix + "%", rate, month_prefix + "%")):
+            parts[row["part"]] += float(row["eur"] or 0)
+    return parts
+
+
 def stats() -> dict:
     """Numbers for the dashboard header; costs in euros (drafts and learning calls)."""
-    month_prefix, rate = datetime.now(timezone.utc).strftime("%Y-%m"), _rate()
+    month_prefix, rate = current_month(), _rate()
     with connect() as conn:
         listings_total = conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0]
         drafts_total = conn.execute("SELECT COUNT(*) FROM drafts").fetchone()[0]
@@ -765,7 +804,7 @@ def _ensure_initial_version() -> None:
 # --- edit sessions --------------------------------------------------------------
 
 SESSION_UPDATE_COLUMNS = {"current_text", "final_text", "status", "use_as_example", "finished_at", "rules_basis",
-                          "processed_version_id", "last_draft_id"}
+                          "processed_version_id", "last_draft_id", "rules_note"}
 
 
 def create_session(listing_id: int, base_draft_id: int | None, text: str, profile_version_id: int | None) -> int:
@@ -907,15 +946,16 @@ RULE_UPDATE_COLUMNS = {"text", "status", "reason", "decided_at", "merged_version
 
 
 def add_rule(text: str, *, status: str = "proposed", action: str = "add", reason: str | None = None,
-             session_id: int | None = None, replaces_rule_id: int | None = None) -> int:
+             session_id: int | None = None, replaces_rule_id: int | None = None, manual: bool = False) -> int:
     """action: add | update | remove (what the proposal does; replaces_rule_id = the rule it changes).
-    proposed_text keeps Claude's wording when the text is edited before accepting."""
+    proposed_text keeps Claude's wording when the text is edited before accepting; NULL for a rule the user wrote
+    (manual)."""
     with connect() as conn:
         cur = conn.execute(
             """INSERT INTO learned_rules (text, status, reason, session_id, replaces_rule_id, created_at, action,
                                           proposed_text)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (text, status, reason, session_id, replaces_rule_id, now_iso(), action, text),
+            (text, status, reason, session_id, replaces_rule_id, now_iso(), action, None if manual else text),
         )
         return cur.lastrowid
 

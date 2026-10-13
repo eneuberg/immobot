@@ -14,7 +14,8 @@ post their forms with "Origin: null", which same_origin lets through. editor_hea
 no-store to every response under /e/ and /editor/.
 
 Claude's rule proposals after "Fertig" run as a background task; the page polls /editor/{id}/rules/status (JS, with
-a <noscript> meta refresh as fallback) until they are there.
+a <noscript> meta refresh as fallback) until they are there. The text saves itself (editor.js posts to
+/editor/{id}/save with "Accept: application/json" and gets JSON back); without JS a "Zwischenspeichern" button does.
 """
 
 import asyncio
@@ -49,6 +50,7 @@ MESSAGES = {
     "saved": "Gespeichert.",
     "revised": "Claude hat den Text überarbeitet.",
     "done": "Endversion gespeichert.",
+    "rule_added": "Regel gespeichert – sie gilt ab dem nächsten Entwurf.",
     "done_note": "Endversion gespeichert. Deine Kritik im Feld hat Claude nicht mehr umgesetzt – sie ist als "
                  "Rückmeldung gespeichert und fließt ins Lernen ein.",
     "reopened": "Weiter bearbeiten – die Endversion bleibt bis zum nächsten „Fertig“ gespeichert.",
@@ -200,7 +202,8 @@ def _proposals(session: dict) -> tuple[list[dict], list[dict]]:
 
 
 def _render(request: Request, listing: dict, mode: str, *, message: str | None = None, error: str | None = None,
-            critique: str | None = None, lost_text: str | None = None, status_code: int = 200):
+            critique: str | None = None, lost_text: str | None = None, manual_rule: str | None = None,
+            status_code: int = 200):
     listing_id = listing["id"]
     session = learning.open_or_create_session(listing_id)
     current = db.get_settings()
@@ -217,7 +220,9 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
         "error": web.redact(request, error) if error else None,
         "critique": critique,
         "lost_text": lost_text,
+        "manual_rule": manual_rule,  # "Regel selbst eintragen" typed, but refused: shown again
         "use_rules": settings.as_bool(current.get("use_rules")),
+        "rule_max_chars": learning.RULE_MAX_CHARS,
     }
     if session is not None:
         text = session["final_text"] if session["status"] == "done" else session["current_text"]
@@ -305,21 +310,48 @@ def _stale(request: Request, listing: dict, mode: str, text: str | None = None):
 
 ACTION = [Depends(web.same_origin)]
 
+# Autosave answers in JSON: {"ok": true} or {"ok": false, "error": short German text, "stale": bool}.
+AUTOSAVE_DENIED = {
+    401: "Sitzung abgelaufen – Text kopieren und neu anmelden.",
+    403: "Seite veraltet – bitte neu laden.",
+    404: "Inserat nicht gefunden.",
+}
+AUTOSAVE_STALE = "Seite nicht mehr aktuell."
+
+
+def _wants_json(request: Request) -> bool:
+    return "application/json" in request.headers.get("accept", "")
+
+
+def _autosave_answer(status_code: int, error: str | None = None, stale: bool = False) -> JSONResponse:
+    if error is None:
+        return JSONResponse({"ok": True})
+    return JSONResponse({"ok": False, "error": error, "stale": stale}, status_code=status_code)
+
 
 @router.post("/editor/{listing_id}/save", dependencies=ACTION)
 def editor_save(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
                 text: str = Form("")):
+    """Autosave from editor.js (JSON in, see _autosave_answer), or "Zwischenspeichern" without JS (redirect)."""
+    autosave = _wants_json(request)
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
-        return denied
+        if not autosave:
+            return denied
+        status = 401 if isinstance(denied, RedirectResponse) else denied.status_code  # redirect: not logged in
+        return _autosave_answer(status, AUTOSAVE_DENIED.get(status, AUTOSAVE_DENIED[403]))
     session = _current_session(listing, session_id)
-    if session is None:
-        return _stale(request, listing, mode, text)
+    if session is None or session["status"] != "open":  # another tab started a new round or pressed "Fertig"
+        return _autosave_answer(409, AUTOSAVE_STALE, stale=True) if autosave else _stale(request, listing, mode, text)
     try:
         learning.save_text(session["id"], text)
     except Exception as exc:
-        return _failed(request, listing, mode, exc)
-    return _back(listing["id"], "saved", "text")
+        if not autosave:
+            return _failed(request, listing, mode, exc)
+        if not isinstance(exc, llm.LLMError):
+            log.exception("Autosave failed for listing %s", listing["id"])
+        return _autosave_answer(400, str(exc) if isinstance(exc, llm.LLMError) else GENERIC_ERROR)
+    return _autosave_answer(200) if autosave else _back(listing["id"], "saved", "text")
 
 
 @router.post("/editor/{listing_id}/revise", dependencies=ACTION)
@@ -435,6 +467,24 @@ def editor_new_round(request: Request, listing_id: str, token: str = Form(""), s
     except Exception as exc:
         return _failed(request, listing, mode, exc)
     return _back(listing["id"], "round", "text")
+
+
+@router.post("/editor/{listing_id}/rules/add", dependencies=ACTION)
+def editor_add_rule(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
+                    text: str = Form("")):
+    """"Regel selbst eintragen" after "Fertig": a rule of the user's own, active at once, stored with this session.
+    Registered before /rules/{rule_id}."""
+    listing, mode, denied = _gate(request, listing_id, token)
+    if denied is not None:
+        return denied
+    session = _current_session(listing, session_id)
+    if session is None or session["status"] != "done":
+        return _stale(request, listing, mode)
+    try:
+        learning.add_manual_rule(text, session_id=session["id"])
+    except Exception as exc:
+        return _failed(request, listing, mode, exc, manual_rule=text)
+    return _back(listing["id"], "rule_added", "regeln")
 
 
 @router.post("/editor/{listing_id}/rules/{rule_id}", dependencies=ACTION)

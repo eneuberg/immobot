@@ -1,0 +1,33 @@
+{# This month's costs against the budget, by source (web.cost_overview). The text carries everything (head line and
+   legend with amounts); the bar only shows it: one segment per source, an empty rest = budget left, and when the
+   budget is used up a mark where it ended. Status, Verhalten → Kosten (cost_bar) and the Inserate header
+   (cost_track, slim). #}
+
+{% macro cost_track(c, slim=False) -%}
+<div class="costbar-meter{% if slim %} is-slim{% endif %}" aria-hidden="true">
+  <div class="costbar-track">
+    {%- for p in c.parts if p.eur > 0 %}<span class="costbar-seg seg-{{ p.key }}" style="width: {{ '%.2f'|format(p.pct) }}%"></span>{% endfor -%}
+  </div>
+  {%- if c.over and c.limit_pct < 100 %}<span class="costbar-limit" style="left: {{ '%.2f'|format(c.limit_pct) }}%"></span>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro cost_bar(c) %}
+<div class="costbar{% if c.over %} is-over{% endif %}">
+  <p class="costbar-head">
+    <span class="costbar-month">{{ c.month_label }}</span>
+    <span class="costbar-total"><strong>{{ c.total|eur }}</strong>
+      {%- if c.budget %} von {{ c.budget|eur }} Budget · {{ c.used_pct }} %{% else %} · kein Limit{% endif %}</span>
+  </p>
+  {{ cost_track(c) }}
+  {% if c.over %}<p class="costbar-alert" role="status">Budget erreicht – bis Monatsende keine neuen Claude-Aufrufe.</p>{% endif %}
+  <ul class="costbar-legend">
+    {% for p in c.parts %}
+    <li><span class="costbar-swatch seg-{{ p.key }}" aria-hidden="true"></span>
+      <span class="costbar-label">{{ p.label }}{% if p.note %} <small>{{ p.note }}</small>{% endif %}</span>
+      <span class="costbar-amount">{{ p.eur|eur }}</span></li>
+    {% endfor %}
+  </ul>
+  <p class="help">Alle Claude-Aufrufe zählen zum Monatsbudget – auch Regel-Vorschläge und Profil-Verbesserung.</p>
+</div>
+{% endmacro %}

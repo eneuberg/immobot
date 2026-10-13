@@ -520,3 +520,87 @@ def test_learning_costs_count_in_the_totals(client):
                      cost_native=0.5)  # 0,50 €
     for path in ["/", "/status"]:
         assert client.get(path).text.count(">3,50 €</span>") == 2, path  # this month and in total
+
+
+def cost_bar(page: str) -> str:
+    return re.search(r'<div class="costbar(?: is-over)?">(.*?)<p class="help">', page, re.S).group(1)
+
+
+def legend(page: str) -> list[tuple[str, str]]:
+    return re.findall(r'<span class="costbar-label">([^<]+?)(?: <small>.*?</small>)?</span>\s*'
+                      r'<span class="costbar-amount">([^<]+)</span>', cost_bar(page))
+
+
+def test_cost_bar_by_source_under_budget(client):
+    """Status and Verhalten → Kosten: this month's costs against the budget, by source, with a text legend."""
+    login(client)
+    lid = add_listing()
+    db.add_draft(lid, "initial", "A", "claude-opus-5-5", cost_usd=1.1, source="telegram")  # 1,00 €
+    db.add_draft(lid, "custom", "B", "claude-opus-5-5", cost_usd=0.55, source="editor")  # 50,0 ct
+    db.add_draft(lid, "test", "T", "claude-opus-5-5", cost_usd=0.11, source="dashboard")  # 10,0 ct
+    db.add_llm_usage("rules", "anthropic", "claude-opus-5-5", listing_id=lid, cost_usd=0.22)  # 20,0 ct
+    db.add_llm_usage("rewrite", "deutschlandgpt", "claude-sonnet-5.5", cost_usd=0.33, currency="EUR", cost_native=0.3)
+    db.update_settings({"monthly_budget_eur": "10"})
+    for path in ["/status", "/settings/verhalten"]:
+        page = client.get(path).text
+        bar = cost_bar(page)
+        assert "<strong>2,10 €</strong> von 10,00 € Budget · 21 %" in bar, path
+        assert legend(page) == [("Entwürfe", "1,00 €"), ("Überarbeitungen im Editor", "50,0 ct"),
+                                ("Regel-Vorschläge", "20,0 ct"), ("Profil-Verbesserung", "30,0 ct"),
+                                ("Test-Entwürfe", "10,0 ct")], path
+        assert 'class="costbar-seg seg-drafts" style="width: 10.00%"' in bar  # of the budget: the rest is free
+        assert "costbar-limit" not in bar and "is-over" not in bar and "Budget erreicht" not in page
+        assert "auch Regel-Vorschläge und Profil-Verbesserung" in page  # learning calls count, said in words
+    verhalten = client.get("/settings/verhalten").text
+    assert verhalten.index('class="costbar') < verhalten.index('name="monthly_budget_eur"')  # next to the budget
+    overview = client.get("/").text  # slim version in the Inserate header
+    assert 'costbar-meter is-slim' in overview and "von 10,00 € Budget" in overview
+
+
+def test_cost_bar_over_budget_and_without_limit(client):
+    login(client)
+    lid = add_listing()
+    db.add_draft(lid, "initial", "A", "claude-opus-5-5", cost_usd=3.3)  # 3,00 €, from before sources
+    db.add_llm_usage("rules", "anthropic", "claude-opus-5-5", listing_id=lid, cost_usd=1.1)  # 1,00 €
+    db.update_settings({"monthly_budget_eur": "2"})
+    page = client.get("/status").text
+    bar = cost_bar(page)
+    assert 'class="costbar is-over"' in page and "<strong>4,00 €</strong> von 2,00 € Budget · 200 %" in bar
+    assert 'class="costbar-limit" style="left: 50.00%"' in bar  # where the budget ended (the bar spans 4 €)
+    assert "Budget erreicht – bis Monatsende keine neuen Claude-Aufrufe" in bar
+    assert "Monatsbudget" in page.split('<section class="health"')[1].split("</section>")[0]  # a red tile too
+    assert ("Entwürfe", "3,00 €") in legend(page)
+    assert "Budget erreicht" in client.get("/").text.split('class="stats"')[1].split("</section>")[0]
+
+    db.update_settings({"monthly_budget_eur": "0"})  # no limit: the total, no limit mark, no percentage
+    for path in ["/status", "/settings/verhalten"]:
+        bar = cost_bar(client.get(path).text)
+        assert "<strong>4,00 €</strong> · kein Limit" in bar and "costbar-limit" not in bar and "%</span>" not in bar
+        assert 'seg-drafts" style="width: 75.00%"' in bar
+    overview = client.get("/").text.split('class="stats"')[1].split("</section>")[0]
+    assert "kein Limit" in overview and "is-slim" not in overview
+
+
+def test_add_rule_on_verhalten(client):
+    login(client)
+    page = client.get("/settings/verhalten").text
+    card = page.split('<article id="regeln"')[1].split('<article id="beispiele"')[0]
+    assert 'action="/settings/rules/add"' in card and '<details class="rule-add" open>' in card  # no rules yet: open
+    assert "Ein kurzer Satz als Anweisung an Claude, in Du-Form – eine Regel pro Eintrag." in card
+    assert "Claudes Vorschläge haben dasselbe Format." in card and 'maxlength="300"' in card
+    r = client.post("/settings/rules/add", data={"text": " Schreib „Viele Grüße“ statt „Mit freundlichen Grüßen“. "})
+    assert r.status_code == 303 and r.headers["location"] == "/settings/verhalten?done=rule_added#regeln"
+    (rule,) = db.list_rules("active")
+    assert rule["text"] == "Schreib „Viele Grüße“ statt „Mit freundlichen Grüßen“." and rule["proposed_text"] is None
+    page = client.get(r.headers["location"]).text
+    card = page.split('<article id="regeln"')[1].split('<article id="beispiele"')[0]
+    assert "Regel gespeichert – sie gilt ab dem nächsten Entwurf." in card and "selbst eingetragen · " in card
+    assert '<details class="rule-add">' in card  # there are rules now: collapsed
+    r = client.post("/settings/rules/add", data={"text": "schreib „viele grüße“ statt „mit freundlichen grüßen“"})
+    assert r.status_code == 409 and "Diese Regel gibt es schon." in r.text
+    assert '<details class="rule-add" open>' in r.text and "schreib „viele grüße“" in r.text  # the text stays
+    r = client.post("/settings/rules/add", data={"text": "x"}, headers={"Origin": "https://evil.example"})
+    assert r.status_code == 403
+    client.post("/logout")
+    assert client.post("/settings/rules/add", data={"text": "Neu."}).headers["location"] == "/login"
+    assert db.count_rules("active") == 1

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "macros.html" import key_line %}
+{% from "cost_bar.html" import cost_bar %}
 {% block title %}Status{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -78,6 +79,13 @@
     {% endif %}
   {% endcall %}
 
+  {% if costs.over %}
+  {% call tile("err", "Monatsbudget") %}
+    <p><span class="error">erreicht</span> – {{ costs.total|eur }} von {{ costs.budget|eur }}. Bis Monatsende keine neuen Entwürfe.</p>
+    <p><a href="#kosten">Kosten ansehen ↓</a> · <a href="/settings/verhalten#kosten">Budget ändern</a></p>
+  {% endcall %}
+  {% endif %}
+
   {% if bot_last_error %}
   {% call tile("warn", "Letzter Bot-Fehler") %}
     <p class="pre-wrap">{{ bot_last_error }}</p>
@@ -107,6 +115,9 @@
 
 <div class="section-head" id="protokoll"><h2>Protokoll</h2><small class="muted">Zugänge und fehlgeschlagene Logins</small></div>
 {% include "credential_events.html" %}
+
+<div class="section-head" id="kosten"><h2>Kosten</h2><small class="muted">Budget ändern unter <a href="/settings/verhalten#kosten">Einstellungen → Verhalten</a></small></div>
+<article class="cost-card">{{ cost_bar(costs) }}</article>
 
 <div class="section-head"><h2>Datenbank</h2></div>
 <section class="stats" aria-label="Datenbank">

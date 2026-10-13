@@ -135,7 +135,7 @@ def test_migration_of_a_database_from_the_previous_version(tmp_path):
     with db.connect() as conn:
         draft_columns = {r["name"] for r in conn.execute("PRAGMA table_info(drafts)")}
         credential_columns = {r["name"] for r in conn.execute("PRAGMA table_info(credentials)")}
-    assert {"provider", "currency", "cost_native"} <= draft_columns and "hint" in credential_columns
+    assert {"provider", "currency", "cost_native", "source"} <= draft_columns and "hint" in credential_columns
     with db.connect() as conn:
         listing_columns = {r["name"] for r in conn.execute("PRAGMA table_info(listings)")}
         media_columns = {r["name"] for r in conn.execute("PRAGMA table_info(listing_media)")}
@@ -146,6 +146,7 @@ def test_migration_of_a_database_from_the_previous_version(tmp_path):
     (old,) = db.list_drafts(1)
     assert (old["provider"], old["currency"], old["cost_native"], old["cost_usd"]) == ("anthropic", "USD", 0.042, 0.042)
     assert old["text"] == "Alter Entwurf" and db.get_credential("anthropic_api_key")["hint"] is None
+    assert old["source"] is None  # from before sources: counts as "Entwürfe"
     db.add_draft(1, "regenerate", "Neu", "claude-sonnet-5.5", cost_usd=0.023, provider="deutschlandgpt", currency="EUR",
                  cost_native=0.021)
     new = db.list_drafts(1)[-1]
@@ -209,3 +210,70 @@ def test_migration_adds_learning_tables_and_initial_version(tmp_path):
     assert db.get_settings()["use_rules"] == "1" and db.get_settings()["use_examples"] == "1"
     assert db.stats()["cost_total"] == pytest.approx(0.042 / 1.10)  # the old draft only, no learning calls yet
     assert db.list_listings()[0]["cost_eur"] == pytest.approx(0.042 / 1.10)
+
+
+def test_migration_adds_columns_to_learning_tables_of_an_earlier_version(tmp_path):
+    """edit_sessions from before rules_note (and last_draft_id) gets the columns; a session keeps its data."""
+    import sqlite3
+
+    from app import db
+
+    conn = sqlite3.connect(tmp_path / "immobot.db")
+    conn.executescript(OLD_SCHEMA + """
+        CREATE TABLE edit_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, listing_id INTEGER NOT NULL,
+            base_draft_id INTEGER, original_text TEXT NOT NULL, current_text TEXT NOT NULL, final_text TEXT,
+            status TEXT NOT NULL DEFAULT 'open', profile_version_id INTEGER, use_as_example INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT, rules_basis TEXT,
+            processed_version_id INTEGER);
+        INSERT INTO edit_sessions (listing_id, original_text, current_text, created_at, updated_at)
+            VALUES (1, 'Alt', 'Alt', '2026-10-01T10:00:00+00:00', '2026-10-01T10:00:00+00:00');
+    """)
+    conn.close()
+    for _ in range(2):
+        db.init_db(str(tmp_path))
+    session = db.get_session(1)
+    assert session["rules_note"] is None and session["last_draft_id"] is None and session["original_text"] == "Alt"
+    db.update_session(1, rules_note="Nur das Codewort geändert.")
+    assert db.get_session(1)["rules_note"] == "Nur das Codewort geändert."
+
+
+def _at(db, table, row_id, created_at):
+    with db.connect() as conn:
+        conn.execute(f"UPDATE {table} SET created_at = ? WHERE id = ?", (created_at, row_id))
+
+
+def test_cost_by_source(fresh_db):
+    """This month's costs by source, in euros like cost_eur_sql: drafts by kind and source, learning calls by
+    purpose; only rows of the month count (UTC, like cost_this_month)."""
+    db = fresh_db
+    lid, _ = db.insert_listing(_listing())
+    tg = db.add_draft(lid, "initial", "A", "claude-opus-5-5", cost_usd=0.11, source="telegram")  # 0,10 € at 1,10
+    db.add_draft(lid, "shorter", "B", "claude-sonnet-5.5", cost_usd=0.055, provider="deutschlandgpt", currency="EUR",
+                 cost_native=0.05, source="dashboard")  # 0,05 € as billed
+    old = db.add_draft(lid, "custom", "C", "claude-opus-5-5", cost_usd=0.022)  # before sources: NULL -> "drafts"
+    db.add_draft(lid, "custom", "D", "claude-opus-5-5", cost_usd=0.33, source="editor")  # revision: 0,30 €
+    db.add_draft(lid, "initial", "E", "claude-opus-5-5", cost_usd=0.011, source="editor")  # "Entwurf erzeugen": a draft
+    db.add_draft(lid, "test", "T", "claude-opus-5-5", cost_usd=0.044, source="dashboard")  # 0,04 €
+    db.add_llm_usage("rules", "anthropic", "claude-opus-5-5", listing_id=lid, cost_usd=0.066)  # 0,06 €
+    db.add_llm_usage("rewrite", "deutschlandgpt", "claude-haiku-5.5", cost_usd=0.08, currency="EUR", cost_native=0.07)
+    db.add_llm_usage("future", "anthropic", "claude-opus-5-5", cost_usd=0.0011)  # unknown purpose
+    month = db.current_month()
+    parts = db.cost_by_source()
+    assert list(parts) == list(db.COST_SOURCES)
+    assert parts["drafts"] == pytest.approx(0.10 + 0.05 + 0.02 + 0.01)
+    assert parts["editor"] == pytest.approx(0.30) and parts["test"] == pytest.approx(0.04)
+    assert parts["rules"] == pytest.approx(0.06) and parts["rewrite"] == pytest.approx(0.07)
+    assert parts["other"] == pytest.approx(0.001)
+    assert sum(parts.values()) == pytest.approx(db.cost_this_month())
+    assert db.get_draft(old)["source"] is None and db.get_draft(tg)["source"] == "telegram"
+
+    # month boundaries: the last second of the month before and the first of the next month don't count
+    _at(db, "drafts", tg, "2026-09-30T23:59:59+00:00")
+    _at(db, "llm_usage", 1, "2026-11-01T00:00:00+00:00")
+    assert db.cost_by_source("2026-09") == {**dict.fromkeys(db.COST_SOURCES, 0.0), "drafts": pytest.approx(0.10)}
+    assert db.cost_by_source("2026-11")["rules"] == pytest.approx(0.06)
+    if month not in ("2026-09", "2026-11"):
+        assert db.cost_by_source()["drafts"] == pytest.approx(0.08) and db.cost_by_source()["rules"] == 0
+    db.update_settings({"eur_usd_rate": "1.25"})  # dollar rows follow the rate, euro rows stay
+    assert db.cost_by_source("2026-09")["drafts"] == pytest.approx(0.11 / 1.25)
+    assert db.cost_by_source("2026-08") == dict.fromkeys(db.COST_SOURCES, 0.0)

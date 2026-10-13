@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "macros.html" import status_badge, icon %}
+{% from "cost_bar.html" import cost_track %}
 {% block title %}Inserate{% endblock %}
 {% block content %}
 {% set months = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"] %}
@@ -12,7 +13,9 @@
 </div>
 
 <section class="stats" aria-label="Überblick">
-  <div class="stat"><span class="label">Kosten {{ months[month_no - 1] if 1 <= month_no <= 12 else stats.month }}</span><span class="value">{{ stats.cost_month|eur }}</span><span class="sub">dieser Monat</span></div>
+  <div class="stat stat-cost{% if costs.over %} is-over{% endif %}"><span class="label">Kosten {{ months[month_no - 1] if 1 <= month_no <= 12 else stats.month }}</span><span class="value">{{ stats.cost_month|eur }}</span>
+    {%- if costs.budget %}{{ cost_track(costs, slim=True) }}{% endif %}
+    <span class="sub">{% if costs.over %}Budget erreicht{% elif costs.budget %}von {{ costs.budget|eur }} Budget{% else %}kein Limit{% endif %}</span></div>
   <div class="stat"><span class="label">Kosten gesamt</span><span class="value">{{ stats.cost_total|eur }}</span><span class="sub">seit Beginn</span></div>
   <div class="stat"><span class="label">Inserate</span><span class="value">{{ stats.listings_total }}</span><span class="sub">{{ stats.by_status.get("new", 0) }} neu · {{ stats.by_status.get("sent", 0) }} gesendet</span></div>
   <div class="stat"><span class="label">Entwürfe</span><span class="value">{{ stats.drafts_total }}</span><span class="sub">insgesamt erzeugt</span></div>

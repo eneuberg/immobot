@@ -93,14 +93,17 @@ Key eintragen. Weitere Instanz: den Block in `docker-compose.yaml` kopieren und 
   zwischendurch, ist der Vorschlag veraltet und wird neu erstellt.
 - **Verhalten:** Denkaufwand, Monatsbudget und Wechselkurs, Fotos & Exposé, Verzögerung und Pause des Bots und die Karte
   **Lernen**: die Schalter „Endversionen als Stil-Beispiele nutzen“ und „Gelernte Regeln nutzen“, darunter die gelernten
-  Regeln (an-/abschalten, bearbeiten, löschen, offene Vorschläge annehmen oder verwerfen, Verlauf; höchstens 25 aktive,
-  ab 15 der Hinweis, sie ins Profil einzuarbeiten) und die genutzten Beispiele mit „Nicht mehr als Beispiel nutzen“
+  Regeln (an-/abschalten, bearbeiten, löschen, offene Vorschläge annehmen oder verwerfen, „Regel hinzufügen“, Verlauf;
+  höchstens 25 aktive, ab 15 der Hinweis, sie ins Profil einzuarbeiten) und die genutzten Beispiele mit „Nicht mehr als Beispiel nutzen“
   (rückgängig zu machen; entfernte Beispiele stehen eingeklappt darunter mit „Wieder als Beispiel nutzen“).
 - **Zugänge:** KI-Anbieter (Key, Modell, Test, Modellliste), Telegram (Token, Chat, erlaubte User, Links und
   `/setdomain`-Anleitung für den 📝 Editor), Fredy (Webhook-Token, Fredy-Adresse). Die alten Adressen `/settings/ki`,
   `/settings/telegram` und `/credentials` leiten hierher weiter.
 
-Lern-Aufrufe (Regeln, Umschreiben) zählen wie Entwürfe zum Monatsbudget und zu den Kosten-Summen.
+Lern-Aufrufe (Regeln, Umschreiben) zählen wie Entwürfe zum Monatsbudget und zu den Kosten-Summen. Ein Balken auf der
+Status-Seite und unter Verhalten → Kosten zeigt die Kosten des Monats gegen das Budget, aufgeteilt nach Entwürfen,
+Überarbeitungen im Editor, Regel-Vorschlägen, Profil-Verbesserung und Test-Entwürfen (eine schmale Version steht über
+den Inseraten).
 
 Begriffe, wie sie überall in immobot heißen:
 
@@ -109,7 +112,8 @@ Begriffe, wie sie überall in immobot heißen:
 - **Endversion:** der Text nach „Fertig“ im Editor; er wird zum **Beispiel** für Claudes Stil.
 - **Rückmeldung:** alles, woraus immobot lernt: „Kürzer“, „Förmlicher“, „Neu“, „Anpassen“, Kritik im Editor und
   geänderte Endversionen.
-- **Regel:** ein kurzer Satz an Claude, den du nach „Fertig“ übernommen hast; gilt für jeden neuen Entwurf.
+- **Regel:** ein kurzer Satz an Claude, den du nach „Fertig“ übernommen oder selbst eingetragen hast; gilt für jeden
+  neuen Entwurf.
 - **Version:** ein gespeicherter Stand deines Profils (Verlauf im Reiter Profil).
 
 ## KI-Anbieter: Anthropic oder DeutschlandGPT
@@ -201,12 +205,15 @@ Nur immobot darf Updates abholen.
 
 Eine Seite pro Inserat (`/editor/<id>`), auf dem Handy gut bedienbar, zum Fertigmachen eines Entwurfs:
 
-- Text von Hand ändern, mit „Kopieren“ und „Speichern“; „Änderungen zum Original“ zeigt den Wort-Diff zu Claudes Entwurf.
+- Text von Hand ändern, mit „Kopieren“; der Text speichert sich selbst („Gespeichert ✓“, ohne JavaScript mit
+  „Zwischenspeichern“). „Änderungen zum Original“ zeigt den Wort-Diff zu Claudes Entwurf.
 - „Was soll Claude ändern?“: Claude überarbeitet den aktuellen Text samt deiner Änderungen (beliebig oft, mit Verlauf).
 - „Fertig“ speichert die Endversion. Sie dient künftig als Stil-Beispiel, und Claude schlägt (wenn „Gelernte Regeln
   nutzen“ an ist) bis zu 3 Regeln für künftige Entwürfe vor, die du übernimmst, umformulierst oder verwirfst. Steht beim
   „Fertig“ noch eine nicht geschickte Kritik im Feld, wird sie als Rückmeldung gespeichert und fließt in die
-  Regelvorschläge ein. Fehlen Vorschläge (z. B. nach einem Neustart), gibt es „Regeln vorschlagen lassen“.
+  Regelvorschläge ein. Claude vergleicht dafür seinen Entwurf mit der Endversion (auch einzelne geänderte Wörter) und
+  deiner Kritik; findet es keine Regel, sagt es, warum. Mit „Regel selbst eintragen“ geht es auch ohne Claude. Fehlen
+  Vorschläge (z. B. nach einem Neustart), gibt es „Regeln vorschlagen lassen“.
 - Danach: Kopieren, „Inserat öffnen“, „Als gesendet markieren“ (ändert auch die Telegram-Nachricht), „Weiter bearbeiten“.
 - Monatsbudget und höchstens 30 Claude-Aufrufe pro Inserat und Tag gelten auch hier.
 

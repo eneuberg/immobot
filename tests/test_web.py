@@ -1608,8 +1608,9 @@ def test_stat_tiles_in_euros(client):
                  cost_native=1.0)
     for path in ["/", "/status"]:
         page = client.get(path).text
-        assert page.count(">3,00 €</span>") == 2, path  # this month and in total
+        assert page.count('class="value">3,00 €</span>') == 2, path  # this month and in total
         assert "USD" not in page, path
+    assert '<span class="costbar-amount">3,00 €</span>' in client.get("/status").text  # "Entwürfe" in the cost bar
 
 
 # --- ImmoScout24 gallery & media route --------------------------------------------------

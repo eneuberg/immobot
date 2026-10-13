@@ -535,6 +535,7 @@ def listings_page(request: Request, status: str | None = None):
         "active": "listings",
         "listings": listings,
         "stats": db.stats(),
+        "costs": cost_overview(),
         "status_filter": status,
     })
 
@@ -945,6 +946,7 @@ def _learning_context() -> dict:
         "rules_active": sum(rule["status"] == "active" for rule in rules),
         "rules_history": history,
         "max_rules": learning.MAX_ACTIVE_RULES,
+        "rule_max_chars": learning.RULE_MAX_CHARS,
         "merge_hint_at": learning.RULES_MERGE_HINT_AT,
         "examples": examples,
         "examples_waiting": max(0, len(db.example_sessions(None)) - len(examples)),
@@ -957,6 +959,7 @@ LEARNING_MESSAGES = {  # ?done=… after an action on Verhalten → Lernen, show
     "rule_on": ("regeln", "Regel wird wieder genutzt."),
     "rule_off": ("regeln", "Regel abgeschaltet – sie bleibt gespeichert."),
     "rule_saved": ("regeln", "Regel gespeichert."),
+    "rule_added": ("regeln", "Regel gespeichert – sie gilt ab dem nächsten Entwurf."),
     "rule_deleted": ("regeln", "Regel gelöscht."),
     "rule_accepted": ("regeln", "Regel übernommen – sie gilt ab dem nächsten Entwurf."),
     "rule_rejected": ("regeln", "Vorschlag verworfen – Claude schlägt ihn nicht wieder vor."),
@@ -987,7 +990,8 @@ def _render_section(request: Request, section: str, *, values: dict | None = Non
     if template is None and section == "profil":
         context.update(_profile_context(request, all_versions))
     elif template is None and section == "verhalten":
-        context.update(effort_options=[(e, EFFORT_LABELS.get(e, e)) for e in settings.EFFORTS], **_learning_context())
+        context.update(effort_options=[(e, EFFORT_LABELS.get(e, e)) for e in settings.EFFORTS],
+                       costs=cost_overview(current), **_learning_context())
     elif template is None:
         saved_provider = settings.provider_of(current)
         context.update(
@@ -1244,14 +1248,21 @@ def settings_proposal_reject(request: Request, proposal_id: int):
 
 # --- settings: learned rules and examples (Verhalten → Lernen) ------------------------------
 
-def _learning_action(request: Request, apply, done: str, query: str = ""):
-    """Run a rule/example change; on success back to its card (PRG), else the tab with the error."""
+def _learning_action(request: Request, apply, done: str, query: str = "", **on_error):
+    """Run a rule/example change; on success back to its card (PRG), else the tab with the error (and `on_error`
+    for the template, e.g. the rule text that was refused)."""
     try:
         apply()
     except learning.LearningError as exc:
-        return _render_section(request, "verhalten", error=str(exc), status_code=409)
+        return _render_section(request, "verhalten", error=str(exc), status_code=409, **on_error)
     card = LEARNING_MESSAGES[done][0]
     return RedirectResponse(f"/settings/verhalten?done={done}{query}#{card}", status_code=303)
+
+
+@router.post("/settings/rules/add", dependencies=ACTION)
+def settings_rule_add(request: Request, text: str = Form("")):
+    """"Regel hinzufügen": a rule of the user's own, active at once."""
+    return _learning_action(request, lambda: learning.add_manual_rule(text), "rule_added", manual_rule=text)
 
 
 @router.post("/settings/rules/{rule_id}/active", dependencies=ACTION)
@@ -1535,6 +1546,51 @@ async def credentials_test(request: Request, target: str):
     return _render_zugaenge(request, test_result=result, show=target if target in settings.PROVIDERS else None)
 
 
+# --- costs: this month by source against the budget (Status, Verhalten → Kosten, Inserate) ------------------
+
+MONTH_NAMES = ("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober",
+               "November", "Dezember")
+# db.cost_by_source keys in bar order (similar colors not side by side), label, note. "other" only when > 0.
+COST_PARTS = (
+    ("drafts", "Entwürfe", "Telegram und Dashboard"),
+    ("editor", "Überarbeitungen im Editor", None),
+    ("rules", "Regel-Vorschläge", "nach „Fertig“ im Editor"),
+    ("rewrite", "Profil-Verbesserung", "„Aus Rückmeldungen verbessern“"),
+    ("test", "Test-Entwürfe", "Einstellungen"),
+    ("other", "Sonstiges", None),
+)
+
+
+def month_label(month: str) -> str:
+    """"2026-10" -> "Oktober 2026"."""
+    year, _, number = month.partition("-")
+    return f"{MONTH_NAMES[int(number) - 1]} {year}" if number.isdigit() and 1 <= int(number) <= 12 else month
+
+
+def cost_overview(current: dict | None = None) -> dict:
+    """This month's costs by source against the monthly budget, for the cost bar (cost_bar.html): total, budget
+    (0 = no limit), over (the budget is used up: no new Claude calls), used_pct (of the budget), limit_pct (where
+    the budget ends on the bar; the bar spans the larger of total and budget) and parts (key, label, note, eur, pct)."""
+    current = current or db.get_settings()
+    month = db.current_month()
+    by_source = db.cost_by_source(month)
+    total = sum(by_source.values())
+    budget = max(settings.as_float(current.get("monthly_budget_eur"), 0.0), 0.0)
+    scale = max(total, budget) or 1.0
+    parts = [{"key": key, "label": label, "note": note, "eur": by_source[key], "pct": by_source[key] / scale * 100}
+             for key, label, note in COST_PARTS if key != "other" or by_source[key] > 0]
+    return {
+        "month": month,
+        "month_label": month_label(month),
+        "total": total,
+        "budget": budget,
+        "over": budget > 0 and total >= budget,
+        "used_pct": round(total / budget * 100) if budget > 0 else None,
+        "limit_pct": budget / scale * 100 if budget > 0 else None,
+        "parts": parts,
+    }
+
+
 # --- status ---------------------------------------------------------------------
 
 @router.get("/status", dependencies=PAGE)
@@ -1569,5 +1625,6 @@ def status_page(request: Request):
         "events": _credential_events(),
         "version": settings.APP_VERSION,
         "stats": db.stats(),
+        "costs": cost_overview(current),
         "hook_url": _hook_url(request),
     })

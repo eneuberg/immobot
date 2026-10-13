@@ -2,9 +2,13 @@
    behaves, and what Claude learns (switches in the form; learned rules and examples below it, with their own forms). #}
 {% extends "settings_base.html" %}
 {% from "settings_macros.html" import field_error with context %}
+{% from "cost_bar.html" import cost_bar %}
+{% from "rule_macros.html" import manual_rule_form %}
 
+{# Where a rule comes from; proposed_text is empty for a rule the user wrote. #}
 {% macro origin(r) -%}
-{% if r.listing_id %}aus <a href="/listing/{{ r.listing_id }}">„{{ r.listing_title or "(ohne Titel)" }}“</a> · {% endif %}{{ r.created_at|local_time }}
+{% set link %}<a href="/listing/{{ r.listing_id }}">„{{ r.listing_title or "(ohne Titel)" }}“</a>{% endset %}
+{%- if r.proposed_text is none %}selbst eingetragen{% if r.listing_id %} bei {{ link }}{% endif %} · {% elif r.listing_id %}aus {{ link }} · {% endif %}{{ r.created_at|local_time }}
 {%- endmacro %}
 
 {% macro card_flash(name) %}{% if card == name and card_message %}<div class="flash ok" role="status"><span>{{ card_message }}</span>
@@ -32,6 +36,7 @@
 
   <article id="kosten" class="setting-card">
     <h2>Kosten</h2>
+    {{ cost_bar(costs) }}
     <div class="form-grid">
       <label>Monatsbudget in € <small>0 = kein Limit; ist es erreicht, entstehen keine neuen Entwürfe mehr</small>
         <input type="text" inputmode="decimal" name="monthly_budget_eur" value="{{ values.monthly_budget_eur }}"
@@ -182,7 +187,12 @@
   </ul>
   {% elif not rules_proposed %}
   <p class="empty-line">Noch keine gelernten Regeln. Drückst du im 📝 Editor auf „Fertig“, schlägt Claude welche vor –
-    du entscheidest, was gilt.</p>
+    du entscheidest, was gilt. Oder du trägst selbst eine ein.</p>
+  {% endif %}
+
+  {% if rules_active < max_rules %}
+  {% call manual_rule_form("/settings/rules/add", "rule-add-text", "Regel hinzufügen", open=manual_rule is defined or not (rules_in_use or rules_proposed),
+                           value=manual_rule or "", max_chars=rule_max_chars) %}{% endcall %}
   {% endif %}
 
   {% if rules_history %}
