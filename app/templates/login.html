@@ -9,9 +9,10 @@
       <span>immobot</span>
     </span>
     <h1>Anmelden</h1>
-    <p>Wohnungsinserate und Anschreiben-Entwürfe.</p>
+    <p>Wohnungsinserate und Anschreiben-Entwürfe.{% if next and next.startswith("/editor/") %} Danach geht es weiter zum Entwurfs-Editor.{% endif %}</p>
     {% if error %}<div class="flash err" role="alert">{{ error }}</div>{% endif %}
     <form method="post" action="/login">
+      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
       <label>Passwort
         <input type="password" name="password" autocomplete="current-password" required autofocus>
       </label>

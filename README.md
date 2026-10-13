@@ -162,6 +162,36 @@ kurzen Text aus der Suchliste. Nachteil: Fredy wird etwas leichter als Bot erkan
 **Wichtig:** Ab jetzt nicht mehr manuell `getUpdates` mit dem Bot-Token aufrufen (Fredys Doku schlägt das für die Chat-ID vor).
 Nur immobot darf Updates abholen.
 
+## Entwurfs-Editor
+
+Eine Seite pro Inserat (`/editor/<id>`), auf dem Handy gut bedienbar, zum Fertigmachen eines Entwurfs:
+
+- Text von Hand ändern, mit „Kopieren“ und „Speichern“; „Änderungen zum Original“ zeigt den Wort-Diff zu Claudes Entwurf.
+- „Was soll Claude ändern?“: Claude überarbeitet den aktuellen Text samt deiner Änderungen (beliebig oft, mit Verlauf).
+- „Fertig“ speichert die Endversion. Sie dient künftig als Stil-Beispiel, und Claude schlägt (wenn „Lernen“ an ist)
+  bis zu 3 Regeln für künftige Entwürfe vor, die du übernimmst, umformulierst oder verwirfst.
+- Danach: Kopieren, „Inserat öffnen“, „Als gesendet markieren“ (ändert auch die Telegram-Nachricht), „Weiter bearbeiten“.
+- Monatsbudget und höchstens 30 Claude-Aufrufe pro Inserat und Tag gelten auch hier.
+
+Aufrufen lässt er sich über „📝 Im Editor bearbeiten“ auf der Inseratsseite (mit Dashboard-Login) oder über den Button
+„📝 Editor“ unter einem Entwurf in Telegram, ohne Dashboard-Passwort:
+
+1. **Einmalig:** Bei [@BotFather](https://t.me/BotFather) `/setdomain` senden, den Bot wählen und die Domain des
+   Dashboards eintragen (z. B. `immobot.example.com`, ohne `https://`). Das ist je Bot nötig, also auch für jede weitere
+   Instanz mit eigenem Bot. Außerdem müssen unter Einstellungen → Zugänge die „Erlaubten Telegram-User-IDs“ gesetzt sein
+   (das Pairing trägt dich ein).
+2. Der Button ist ein Telegram-Login-Button: Telegram bestätigt beim Tippen, wer du bist. immobot prüft den signierten
+   Link (7 Tage gültig), die Telegram-Anmeldung (höchstens 10 Minuten alt, nur einmal verwendbar) und die erlaubten
+   User-IDs. Kopierte oder weitergeleitete Links funktionieren deshalb nicht.
+3. Danach gilt der Editor **in diesem Browser für dieses eine Inserat 24 Stunden** ab dem ersten Tippen (Cookie
+   `immobot_editor`). Einstellungen, andere Inserate und die Regel-Liste bleiben hinter dem Dashboard-Login. Ist die Zeit
+   um, kommt „Sitzung abgelaufen – bitte anmelden“; mit dem Dashboard-Login geht es auf derselben Seite weiter.
+
+Lehnt Telegram den Button ab (meist: Domain nicht per `/setdomain` verknüpft), schickt immobot die Nachricht ohne
+„📝 Editor“ und zeigt auf der Status- und der Zugänge-Seite einen Hinweis. Sobald die Domain verknüpft ist, ist der
+Button bei der nächsten Nachricht wieder da. Ohne bekannte öffentliche Adresse (`IMMOBOT_PUBLIC_URL` oder ein Aufruf
+des Dashboards über die Domain) gibt es den Button nicht.
+
 ## Sicherheit
 
 - Env-Variablen sind nur noch `DASHBOARD_PASSWORD` und `SESSION_SECRET`.

@@ -372,29 +372,46 @@ async def fredy_webhook(request: Request):
     return {"received": received, "new": len(new_ids)}
 
 
+NEXT_MAX = 300
+
+
+def safe_next(value) -> str | None:
+    """`value` if it is a local path to go to after login ("/editor/12"), else None: one leading "/", no "//",
+    no backslash, no scheme or host, no whitespace or control characters."""
+    if not isinstance(value, str) or not value.startswith("/") or value.startswith("//") or len(value) > NEXT_MAX:
+        return None
+    if "\\" in value or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        return None
+    parts = urlsplit(value)
+    return value if not parts.scheme and not parts.netloc else None
+
+
 @router.get("/login")
-async def login_page(request: Request):
+async def login_page(request: Request, next: str | None = None):
+    next_path = safe_next(next)
     if is_logged_in(request):
-        return RedirectResponse("/", status_code=303)
-    return render(request, "login.html")
+        return RedirectResponse(next_path or "/", status_code=303)
+    return render(request, "login.html", {"next": next_path})
 
 
 @router.post("/login", dependencies=[Depends(same_origin)])
-async def login(request: Request, password: str = Form("")):
+async def login(request: Request, password: str = Form(""), next: str = Form("")):
     # Limited per client IP, so a stranger hammering the login can't lock the owner out.
     client = _client_ip(request)
+    next_path = safe_next(next)
     if _too_many_failures(client):
-        return render(request, "login.html", {"error": "Zu viele Versuche, bitte warten."}, status_code=429)
+        return render(request, "login.html", {"error": "Zu viele Versuche, bitte warten.", "next": next_path},
+                      status_code=429)
     if not _password_ok(request, password):
         log.warning("Failed dashboard login from %s", client)
         await _count_failure(client)
-        return render(request, "login.html", {"error": "Falsches Passwort."}, status_code=401)
+        return render(request, "login.html", {"error": "Falsches Passwort.", "next": next_path}, status_code=401)
 
     request.session.clear()
     request.session["auth"] = True
     request.session["stamp"] = _session_stamp(request)
     request.session["login_at"] = request.session["seen_at"] = int(_now())
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse(next_path or "/", status_code=303)
 
 
 @router.post("/logout", dependencies=[Depends(same_origin)])
@@ -488,6 +505,7 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
         "contact_url": portals.safe_url(portals.contact_url(listing["provider"], listing["url"])),
         "fredy_url": portals.fredy_url(listing, db.get_settings()["fredy_base_url"]),
         "drafts": [_draft_view(d) for d in db.list_drafts(listing["id"])],
+        "final_session": db.latest_session(listing["id"], "done"),  # the editor's "Endversion"
         "error": error,
     }
 

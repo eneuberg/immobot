@@ -13,6 +13,7 @@
         integrity="sha384-7P0NVe9LPDbUCAF+fH2R8Egwz1uqNH83Ns/bfJY0fN2XCDBMUI2S9gGzIOIRBKsA" crossorigin="anonymous">
   <link rel="stylesheet" href="/static/app.css?v={{ STATIC_VERSION }}">
   <script src="/static/app.js?v={{ STATIC_VERSION }}"></script>
+  {% block head %}{% endblock %}
 </head>
 <body>
   {% block nav %}
