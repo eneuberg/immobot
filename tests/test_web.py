@@ -164,6 +164,21 @@ def test_foreign_origin_rejected(client):
     assert db.get_listing(lid)["status"] == "sent"
 
 
+def test_sibling_subdomain_rejected_via_sec_fetch_site(client):
+    # A page on another subdomain is "same-site", so the Strict cookie is sent; with no-referrer it posts
+    # "Origin: null". Sec-Fetch-Site still tells it apart from our own pages.
+    login(client)
+    lid = add_listing()
+    for site in ("same-site", "cross-site"):
+        r = client.post(f"/listing/{lid}/status", data={"status": "sent"},
+                        headers={"Origin": "null", "Sec-Fetch-Site": site})
+        assert r.status_code == 403
+    assert db.get_listing(lid)["status"] == "new"
+    r = client.post(f"/listing/{lid}/status", data={"status": "sent"},
+                    headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"})
+    assert r.status_code == 303 and db.get_listing(lid)["status"] == "sent"
+
+
 # --- webhook --------------------------------------------------------------------
 
 def test_webhook_requires_token(client):
@@ -1728,3 +1743,12 @@ def test_status_shows_last_picture_error(client):
     assert "Letzter Bilder-Fehler: keiner" in client.get("/status").text
     db.set_meta("media_last_error", "2026-10-12T10:00:00+00:00 Inserat 7 (ImmoScout24): Exposé nicht abrufbar (HTTP 404).")
     assert "Inserat 7 (ImmoScout24): Exposé nicht abrufbar (HTTP 404)." in client.get("/status").text
+
+
+def test_listing_status_change_refreshes_telegram(client, monkeypatch):
+    refreshed = []
+    monkeypatch.setattr(web.bot, "schedule_refresh", refreshed.append)
+    login(client)
+    lid = add_listing()
+    assert client.post(f"/listing/{lid}/status", data={"status": "sent"}).status_code == 303
+    assert refreshed == [lid]

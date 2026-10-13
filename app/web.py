@@ -219,8 +219,12 @@ async def require_login(request: Request) -> None:
 async def same_origin(request: Request) -> None:
     """Cheap CSRF backstop on top of SameSite=Strict: reject form posts from another site."""
     origin = request.headers.get("origin")
-    # "null" (privacy settings, sandboxed contexts) can't carry our SameSite=Strict cookie cross-site anyway.
+    # "null" (privacy settings, sandboxed contexts, no-referrer pages) can't carry our SameSite=Strict cookie
+    # cross-site anyway - but a sibling subdomain is "same-site", so Sec-Fetch-Site (sent by all current
+    # browsers) must say same-origin as well.
     if origin not in (None, "null") and urlsplit(origin).netloc != request.headers.get("host"):
+        raise HTTPException(status_code=403, detail="Anfrage von fremder Herkunft abgelehnt")
+    if request.headers.get("sec-fetch-site") not in (None, "same-origin", "none"):
         raise HTTPException(status_code=403, detail="Anfrage von fremder Herkunft abgelehnt")
 
 
@@ -559,11 +563,12 @@ async def listing_load_media(listing_id: int):
 
 
 @router.post("/listing/{listing_id}/status", dependencies=ACTION)
-def listing_set_status(listing_id: int, status: str = Form("")):
+async def listing_set_status(listing_id: int, status: str = Form("")):
     _listing_or_404(listing_id)
     if status not in settings.STATUSES:
         raise HTTPException(status_code=400, detail="Ungültiger Status")
     db.set_listing_status(listing_id, status)
+    bot.schedule_refresh(listing_id)  # the Telegram message shows the new state too
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)
 
 
