@@ -1,0 +1,16 @@
+{% extends "editor_base.html" %}
+{# Errors of the Telegram way in (/e/…), expired editor session, unknown listing. Texts come from editor.py only. #}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="ed-message">
+  <article>
+    <h1>{{ title }}</h1>
+    <p>{{ text }}</p>
+    {% if login_url %}
+    <a href="{{ login_url }}" role="button">{{ "Weiter zum Editor" if logged_in else "Im Dashboard anmelden" }}</a>
+    {% elif logged_in %}
+    <a href="/" role="button" class="secondary">Zu den Inseraten</a>
+    {% endif %}
+  </article>
+</div>
+{% endblock %}

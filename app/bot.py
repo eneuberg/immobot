@@ -16,6 +16,9 @@ Listings with a gallery (pictures from Fredy, or ImmoScout24 with the own fetch 
 a "🖼 Bilder" button: it sends the stored pictures as one album
 (uploaded bytes, max 10) under the listing's message. Every listing gets a "🔗 Dashboard" link when the
 dashboard's public address is known (IMMOBOT_PUBLIC_URL, else remembered from dashboard requests).
+Draft messages then also get "📝 Editor", a login_url button to the draft editor (editor_access.py). Telegram
+rejects such a message while the dashboard domain isn't linked to the bot (@BotFather /setdomain): it is then sent
+without that button and meta EDITOR_BUTTON_ERROR_META says why (shown on the status and settings pages).
 
 Token and chat id come from vault.py. Without a token the bot stays off ("nicht konfiguriert"); without
 a chat id it polls anyway so that "/pair" can connect a chat. reload() restarts it after a change.
@@ -79,6 +82,7 @@ NO_PICTURES_HERE = "Für dieses Inserat gibt es keine Bildergalerie."
 ALBUM_MAX = 10  # Telegram's limit per album
 CAPTION_MAX = 1024  # Telegram's limit per caption
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
+EDITOR_BUTTON_ERROR_META = "editor_login_url_error"  # "<ISO time> <German reason>" while Telegram rejects the button
 
 # Button action -> drafts.kind
 GENERATE_KINDS = {"gen": "initial", "new": "regenerate", "short": "shorter", "formal": "formal"}
@@ -169,16 +173,20 @@ def generating_text(listing: dict) -> str:
 
 
 def draft_keyboard(listing: dict) -> InlineKeyboardMarkup:
+    """Variants · "📝 Editor" + "✏️ Anpassen" · "📨 Inserat öffnen" · sent/skip · pictures/dashboard. Without the
+    editor button (public address unknown) "📨 Inserat öffnen" sits next to "✏️ Anpassen"."""
     lid = listing["id"]
-    row2 = [_button("✏️ Anpassen", "edit", lid)]
+    editor = editor_button(lid)
     link = portals.contact_url(listing.get("provider"), listing.get("url"))
-    if link:
-        row2.append(InlineKeyboardButton("📨 Inserat öffnen ↗", url=link))
-    rows = [
-        [_button("🔁 Neu", "new", lid), _button("✂️ Kürzer", "short", lid), _button("🎩 Förmlicher", "formal", lid)],
-        row2,
-        [_button("✅ Gesendet", "sent", lid), _button("❌ Uninteressant", "skip", lid)],
-    ]
+    open_listing = InlineKeyboardButton("📨 Inserat öffnen ↗", url=link) if link else None
+    rows = [[_button("🔁 Neu", "new", lid), _button("✂️ Kürzer", "short", lid), _button("🎩 Förmlicher", "formal", lid)]]
+    if editor:
+        rows.append([editor, _button("✏️ Anpassen", "edit", lid)])
+        if open_listing:
+            rows.append([open_listing])
+    else:
+        rows.append([_button("✏️ Anpassen", "edit", lid)] + ([open_listing] if open_listing else []))
+    rows.append([_button("✅ Gesendet", "sent", lid), _button("❌ Uninteressant", "skip", lid)])
     if _links_row(listing):
         rows.append(_links_row(listing))
     return InlineKeyboardMarkup(rows)
@@ -400,29 +408,89 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # --- Telegram calls ----------------------------------------------------------
 
-async def _send(tg_bot, chat_id: int, text: str, keyboard) -> object:
-    kwargs = dict(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML, reply_markup=keyboard, link_preview_options=NO_PREVIEW)
+def _has_login_url(keyboard) -> bool:
+    return isinstance(keyboard, InlineKeyboardMarkup) and any(
+        button.login_url is not None for row in keyboard.inline_keyboard for button in row)
+
+
+def without_login_url(keyboard: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
+    """The keyboard without login_url buttons ("📝 Editor"); rows left empty are dropped."""
+    rows = [[button for button in row if button.login_url is None] for row in keyboard.inline_keyboard]
+    return InlineKeyboardMarkup([row for row in rows if row])
+
+
+def _editor_button_rejected(exc: BadRequest) -> bool:
+    """Telegram's answer for a login_url whose domain isn't linked to the bot is "BOT_DOMAIN_INVALID"; other URL
+    problems of the button read similar. Matched loosely."""
+    text = str(exc).lower()
+    return any(word in text for word in ("url", "domain", "login"))
+
+
+def _note_editor_button_error(exc: BadRequest) -> None:
+    if "domain" in str(exc).lower():
+        reason = "Telegram lehnt den Editor-Button ab: Domain nicht mit dem Bot verknüpft (@BotFather → /setdomain)."
+    else:
+        reason = f"Telegram lehnt den Editor-Button ab ({_shorten(_describe(exc), 120)})."
+    db.set_meta(EDITOR_BUTTON_ERROR_META, f"{db.now_iso()} {reason}")
+    log.warning("Telegram rejected the editor button, sent without it: %s", _describe(exc))
+
+
+def editor_button_error() -> tuple[str, str] | None:
+    """(ISO time, German reason) of the last rejection of the "📝 Editor" button, or None while it works."""
+    value = db.get_meta(EDITOR_BUTTON_ERROR_META)
+    if not value:
+        return None
+    at, _, reason = value.partition(" ")
+    return at, reason
+
+
+async def _with_editor_fallback(call, keyboard):
+    """call(keyboard). If Telegram rejects a keyboard with the login_url "📝 Editor" button, note why and call once
+    more without it. A message accepted with the button clears the note."""
+    if not _has_login_url(keyboard):
+        return await call(keyboard)
     try:
-        return await tg_bot.send_message(**kwargs)
-    except RetryAfter as exc:  # flood control: wait as told, then try once more
-        wait = exc.retry_after
-        await asyncio.sleep(wait.total_seconds() if isinstance(wait, timedelta) else wait)
-        return await tg_bot.send_message(**kwargs)
+        result = await call(keyboard)
+    except BadRequest as exc:
+        if not _editor_button_rejected(exc):
+            raise
+        _note_editor_button_error(exc)
+        return await call(without_login_url(keyboard))
+    if db.get_meta(EDITOR_BUTTON_ERROR_META) is not None:
+        db.delete_meta(EDITOR_BUTTON_ERROR_META)
+    return result
+
+
+async def _send(tg_bot, chat_id: int, text: str, keyboard) -> object:
+    async def send(markup):
+        kwargs = dict(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML, reply_markup=markup,
+                      link_preview_options=NO_PREVIEW)
+        try:
+            return await tg_bot.send_message(**kwargs)
+        except RetryAfter as exc:  # flood control: wait as told, then try once more
+            wait = exc.retry_after
+            await asyncio.sleep(wait.total_seconds() if isinstance(wait, timedelta) else wait)
+            return await tg_bot.send_message(**kwargs)
+
+    return await _with_editor_fallback(send, keyboard)
 
 
 async def _edit(tg_bot, listing: dict, text: str, keyboard) -> None:
-    try:
-        await tg_bot.edit_message_text(
-            chat_id=configured_chat_id(),
-            message_id=listing["tg_message_id"],
-            text=text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=keyboard,
-            link_preview_options=NO_PREVIEW,
-        )
-    except BadRequest as exc:
-        if "not modified" not in str(exc).lower():
-            raise
+    async def edit(markup):
+        try:
+            await tg_bot.edit_message_text(
+                chat_id=configured_chat_id(),
+                message_id=listing["tg_message_id"],
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+                link_preview_options=NO_PREVIEW,
+            )
+        except BadRequest as exc:
+            if "not modified" not in str(exc).lower():
+                raise
+
+    await _with_editor_fallback(edit, keyboard)
 
 
 async def _show(tg_bot, listing: dict, note: str | None = None) -> None:
@@ -682,6 +750,23 @@ def schedule_announce(listing_ids: list[int]) -> None:
         log.warning("No Telegram chat connected – no follow-up for %d listing(s)", len(listing_ids))
         return
     task = asyncio.create_task(announce(_app.bot, chat, list(listing_ids)))
+    _tasks.add(task)
+    task.add_done_callback(_task_done)
+
+
+async def _refresh(tg_bot, listing_id: int) -> None:
+    async with _lock(listing_id):  # after a generation that is running right now
+        listing = db.get_listing(listing_id)
+        if listing is not None and listing.get("tg_message_id") and configured_chat_id() is not None:
+            await _show(tg_bot, listing)
+
+
+def schedule_refresh(listing_id: int) -> None:
+    """Non-blocking: let the listing's Telegram message show its current state (e.g. "✅ Gesendet" after the editor
+    marked it sent). No-op without a running bot; errors end up on the status page. Call from the event loop."""
+    if _app is None:
+        return
+    task = asyncio.create_task(_refresh(_app.bot, listing_id))
     _tasks.add(task)
     task.add_done_callback(_task_done)
 

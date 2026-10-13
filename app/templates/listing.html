@@ -34,6 +34,7 @@
       </dl>
       <div class="lh-actions">
         {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button">Inserat öffnen ↗</a>{% endif %}
+        <a href="/editor/{{ listing.id }}" role="button" class="secondary">📝 Im Editor bearbeiten</a>
         {% if fredy_url %}<a href="{{ fredy_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline">In Fredy öffnen ↗</a>{% endif %}
       </div>
       <form method="post" action="/listing/{{ listing.id }}/status" class="status-switch">
@@ -127,6 +128,21 @@
     </form>
   </div>
   <p class="help">Ruft Claude auf (kostet ein paar Cent) und dauert einige Sekunden. Der neueste Entwurf steht oben.</p>
+
+  {% if final_session %}
+  {# The text finished in the editor ("Fertig"): what was sent, or is about to be. #}
+  <article id="endversion" class="draft-card draft-final">
+    <header>
+      <div>
+        <span class="badge ok dot">Endversion</span>
+        <span class="when">{{ final_session.finished_at|local_time }}</span>
+      </div>
+      <button type="button" class="secondary outline copy-btn" data-copy="final-{{ final_session.id }}">Kopieren</button>
+    </header>
+    <pre class="draft" id="final-{{ final_session.id }}">{{ final_session.final_text }}</pre>
+    <footer><a href="/editor/{{ listing.id }}">Im Editor öffnen →</a></footer>
+  </article>
+  {% endif %}
 
   {% for d in drafts|reverse %}
   <article id="d{{ d.id }}" class="draft-card{% if loop.first %} draft-new{% endif %}">

@@ -699,3 +699,103 @@ details.notes-box .notes { margin: 0; font-size: .9rem; }
 .login p { color: var(--pico-muted-color); font-size: .92rem; }
 .login button { width: 100%; margin-bottom: 0; }
 .setting-card input[type=number] { max-width: 14rem; }
+
+/* --- Editor --- */
+/* Draft editor (editor.html, editor_message.html): mobile first, one column; from 1024 px the text on the left and
+   critique / rules on the right. The bar with Kopieren · Speichern · Fertig sticks to the bottom of the screen. */
+.ed-brand-note { grid-area: out; font-size: .85rem; font-weight: 500; color: var(--pico-muted-color); }
+.ed-head { margin: 0 0 1rem; }
+.ed-top { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .5rem; margin-bottom: .4rem; }
+.ed-head h1 { --pico-font-size: 1.3rem; margin: 0 0 .2rem; overflow-wrap: anywhere; }
+@media (min-width: 768px) { .ed-head h1 { --pico-font-size: 1.55rem; } }
+.ed-facts { margin: 0 0 .7rem; color: var(--pico-muted-color); font-size: .92rem; overflow-wrap: anywhere; }
+.ed-links { display: flex; flex-wrap: wrap; gap: .5rem; }
+.ed-links [role=button] { margin: 0; padding: .4rem .8rem; font-size: .88rem; }
+.ed-grid { display: grid; gap: 0 1.25rem; }
+.ed-main, .ed-side { min-width: 0; }
+@media (min-width: 1024px) {
+  .ed-grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); align-items: start; }
+  .ed-side { position: sticky; top: 1rem; }
+}
+.ed-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem; margin-bottom: .7rem; }
+.ed-card-head h2 { margin: 0 auto 0 0; }
+.ed-card-head h2 label { font-size: inherit; font-weight: inherit; margin: 0; }
+.ed-card-head .when { font-size: .8rem; color: var(--pico-muted-color); }
+.ed-unsaved { font-size: .78rem; font-weight: 600; color: var(--warn); }
+.ed-card h2 { margin-bottom: .6rem; }
+.ed-card h2 label { font-size: inherit; font-weight: inherit; margin: 0; }
+.ed-card .callout { font-size: .9rem; margin-bottom: .75rem; }
+#ed-text { min-height: 15rem; margin-bottom: 0; font-size: 1rem; line-height: 1.6; }
+.js #ed-text { overflow-y: hidden; resize: none; }
+.ed-card > .ed-bar {
+  position: sticky; bottom: 0; z-index: 4; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .45rem;
+  margin: .75rem calc(var(--pico-block-spacing-horizontal) * -1) calc(var(--pico-block-spacing-vertical) * -1);
+  padding: .6rem var(--pico-block-spacing-horizontal) calc(.6rem + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--pico-card-background-color) 90%, transparent);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  border-top: 1px solid var(--pico-card-border-color); border-radius: 0 0 var(--radius) var(--radius);
+}
+.ed-bar button { width: 100%; margin: 0; padding: .55rem .35rem; font-size: .92rem; white-space: nowrap; }
+.ed-bar button.copied { color: var(--ok); border-color: var(--ok); }
+@media (max-width: 359px) { .ed-bar button { padding: .55rem .2rem; font-size: .85rem; } }
+.ed-diff { margin: 0 0 1rem; }
+.ed-diff > summary .badge { font-weight: 600; }
+.ed-diff .diff { font-size: .93rem; }
+.ed-nodiff { margin: 0; font-size: .9rem; }
+.ed-card #ed-critique { margin-bottom: .5rem; }
+.ed-card .ed-revise { width: 100%; margin: 0; }
+.ed button[type=button] { font-weight: 600; }  /* Pico's [type=button] rule would make "Kopieren" thinner */
+.ed-card > .ed-history-title:first-child { margin-top: 0; }
+.ed-history-title { margin: 1.1rem 0 .35rem; font-size: .76rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--pico-muted-color); }
+.ed-history { list-style: none; margin: 0; padding: 0; font-size: .88rem; }
+.ed-history li {
+  list-style: none; margin: 0; padding: .35rem 0; display: grid; grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+  gap: .5rem; align-items: baseline; border-top: 1px solid var(--pico-muted-border-color);
+}
+.ed-history .n {
+  display: inline-grid; place-items: center; width: 1.4rem; height: 1.4rem; border-radius: 50%;
+  background: var(--surface-2); color: var(--pico-muted-color); font-size: .72rem; font-weight: 700;
+}
+.ed-history li:last-child .n { background: var(--accent-soft); color: var(--accent-strong); }
+.ed-history .t { overflow-wrap: anywhere; }
+.ed-history .when { font-size: .74rem; color: var(--pico-muted-color); white-space: nowrap; }
+.ed-done { border-color: var(--ok-line); }
+.ed-done pre.draft { margin-bottom: .9rem; }
+.ed-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.ed-actions > *, .ed-actions form, .ed-actions button { margin: 0; }
+.ed-actions form { display: contents; }
+.ed-done .ed-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr)); align-items: stretch; }
+.ed-done .ed-actions button, .ed-done .ed-actions [role=button] { width: 100%; text-align: center; }
+.ed-done .ed-actions .copy-btn { min-width: 0; }
+.ed-sent { justify-content: center; padding: .55rem .8rem; font-size: .88rem; }
+.ed-rules h2 { margin-bottom: .75rem; }
+.ed-wait {
+  display: flex; align-items: center; gap: .6rem; margin: 0 0 .5rem; padding: .75rem .9rem; border-radius: var(--radius-sm);
+  background: var(--accent-soft); color: var(--accent-strong); font-weight: 600;
+}
+.ed-rule { margin: 0; padding: .85rem 0; border-top: 1px solid var(--pico-muted-border-color); }
+.ed-rule:last-of-type { padding-bottom: 0; }
+.ed-rule-kind { margin: 0 0 .45rem; }
+.ed-rule-old { margin: 0 0 .45rem; font-size: .86rem; overflow-wrap: anywhere; }
+.ed-rule-text { margin: 0 0 .45rem; overflow-wrap: anywhere; }
+.ed-rule textarea { margin-bottom: .4rem; font-size: .93rem; }
+.js .ed-rule textarea { overflow-y: hidden; }
+.ed-reason { margin: 0 0 .6rem; font-size: .8rem; color: var(--pico-muted-color); }
+.ed-rule .ed-actions button { flex: 1 1 8rem; }
+.ed-norules { margin: 0; font-size: .9rem; }
+.ed-decided { list-style: none; margin: .85rem 0 0; padding: .75rem 0 0; border-top: 1px solid var(--pico-muted-border-color); font-size: .88rem; }
+.ed-decided li { list-style: none; margin: 0 0 .35rem; overflow-wrap: anywhere; }
+.ed-newer { align-items: center; }
+.ed-newer form { margin: .5rem 0 0; }
+.ed-newer button { width: auto; margin: 0; }
+.ed-empty form { margin: 1rem 0 0; }
+.ed-empty button { width: auto; margin: 0; }
+.ed-lost { margin: 0 0 1rem; }
+.ed-lost pre.draft { margin-bottom: .6rem; }
+.ed-message { max-width: 34rem; margin: 1.5rem auto 0; }
+.ed-message h1 { --pico-font-size: 1.3rem; }
+.ed-message p { color: var(--pico-muted-color); }
+.ed-message [role=button] { margin: 0; }
+/* The editor's final version on the listing page. */
+.draft-final { border-color: var(--ok-line); }
+.draft-card > footer a { font-size: .88rem; }

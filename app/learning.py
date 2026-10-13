@@ -138,7 +138,7 @@ def open_or_create_session(listing_id: int) -> dict | None:
     """The listing's editor session: its newest one (open, or done until reopen()), else a new open session from
     the newest non-test draft (original_text = current_text = that draft). None if the listing has no draft yet."""
     session = db.latest_session(listing_id)
-    if session is not None:
+    if session is not None and session["status"] != "superseded":
         return session
     draft = db.latest_draft(listing_id)
     if draft is None:
@@ -148,6 +148,35 @@ def open_or_create_session(listing_id: int) -> dict | None:
         session_id = db.create_session(listing_id, draft["id"], draft["text"], version["id"] if version else None)
     except sqlite3.IntegrityError:  # opened at the same moment elsewhere: there is exactly one open session
         return db.open_session(listing_id)
+    return db.get_session(session_id)
+
+
+def newer_draft(session: dict) -> dict | None:
+    """The listing's newest non-test draft if the session doesn't know it yet (made after the session started, e.g.
+    with "Kürzer" in Telegram or in the dashboard; the session's own revisions don't count), else None."""
+    draft = db.latest_draft(session["listing_id"])
+    known = session.get("last_draft_id") or session.get("base_draft_id") or 0
+    return draft if draft is not None and draft["id"] > known else None
+
+
+def start_new_round(listing_id: int) -> dict:
+    """"Neue Runde mit dem neueren Entwurf": a new open session from the newest non-test draft. An open session of
+    the listing becomes "superseded" (at most one session is open; its undecided rule proposals go), a done one
+    stays done (final text, example). Returns the new session. Raises LearningError: no newer draft, Claude busy."""
+    current = db.latest_session(listing_id)
+    draft = db.latest_draft(listing_id)
+    if draft is None or (current is not None and newer_draft(current) is None):
+        raise LearningError("Es gibt keinen neueren Entwurf.")
+    if current is not None and current["status"] == "open":
+        if current["id"] in _busy_sessions:
+            raise LearningError("Claude arbeitet gerade an diesem Text – bitte kurz warten.")
+        db.update_session(current["id"], status="superseded")
+        db.delete_proposed_rules(current["id"])
+    version = db.latest_version()
+    try:
+        session_id = db.create_session(listing_id, draft["id"], draft["text"], version["id"] if version else None)
+    except sqlite3.IntegrityError:  # started at the same moment elsewhere
+        raise LearningError("Für dieses Inserat ist schon eine andere Sitzung offen.") from None
     return db.get_session(session_id)
 
 
@@ -244,7 +273,7 @@ async def revise_in_editor(session_id: int, text: str, critique: str) -> dict:
         _busy_sessions.discard(session_id)
     draft_id = llm.store_draft(listing_id, "custom", result, critique)
     db.add_feedback(listing_id, "editor", "critique", critique, session_id=session_id, before_text=text)
-    db.update_session(session_id, current_text=result.text)
+    db.update_session(session_id, current_text=result.text, last_draft_id=draft_id)  # not a "newer draft" (newer_draft)
     return {"session": db.get_session(session_id), "draft": db.get_draft(draft_id)}
 
 

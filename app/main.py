@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import bot, db, media, vault, web
+from . import bot, db, editor, media, vault, web
 from .config import load_config
 from .web import router, security_headers
 
@@ -36,6 +36,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.state.config = config
 app.middleware("http")(security_headers)
+app.middleware("http")(editor.editor_headers)  # added later = runs outside security_headers, so its headers win
 app.add_middleware(
     SessionMiddleware,
     secret_key=config.session_secret,
@@ -58,4 +59,5 @@ class StaticAssets(StaticFiles):
 
 
 app.include_router(router)
+app.include_router(editor.router)
 app.mount("/static", StaticAssets(directory=web.STATIC_DIR), name="static")

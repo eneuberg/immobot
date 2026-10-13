@@ -1,0 +1,196 @@
+{% extends "editor_base.html" %}
+{% from "macros.html" import flashes, status_badge, text_diff %}
+{% block title %}Editor · {{ listing.title or "Inserat" }}{% endblock %}
+{% block head %}
+<script src="/static/editor.js?v={{ EDITOR_JS_VERSION }}" defer></script>
+{% if job and job.state == "running" %}<noscript><meta http-equiv="refresh" content="5"></noscript>{% endif %}
+{% endblock %}
+
+{# Every form posts the form token and the session it was made for (editor.py checks both). #}
+{% macro hidden() -%}
+<input type="hidden" name="token" value="{{ token }}">{% if session %}<input type="hidden" name="session_id" value="{{ session.id }}">{% endif %}
+{%- endmacro %}
+
+{% block content %}
+<div class="ed">
+  <header class="ed-head">
+    <div class="ed-top">{{ status_badge(listing.status) }}<span class="chip">{{ portal }}</span></div>
+    <h1>{{ listing.title or "(ohne Titel)" }}</h1>
+    {% if facts %}<p class="ed-facts">{{ facts|join(" · ") }}</p>{% endif %}
+    {% if contact_url or logged_in %}
+    <div class="ed-links">
+      {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline">📨 Inserat öffnen ↗</a>{% endif %}
+      {% if logged_in %}<a href="/listing/{{ listing.id }}" role="button" class="secondary outline">🔗 Dashboard</a>{% endif %}
+    </div>
+    {% endif %}
+  </header>
+
+  {{ flashes(message, error) }}
+  {% if lost_text %}
+  <details class="disclosure ed-lost" open>
+    <summary>Dein nicht gespeicherter Text</summary>
+    <div class="disclosure-body"><pre class="draft" id="ed-lost">{{ lost_text }}</pre>
+      <button type="button" class="secondary outline btn-sm copy-btn" data-copy="ed-lost">Kopieren</button></div>
+  </details>
+  {% endif %}
+
+  {% if not session %}
+  {# No draft yet: the first one is written here (llm.create_and_store_draft, source "editor"). #}
+  <div class="empty ed-empty">
+    <strong>Noch kein Entwurf</strong>
+    <p>Claude schreibt ein Anschreiben zu diesem Inserat – mit deinem Profil und Schreibstil. Dauert 10–60 Sekunden.</p>
+    <form method="post" action="/editor/{{ listing.id }}/draft">
+      {{ hidden() }}
+      <button type="submit" data-busy-label="Claude schreibt …">Entwurf erzeugen</button>
+    </form>
+  </div>
+
+  {% else %}
+  {% if newer %}
+  <div class="callout info ed-newer" role="status">
+    <div>
+      <p><strong>Es gibt einen neueren Entwurf</strong> ({{ newer.kind_label }}, {{ newer.created_at|local_time }}).</p>
+      <form method="post" action="/editor/{{ listing.id }}/new-round">
+        {{ hidden() }}
+        <button type="submit" class="btn-sm"{% if session.status == "open" and changed %} data-confirm="Deine Änderungen an dieser Fassung gehen verloren. Mit dem neueren Entwurf weitermachen?"{% endif %}>Neue Runde mit diesem Entwurf</button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if session.status == "open" %}
+  {# One form for text and critique: every button saves the hand edits (formaction picks the action). #}
+  <form method="post" action="/editor/{{ listing.id }}/save" class="ed-grid" id="ed-form" data-editor>
+    {{ hidden() }}
+    <div class="ed-main">
+      <article class="ed-card" id="text">
+        <header class="ed-card-head">
+          <h2><label for="ed-text">Dein Text</label></h2>
+          <span class="badge accent">Fassung {{ version_no }}</span>
+          <span class="ed-unsaved" data-unsaved hidden>nicht gespeichert</span>
+        </header>
+        {% if hint %}<div class="callout warn"><span><strong>Hinweis von Claude:</strong> <span class="pre-wrap">{{ hint }}</span></span></div>{% endif %}
+        <textarea id="ed-text" name="text" rows="12" maxlength="20000" spellcheck="true" data-autosize>{{ text }}</textarea>
+        <div class="ed-bar">
+          <button type="button" class="secondary outline" data-copy-field="ed-text">Kopieren</button>
+          <button type="submit" class="secondary" title="Speichern, ohne Claude">Speichern</button>
+          <button type="submit" formaction="/editor/{{ listing.id }}/finish" title="Endversion speichern">Fertig ✓</button>
+        </div>
+      </article>
+      <details class="disclosure ed-diff">
+        <summary>Änderungen zum Original <span class="badge {{ 'warn' if changed else '' }}" data-diff-state>{{ "geändert" if changed else "keine" }}</span></summary>
+        <div class="disclosure-body" data-diff data-original="{{ session.original_text }}">
+          {% if changed %}{{ text_diff(session.original_text|word_diff(text)|trim_diff) }}
+          {%- else %}<p class="muted ed-nodiff">Noch keine Änderungen – der Text ist Claudes Entwurf.</p>{% endif %}
+        </div>
+      </details>
+    </div>
+
+    <div class="ed-side">
+      <article class="ed-card" id="kritik">
+        <h2><label for="ed-critique">Was soll Claude ändern?</label></h2>
+        <textarea id="ed-critique" name="critique" rows="3" maxlength="500" placeholder="z. B. kürzer, Homeoffice erwähnen, weniger förmlich">{{ critique or "" }}</textarea>
+        <p class="help">Claude überarbeitet deinen aktuellen Text samt deiner Änderungen (10–60 Sekunden).
+          Heute {{ calls_today }} von {{ calls_limit }} Claude-Aufrufen für dieses Inserat.</p>
+        <button type="submit" formaction="/editor/{{ listing.id }}/revise" class="ed-revise" data-busy-label="Claude schreibt …">Überarbeiten lassen</button>
+        {% if history %}
+        <h3 class="ed-history-title">Verlauf</h3>
+        <ol class="ed-history">
+          <li><span class="n">1</span><span class="t">Claudes Entwurf</span></li>
+          {% for f in history %}
+          <li><span class="n">{{ loop.index + 1 }}</span><span class="t">„{{ f.text }}“</span><span class="when">{{ f.created_at|local_time }}</span></li>
+          {% endfor %}
+        </ol>
+        {% endif %}
+      </article>
+    </div>
+  </form>
+
+  {% else %}
+  {# Done: the final version, then Claude's rule proposals of this session. #}
+  <div class="ed-grid">
+    <div class="ed-main">
+      <article class="ed-card ed-done" id="ende">
+        <header class="ed-card-head">
+          <h2>Endversion</h2>
+          <span class="badge ok dot">fertig</span>
+          {% if session.finished_at %}<span class="when">{{ session.finished_at|local_time }}</span>{% endif %}
+        </header>
+        <pre class="draft" id="ed-final">{{ text }}</pre>
+        <div class="ed-actions">
+          <button type="button" class="copy-btn" data-copy="ed-final">Kopieren</button>
+          {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary">📨 Inserat öffnen ↗</a>{% endif %}
+          {% if listing.status == "sent" %}
+          <span class="badge ok ed-sent">✓ als gesendet markiert</span>
+          {% else %}
+          <form method="post" action="/editor/{{ listing.id }}/sent">{{ hidden() }}<button type="submit" class="secondary outline">✅ Als gesendet markieren</button></form>
+          {% endif %}
+          <form method="post" action="/editor/{{ listing.id }}/reopen">{{ hidden() }}<button type="submit" class="secondary outline">Weiter bearbeiten</button></form>
+        </div>
+      </article>
+      <details class="disclosure ed-diff">
+        <summary>Änderungen zum Original <span class="badge {{ 'warn' if changed else '' }}">{{ "geändert" if changed else "keine" }}</span></summary>
+        <div class="disclosure-body">
+          {% if changed %}{{ text_diff(session.original_text|word_diff(text)|trim_diff) }}
+          {%- else %}<p class="muted ed-nodiff">Keine Änderungen – die Endversion ist Claudes Entwurf.</p>{% endif %}
+        </div>
+      </details>
+    </div>
+
+    <div class="ed-side">
+      {% if use_rules or proposals or decided %}
+      <article class="ed-card ed-rules" id="regeln">
+        <h2>Regeln für künftige Entwürfe</h2>
+        {% if job and job.state == "running" %}
+        <p class="ed-wait" aria-busy="true" data-rules-poll="/editor/{{ listing.id }}/rules/status">Claude sucht nach Regeln …</p>
+        {% elif job and job.state == "error" %}
+        <div class="flash err" role="alert">Keine Regelvorschläge: {{ job_error }}</div>
+        <form method="post" action="/editor/{{ listing.id }}/rules/retry">{{ hidden() }}<button type="submit" class="secondary outline btn-sm">Nochmal versuchen</button></form>
+        {% endif %}
+
+        {% for rule in proposals %}
+        <form method="post" action="/editor/{{ listing.id }}/rules/{{ rule.id }}" class="ed-rule">
+          {{ hidden() }}
+          <p class="ed-rule-kind"><span class="badge {{ 'err' if rule.action == 'remove' else 'accent' }}">{{ rule.action_label }}</span></p>
+          {% if rule.action == "remove" %}
+          <p class="ed-rule-text"><del>{{ rule.text }}</del></p>
+          {% else %}
+          {% if rule.target_text %}<p class="ed-rule-old"><span class="muted">Bisher:</span> {{ rule.target_text }}</p>{% endif %}
+          <label class="sr-only" for="rule-{{ rule.id }}">Text der Regel</label>
+          <textarea id="rule-{{ rule.id }}" name="text" rows="3" maxlength="300" data-autosize>{{ rule.text }}</textarea>
+          {% endif %}
+          {% if rule.reason %}<p class="ed-reason">{{ rule.reason }}</p>{% endif %}
+          <div class="ed-actions">
+            <button type="submit" name="decision" value="accept" class="btn-sm">✅ Übernehmen</button>
+            <button type="submit" name="decision" value="reject" class="secondary outline btn-sm">❌ Verwerfen</button>
+          </div>
+        </form>
+        {% else %}
+        {% if not job and not decided %}<p class="muted ed-norules">Keine neuen Regelvorschläge aus dieser Runde.</p>{% endif %}
+        {% endfor %}
+
+        {% if decided %}
+        <ul class="ed-decided">
+          {% for rule in decided %}<li><span class="badge {{ 'ok' if rule.status == 'active' else '' }}">{{ rule.status_label }}</span> {{ rule.text }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+      </article>
+      {% endif %}
+
+      {% if history %}
+      <article class="ed-card">
+        <h3 class="ed-history-title">Verlauf</h3>
+        <ol class="ed-history">
+          <li><span class="n">1</span><span class="t">Claudes Entwurf</span></li>
+          {% for f in history %}
+          <li><span class="n">{{ loop.index + 1 }}</span><span class="t">„{{ f.text }}“</span><span class="when">{{ f.created_at|local_time }}</span></li>
+          {% endfor %}
+        </ol>
+      </article>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

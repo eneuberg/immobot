@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{# Editor pages: the dashboard navigation only with a dashboard login. An editor session from Telegram may use
+   nothing but its own editor page, so it gets just the brand (no links into the dashboard). #}
+{% block nav %}
+{% if logged_in %}{{ super() }}{% else %}
+<header class="site-header">
+  <div class="container bar">
+    <span class="brand">
+      <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 11 12 4.5 20 11v8.5a.5.5 0 0 1-.5.5H15v-5.5H9V20H4.5a.5.5 0 0 1-.5-.5z"/></svg></span>
+      <span>immobot</span>
+    </span>
+    <span class="ed-brand-note">Entwurfs-Editor</span>
+  </div>
+</header>
+{% endif %}
+{% endblock %}
