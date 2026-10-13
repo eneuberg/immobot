@@ -119,7 +119,7 @@ def max_images(settings: dict) -> int:
 
 
 def no_key_message(provider: str) -> str:
-    return "Kein " + PROVIDERS[provider]["label"] + "-API-Key hinterlegt – im Dashboard unter Einstellungen → KI & Kosten eintragen."
+    return "Kein " + PROVIDERS[provider]["label"] + "-API-Key hinterlegt – im Dashboard unter Einstellungen → Zugänge eintragen."
 
 
 def check_budget(settings: dict) -> None:

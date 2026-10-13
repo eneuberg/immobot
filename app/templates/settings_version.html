@@ -1,0 +1,35 @@
+{# Einstellungen → Profil → Verlauf → "Ansehen": what changed in each profile field since this version. #}
+{% extends "settings_base.html" %}
+{% from "macros.html" import text_diff %}
+
+{% block title %}Version #{{ version.id }} · Profil · Einstellungen{% endblock %}
+{% block intro %}Was sich seit dieser Version am Profil geändert hat.{% endblock %}
+
+{% block section %}
+<p class="backlink"><a href="/settings?verlauf=1#verlauf">← Verlauf</a></p>
+
+<div class="section-head">
+  <h2>Version #{{ version.id }}</h2>
+  <small class="muted">{{ source_label }} · {{ version.created_at|local_time }}{% if version.note %} · {{ version.note }}{% endif %}</small>
+</div>
+
+{% if is_current %}
+<div class="callout info"><span>Das Profil entspricht genau dieser Version.</span></div>
+{% else %}
+<p class="help">Rot durchgestrichen = stand in Version #{{ version.id }}, grün = steht jetzt im Profil.</p>
+{% endif %}
+
+{% for f in fields %}
+<article class="setting-card version-field{% if not f.changed %} is-same{% endif %}">
+  <div class="card-title"><h3>{{ f.label }}</h3>{% if not f.changed %}<span class="badge">unverändert</span>{% endif %}</div>
+  {% if f.changed %}{{ text_diff(f.old|word_diff(f.new)|trim_diff, "edit-diff") }}{% endif %}
+</article>
+{% endfor %}
+
+{% if not is_current %}
+<form method="post" action="/settings/version/{{ version.id }}/restore" class="actions">
+  <button type="submit" data-confirm="Version #{{ version.id }} wiederherstellen? Das aktuelle Profil bleibt als Version im Verlauf.">Version #{{ version.id }} wiederherstellen</button>
+</form>
+<p class="help">Legt eine neue Version an; nichts geht verloren.</p>
+{% endif %}
+{% endblock %}

@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import hmac
 import ipaddress
+import json
 import logging
 import math
 import re
@@ -26,13 +27,13 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import bot, db, is24, llm, media, portals, settings, textdiff, vault
+from . import bot, db, is24, learning, llm, media, portals, settings, textdiff, vault
 
 log = logging.getLogger(__name__)
 
@@ -53,25 +54,29 @@ DRAFT_KIND_LABELS = {
 EFFORT_LABELS = {"low": "niedrig", "medium": "mittel", "high": "hoch"}
 
 TEXT_SETTINGS = ["system_prompt", "profile", "wishes", "style"]  # textareas, each with a reset button
-CHECKBOX_SETTINGS = ["send_image", "paused", "is24_fetch"]
+CHECKBOX_SETTINGS = ["send_image", "paused", "is24_fetch", "use_examples", "use_rules"]
 TEXT_SETTING_LABELS = {"system_prompt": "System-Prompt", "profile": "Über mich", "wishes": "Wünsche", "style": "Schreibstil"}
 MAX_TEXT_CHARS = 20_000
 FREDY_BASE_URL_MAX = 200
 
-# "Einstellungen" has three sub-pages. Each form posts its section, so it saves only its own checkboxes.
+# "Einstellungen" has three tabs: Profil (used most), Verhalten, Zugänge (set up once). Each form posts its
+# section, so it saves only its own checkboxes.
 SETTINGS_SECTIONS = {
-    "texte": {"path": "/settings", "label": "Anschreiben", "template": "settings.html"},
-    "ki": {"path": "/settings/ki", "label": "KI & Kosten", "template": "settings_ki.html"},
-    "telegram": {"path": "/settings/telegram", "label": "Telegram & Fredy", "template": "settings_telegram.html"},
+    "profil": {"path": "/settings", "label": "Profil", "template": "settings.html"},
+    "verhalten": {"path": "/settings/verhalten", "label": "Verhalten", "template": "settings_verhalten.html"},
+    "zugaenge": {"path": "/settings/zugaenge", "label": "Zugänge", "template": "settings_zugaenge.html"},
 }
 SECTION_FIELDS = {
-    "texte": [*TEXT_SETTINGS, "target_words"],
-    "ki": ["provider", "model", "effort", "monthly_budget_eur", "eur_usd_rate", "send_image", "llm_max_images", "is24_fetch"],
-    "telegram": ["followup_delay_s", "paused", "fredy_base_url"],
+    "profil": [*TEXT_SETTINGS, "target_words"],
+    "verhalten": ["effort", "monthly_budget_eur", "eur_usd_rate", "send_image", "llm_max_images", "is24_fetch",
+                  "followup_delay_s", "paused", "use_examples", "use_rules"],
+    "zugaenge": ["provider", "model", "fredy_base_url"],  # the model list depends on the provider and its key
 }
 FIELD_SECTION = {field: section for section, fields in SECTION_FIELDS.items() for field in fields}
-AI_CREDENTIALS = {info["credential"]: provider for provider, info in settings.PROVIDERS.items()}  # managed on "KI & Kosten"
-OPTIONAL_CREDENTIALS = {"telegram_allowed_user_ids"}
+AI_CREDENTIALS = {info["credential"]: provider for provider, info in settings.PROVIDERS.items()}  # "Zugänge" → KI-Anbieter
+# Credentials that may stay empty. None at the moment: the allowlist is required since the editor login from
+# Telegram checks it (with an empty list the bot still lets every chat member press its buttons).
+OPTIONAL_CREDENTIALS: set[str] = set()
 
 GENERIC_DRAFT_ERROR = "Unerwarteter Fehler beim Generieren – Details im Log."
 
@@ -676,7 +681,7 @@ def _ai_status(current: dict) -> dict:
         "model_label": settings.model_label(provider, settings.model_of(current)),
         "key": key,
         "no_key_warning": (f"Kein {info['label']}-API-Key hinterlegt – Entwürfe schlagen fehl. "
-                           "Unter Einstellungen → KI & Kosten eintragen.") if key["source"] is None else None,
+                           "Unter Einstellungen → Zugänge eintragen.") if key["source"] is None else None,
     }
 
 
@@ -707,7 +712,7 @@ def _model_choices(request: Request, provider: str, model: str) -> dict:
 
 
 def _provider_panels(request: Request, current: dict) -> list[dict]:
-    """Everything "KI & Kosten" shows per provider (key status + hint, models, warning). Both panels are
+    """Everything "Zugänge → KI-Anbieter" shows per provider (key status + hint, models, warning). Both panels are
     rendered; app.js shows the one chosen in the select (without JS both stay visible)."""
     saved_provider, saved_model = settings.provider_of(current), settings.model_of(current)
     panels = []
@@ -728,20 +733,216 @@ def _credential_need(name: str, provider: str) -> str:
 
 
 def _settings_alerts(current: dict) -> dict[str, bool]:
-    """Per sub-page: is a required credential missing or unreadable? Marked with a dot in the sub-navigation."""
+    """Per tab: is a required credential missing or unreadable? Marked with a dot in the sub-navigation (all
+    credentials live on "Zugänge")."""
     provider = settings.provider_of(current)
     alerts = {section: False for section in SETTINGS_SECTIONS}
-    for c in vault.status():
-        if c["undecryptable"] or (c["source"] is None and _credential_need(c["name"], provider) == "required"):
-            alerts["ki" if c["name"] in AI_CREDENTIALS else "telegram"] = True
+    alerts["zugaenge"] = any(c["undecryptable"] or (c["source"] is None and _credential_need(c["name"], provider) == "required")
+                             for c in vault.status())
     return alerts
 
 
+def _int_param(value) -> int | None:
+    """A positive id from a query parameter, else None (the parameters only pick a message)."""
+    value = str(value or "").strip()
+    return int(value) if value.isdigit() and 0 < len(value) < 10 else None
+
+
+def _plural(count: int, one: str, many: str) -> str:
+    return f"{count} {one if count == 1 else many}"
+
+
+templates.env.globals["plural"] = _plural
+
+
+# --- settings: Profil (rewrite card, profile history) --------------------------------
+
+REWRITE_JOB_META = "rewrite_job"  # JSON: state (running | done | failed), started_at, finished_at, proposal_id, error
+GENERIC_REWRITE_ERROR = "Unerwarteter Fehler beim Erstellen des Vorschlags – Details im Log."
+VERSIONS_SHOWN = 15  # newest profile versions in "Verlauf"; "alle zeigen" lists the rest
+PROFILE_FIELD_ORDER = ("profile", "wishes", "style", "target_words", "system_prompt")  # as on the Profil page
+EDIT_DECISION_LABELS = {"accepted": "übernommen", "rejected": "nicht übernommen", "inapplicable": "nicht anwendbar"}
+_rewrite_task: asyncio.Task | None = None  # the running "Verbesserung vorschlagen" (a strong reference)
+
+
+def _set_rewrite_job(**job) -> dict:
+    db.set_meta(REWRITE_JOB_META, json.dumps(job))
+    return job
+
+
+def _rewrite_job() -> dict | None:
+    """The last "Verbesserung vorschlagen" job, or None. A job still marked as running without a live task was cut
+    off (restart) and counts as failed."""
+    try:
+        job = json.loads(db.get_meta(REWRITE_JOB_META) or "null")
+    except ValueError:
+        job = None
+    if not isinstance(job, dict):
+        return None
+    if job.get("state") == "running" and (_rewrite_task is None or _rewrite_task.done()):
+        job = _set_rewrite_job(state="failed", started_at=job.get("started_at"), finished_at=db.now_iso(),
+                               error="Abgebrochen (Neustart?) – bitte noch einmal starten.")
+    return job
+
+
+async def _run_rewrite(started_at: str) -> None:
+    """Background task of POST /settings/rewrite: learning.propose_rewrite() may take minutes."""
+    try:
+        proposal = await learning.propose_rewrite()
+    except llm.LLMError as exc:  # LearningError and BudgetExceeded too: short German texts
+        _set_rewrite_job(state="failed", started_at=started_at, finished_at=db.now_iso(), error=str(exc))
+    except Exception:
+        log.exception("Profile rewrite proposal failed")
+        _set_rewrite_job(state="failed", started_at=started_at, finished_at=db.now_iso(), error=GENERIC_REWRITE_ERROR)
+    else:
+        _set_rewrite_job(state="done", started_at=started_at, finished_at=db.now_iso(), proposal_id=proposal["id"])
+
+
+def _profile_context(request: Request, all_versions: bool = False) -> dict:
+    """The rewrite card ("Aus Feedback verbessern") and the profile history of the Profil tab."""
+    rewrite = learning.rewrite_status()  # first: marks a pending proposal stale when the profile changed meanwhile
+    job = _rewrite_job()
+    if job and job.get("error"):
+        job = {**job, "error": redact(request, job["error"])}
+    newest = next(iter(db.list_rewrite_proposals(limit=1)), None)
+    versions = db.list_versions()
+    return {
+        "rewrite": rewrite,
+        "job": job,
+        "stale_proposal": newest if newest and newest["status"] == "stale" else None,
+        "versions": versions if all_versions else versions[:VERSIONS_SHOWN],
+        "versions_total": len(versions),
+        "version_labels": learning.VERSION_SOURCE_LABELS,
+        "verlauf_open": all_versions,
+    }
+
+
+def _profile_message(saved, reset, version, applied, failed, rejected, restored) -> str | None:
+    """The flash on the Profil tab after a redirect. `version`: the profile version the action created, if any."""
+    version_id = _int_param(version)
+    suffix = f" – Version #{version_id}." if version_id else "."
+    if saved:
+        return "Gespeichert" + suffix
+    if reset in TEXT_SETTING_LABELS:
+        return f"„{TEXT_SETTING_LABELS[reset]}“ auf Standard zurückgesetzt" + suffix
+    if _int_param(restored):
+        if version_id:
+            return f"Version #{_int_param(restored)} wiederhergestellt – jetzt Version #{version_id}."
+        return f"Das Profil entspricht schon Version #{_int_param(restored)} – nichts geändert."
+    if _int_param(rejected):
+        return "Vorschlag verworfen. Die Rückmeldungen bleiben für den nächsten Vorschlag."
+    proposal = db.get_rewrite_proposal(_int_param(applied)) if _int_param(applied) else None
+    if proposal and proposal["status"] == "accepted":
+        count = sum(edit.get("decision") == "accepted" for edit in proposal["edits"])
+        if proposal["applied_version_id"]:
+            message = f"{_plural(count, 'Änderung', 'Änderungen')} übernommen – Version #{proposal['applied_version_id']}."
+        else:
+            message = "Nichts übernommen. Die Rückmeldungen gelten als verarbeitet."
+        if _int_param(failed):
+            message += f" {_plural(_int_param(failed), 'Änderung passte', 'Änderungen passten')} nicht mehr."
+        return message
+    return None
+
+
+def _evidence_labels(proposal: dict) -> dict[str, str]:
+    """Short German text per evidence label of a proposal's edits: F… feedback, S… editor session, R… rule."""
+    wanted = {label for edit in proposal["edits"] for label in edit.get("evidence") or []}
+    labels: dict[str, str] = {}
+    if any(label.startswith("F") for label in wanted):
+        for row in db.list_feedback():
+            key = f"F{row['id']}"
+            if key not in wanted:
+                continue
+            where = " · ".join(part for part in (learning.FEEDBACK_SOURCE_LABELS.get(row["source"]),
+                                                 row.get("listing_title")) if part)
+            if row["kind"] == "quick":
+                labels[key] = f"Button „{learning.QUICK_LABELS.get(row['text'], row['text'])}“ ({where})"
+            else:
+                text = " ".join(row["text"].split())
+                labels[key] = f"„{text if len(text) <= 160 else text[:159] + '…'}“ ({where})"
+    for key in wanted:
+        number = int(key[1:]) if key[1:].isdigit() else None
+        if number is None:
+            continue
+        if key.startswith("S") and (session := db.get_session(number)):
+            listing = db.get_listing(session["listing_id"]) or {}
+            labels[key] = f"Deine Endversion zu „{listing.get('title') or '(ohne Titel)'}“"
+        elif key.startswith("R") and (rule := db.get_rule(number)):
+            labels[key] = f"Regel „{rule['text']}“"
+    return labels
+
+
+def _proposal_view(proposal: dict) -> list[dict]:
+    """The edits of a proposal for the page: a pending one in the context of its field (what the field would look
+    like), a decided or stale one as old → new. Checkbox default: on, except for facts."""
+    pending = proposal["status"] == "pending"
+    values = db.current_profile_values()
+    evidence = _evidence_labels(proposal)
+    edits = []
+    for edit in proposal["edits"]:
+        applicable = edit.get("applicable", True) and edit.get("decision") != "inapplicable"
+        if pending and applicable:
+            before, after = learning.edit_preview(edit, values)
+        else:
+            before, after = edit.get("old") or "", edit.get("new") or ""
+        rules = [db.get_rule(rule_id) for rule_id in edit.get("covers_rules") or []]
+        edits.append({
+            **edit,
+            "applicable": applicable,
+            "label": learning.FIELD_LABELS.get(edit["field"], edit["field"]),
+            "before": before,
+            "after": after,
+            "checked": applicable and not edit.get("is_fact"),
+            "decision_label": EDIT_DECISION_LABELS.get(edit.get("decision")),
+            "evidence_items": [evidence[label] for label in edit.get("evidence") or [] if label in evidence],
+            "covers": [rule["text"] for rule in rules if rule],
+        })
+    return edits
+
+
+# --- settings: Verhalten → Lernen ---------------------------------------------------
+
+def _learning_context() -> dict:
+    """Learned rules by state, and the editor texts the prompt uses as examples."""
+    rules = learning.list_rules()
+    by_id = {rule["id"]: rule for rule in rules}
+    history = [rule for rule in rules if rule["status"] in ("merged", "rejected", "replaced")]
+    history.sort(key=lambda rule: (rule["decided_at"] or rule["created_at"] or "", rule["id"]), reverse=True)
+    examples = db.example_sessions(llm.EXAMPLE_COUNT)
+    return {
+        "rules_proposed": [{**rule, "target": by_id.get(rule["replaces_rule_id"])}
+                           for rule in rules if rule["status"] == "proposed"],
+        # active and switched-off rules in one list, oldest first: a toggled rule stays where it is
+        "rules_in_use": [rule for rule in rules if rule["status"] in ("active", "inactive")],
+        "rules_active": sum(rule["status"] == "active" for rule in rules),
+        "rules_history": history,
+        "max_rules": learning.MAX_ACTIVE_RULES,
+        "merge_hint_at": learning.RULES_MERGE_HINT_AT,
+        "examples": examples,
+        "examples_waiting": max(0, len(db.example_sessions(None)) - len(examples)),
+        "example_count": llm.EXAMPLE_COUNT,
+    }
+
+
+LEARNING_MESSAGES = {  # ?done=… after an action on Verhalten → Lernen, shown in its card
+    "rule_on": ("vorlieben", "Regel wird wieder genutzt."),
+    "rule_off": ("vorlieben", "Regel abgeschaltet – sie bleibt gespeichert."),
+    "rule_saved": ("vorlieben", "Regel gespeichert."),
+    "rule_deleted": ("vorlieben", "Regel gelöscht."),
+    "rule_accepted": ("vorlieben", "Vorschlag übernommen."),
+    "rule_rejected": ("vorlieben", "Vorschlag verworfen – Claude schlägt ihn nicht wieder vor."),
+    "example_off": ("beispiele", "Wird nicht mehr als Beispiel genutzt."),
+}
+
+
+# --- settings: rendering and the three tabs -------------------------------------------
+
 def _render_section(request: Request, section: str, *, values: dict | None = None, errors=None, message=None,
-                    error=None, show: str | None = None, status_code=200, **extra):
-    """One of the three "Einstellungen" pages. `values`: what its form shows (the stored settings, or the
-    user's input after a validation error). `show`: provider to preselect on "KI & Kosten" (e.g. after
-    saving its key); the saved one otherwise. Never gets a secret value."""
+                    error=None, show: str | None = None, status_code=200, template: str | None = None,
+                    all_versions: bool = False, **extra):
+    """One of the three "Einstellungen" tabs (or, with `template`, a sub-page of one). `values`: what its form shows
+    (the stored settings, or the user's input after a validation error). `show`: provider to preselect on
+    "Zugänge" (e.g. after saving its key); the saved one otherwise. Never gets a secret value."""
     current = db.get_settings()
     context = {
         "active": "settings",
@@ -752,19 +953,21 @@ def _render_section(request: Request, section: str, *, values: dict | None = Non
         "errors": errors or {},
         "message": message,
         "error": error,
-        **extra,
     }
-    if section == "ki":
+    if template is None and section == "profil":
+        context.update(_profile_context(request, all_versions))
+    elif template is None and section == "verhalten":
+        context.update(effort_options=[(e, EFFORT_LABELS.get(e, e)) for e in settings.EFFORTS], **_learning_context())
+    elif template is None:
         saved_provider = settings.provider_of(current)
         context.update(
             panels=_provider_panels(request, current),
             saved_provider=saved_provider,
             shown_provider=show if show in settings.PROVIDERS else saved_provider,
-            effort_options=[(e, EFFORT_LABELS.get(e, e)) for e in settings.EFFORTS],
+            **_zugaenge_context(request, current),
         )
-    elif section == "telegram":
-        context.update(_telegram_context(request, current))
-    return render(request, SETTINGS_SECTIONS[section]["template"], context, status_code=status_code)
+    context.update(extra)
+    return render(request, template or SETTINGS_SECTIONS[section]["template"], context, status_code=status_code)
 
 
 SETTINGS_MESSAGES = {
@@ -775,29 +978,49 @@ SETTINGS_MESSAGES = {
 
 
 @router.get("/settings", dependencies=PAGE)
-def settings_page(request: Request, saved: str | None = None, reset: str | None = None):
-    message = None
-    if saved:
-        message = SETTINGS_MESSAGES["saved"]
-    elif reset in TEXT_SETTING_LABELS:
-        message = f"„{TEXT_SETTING_LABELS[reset]}“ auf Standard zurückgesetzt."
-    return _render_section(request, "texte", message=message)
+def settings_page(request: Request, saved: str | None = None, reset: str | None = None, version: str | None = None,
+                  applied: str | None = None, failed: str | None = None, rejected: str | None = None,
+                  restored: str | None = None, verlauf: str | None = None):
+    message = _profile_message(saved, reset, version, applied, failed, rejected, restored)
+    return _render_section(request, "profil", message=message, all_versions=verlauf == "alle",
+                           verlauf_open=bool(verlauf))
 
 
-@router.get("/settings/ki", dependencies=PAGE)
-def settings_ki_page(request: Request, saved: str | None = None, cleared: str | None = None, show: str | None = None):
-    message = None
-    if saved in AI_CREDENTIALS:
+@router.get("/settings/verhalten", dependencies=PAGE)
+def settings_verhalten_page(request: Request, saved: str | None = None, done: str | None = None):
+    card, card_message = LEARNING_MESSAGES.get(done or "", (None, None))
+    return _render_section(request, "verhalten", message=SETTINGS_MESSAGES["saved"] if saved else None,
+                           card=card, card_message=card_message)
+
+
+@router.get("/settings/zugaenge", dependencies=PAGE)
+def settings_zugaenge_page(request: Request, saved: str | None = None, cleared: str | None = None,
+                           show: str | None = None, token: str | None = None):
+    message = error = new_token = None
+    if saved in vault.LABELS:
         message = f"„{vault.LABELS[saved]}“ gespeichert."
     elif saved:
         message = SETTINGS_MESSAGES.get(saved, SETTINGS_MESSAGES["saved"])
-    elif cleared in AI_CREDENTIALS:
+    elif cleared in vault.LABELS:
         message = f"„{vault.LABELS[cleared]}“ entfernt."
-    return _render_section(request, "ki", message=message, show=show)
+    elif token is not None:
+        new_token = _take_once(token)
+        if new_token is None:
+            error = "Der neue Webhook-Token wurde schon angezeigt (oder die 5 Minuten sind um). Bei Bedarf neu erzeugen."
+    return _render_section(request, "zugaenge", message=message, error=error, new_token=new_token, show=show)
+
+
+@router.get("/settings/ki", dependencies=PAGE)
+@router.get("/settings/telegram", dependencies=PAGE)
+@router.get("/credentials", dependencies=PAGE)
+def settings_moved(request: Request):
+    """Former pages ("KI & Kosten", "Telegram & Fredy", the old "Zugänge") - now all on "Zugänge" (old bookmarks)."""
+    kept = {key: value for key, value in request.query_params.items() if key in ("show", "saved", "cleared", "token")}
+    return RedirectResponse("/settings/zugaenge" + (f"?{urlencode(kept)}" if kept else ""), status_code=303)
 
 
 async def _refresh_models_quietly(provider: str) -> None:
-    """Fetch the live model list; a failure is cached by llm.refresh_models and shown on /settings."""
+    """Fetch the live model list; a failure is cached by llm.refresh_models and shown on "Zugänge"."""
     try:
         await llm.refresh_models(provider)
     except llm.LLMError:
@@ -813,7 +1036,7 @@ def _form_provider(provider: str) -> str:
 @router.post("/settings/provider-key", dependencies=ACTION)
 async def settings_provider_key(request: Request, provider: str = Form(""), value: str = Form(""),
                                 password: str = Form("")):
-    """Save a provider's API key from its panel (same rules as on /credentials), then load its model list.
+    """Save a provider's API key from its panel (same rules as the other credentials), then load its model list.
     Doesn't switch the provider: that is saved with the settings form."""
     provider = _form_provider(provider)
     name = settings.PROVIDERS[provider]["credential"]
@@ -826,14 +1049,14 @@ async def settings_provider_key(request: Request, provider: str = Form(""), valu
     except vault.InvalidValue as exc:  # the message never contains the value
         return error_page(request, error=f"{vault.LABELS[name]}: {exc}", status_code=400)
     await _refresh_models_quietly(provider)
-    return RedirectResponse(f"/settings/ki?saved=key&show={provider}", status_code=303)
+    return RedirectResponse(f"/settings/zugaenge?saved=key&show={provider}", status_code=303)
 
 
 @router.post("/settings/models/refresh", dependencies=ACTION)
 async def settings_models_refresh(provider: str = Form("")):
     provider = _form_provider(provider)
     await _refresh_models_quietly(provider)
-    return RedirectResponse(f"/settings/ki?saved=models&show={provider}", status_code=303)
+    return RedirectResponse(f"/settings/zugaenge?saved=models&show={provider}", status_code=303)
 
 
 @router.post("/settings", dependencies=ACTION)
@@ -848,12 +1071,13 @@ async def settings_save(request: Request):
         return _render_section(request, page, values=shown, errors=errors, error="Nicht gespeichert, bitte Eingaben prüfen.",
                                show=values.get("provider"), status_code=400)
     db.update_settings(values)
-    db.snapshot_profile("manual")  # a new profile version, if a profile field really changed
+    version_id = db.snapshot_profile("manual")  # a new profile version, if a profile field really changed
     provider = values.get("provider")
     if (provider and provider != settings.provider_of(current) and llm.cached_models(provider) is None
             and vault.get(settings.PROVIDERS[provider]["credential"])):
         await _refresh_models_quietly(provider)  # first switch to a provider: check which models its key offers
-    return RedirectResponse(SETTINGS_SECTIONS[section or "texte"]["path"] + "?saved=1", status_code=303)
+    query = "?saved=1" + (f"&version={version_id}" if version_id else "")
+    return RedirectResponse(SETTINGS_SECTIONS[section or "profil"]["path"] + query, status_code=303)
 
 
 @router.post("/settings/reset/{key}", dependencies=ACTION)
@@ -861,47 +1085,233 @@ def settings_reset(key: str):
     if key not in TEXT_SETTINGS:
         raise HTTPException(status_code=404, detail="Unbekannte Einstellung")
     db.reset_setting(key)
-    db.snapshot_profile("reset", f"„{TEXT_SETTING_LABELS[key]}“ auf Standard")
-    return RedirectResponse(f"/settings?reset={key}", status_code=303)
+    version_id = db.snapshot_profile("reset", f"„{TEXT_SETTING_LABELS[key]}“ auf Standard")
+    return RedirectResponse(f"/settings?reset={key}" + (f"&version={version_id}" if version_id else ""), status_code=303)
 
 
 @router.post("/settings/test", dependencies=ACTION)
 async def settings_test(request: Request):
     listing = db.latest_listing()
     if listing is None:
-        return _render_section(request, "texte", error="Noch kein Inserat vorhanden – der Test braucht mindestens eins.")
+        return _render_section(request, "profil", error="Noch kein Inserat vorhanden – der Test braucht mindestens eins.")
     try:
         draft = await llm.create_and_store_draft(listing["id"], "test", source="dashboard")  # tests never count as feedback
     except Exception as exc:
         message = str(exc) if isinstance(exc, llm.LLMError) else GENERIC_DRAFT_ERROR
         if not isinstance(exc, llm.LLMError):
             log.exception("Test draft failed")
-        return _render_section(request, "texte", error=redact(request, message))
-    return _render_section(request, "texte", test={"listing": listing, "draft": _draft_view(draft)})
+        return _render_section(request, "profil", error=redact(request, message))
+    return _render_section(request, "profil", test={"listing": listing, "draft": _draft_view(draft)})
 
 
-# --- credentials (API keys on "KI & Kosten", the rest on "Telegram & Fredy") ---------------
+# --- settings: profile history (Profil → Verlauf) ------------------------------------
 
-CREDENTIAL_HELP = {  # the AI keys are explained on "KI & Kosten" itself
+def _version_or_404(version_id: int) -> dict:
+    version = db.get_version(version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="Version nicht gefunden")
+    return version
+
+
+@router.get("/settings/version/{version_id}", dependencies=PAGE)
+def settings_version_page(request: Request, version_id: int):
+    """"Ansehen": what changed in each profile field since this version (version → current)."""
+    version = _version_or_404(version_id)
+    current = db.current_profile_values()
+    fields = [{"key": key, "label": learning.FIELD_LABELS[key], "old": version["data"][key], "new": current[key],
+               "changed": version["data"][key] != current[key]} for key in PROFILE_FIELD_ORDER]
+    return _render_section(request, "profil", template="settings_version.html", version=version, fields=fields,
+                           is_current=not any(field["changed"] for field in fields),
+                           source_label=learning.VERSION_SOURCE_LABELS.get(version["source"], version["source"]))
+
+
+@router.post("/settings/version/{version_id}/restore", dependencies=ACTION)
+def settings_version_restore(version_id: int):
+    _version_or_404(version_id)
+    new_id = db.restore_version(version_id)  # a new version "restore", or None if the profile already was like that
+    return RedirectResponse(f"/settings?restored={version_id}" + (f"&version={new_id}" if new_id else ""),
+                            status_code=303)
+
+
+# --- settings: improve the profile from feedback (Profil → "Aus Feedback verbessern") -------
+
+@router.post("/settings/rewrite", dependencies=ACTION)
+async def settings_rewrite_start(request: Request):
+    """"Verbesserung vorschlagen": starts learning.propose_rewrite() in the background (it may take minutes) and
+    returns at once. The Profil tab shows the job and polls /settings/rewrite/status. One job at a time."""
+    global _rewrite_task
+    job = _rewrite_job()
+    if not (job and job.get("state") == "running"):
+        if not learning.rewrite_status()["enabled"]:
+            return _render_section(request, "profil", status_code=409,
+                                   error=f"Noch zu wenig Rückmeldungen – ab {learning.REWRITE_MIN_FEEDBACK} "
+                                         "Rückmeldungen oder einer aktiven Regel.")
+        started_at = db.now_iso()
+        _set_rewrite_job(state="running", started_at=started_at)
+        _rewrite_task = asyncio.create_task(_run_rewrite(started_at))
+    return RedirectResponse("/settings#verbessern", status_code=303)
+
+
+@router.get("/settings/rewrite/status", dependencies=PAGE)
+def settings_rewrite_status():
+    """For app.js: {"state": "none" | "running" | "done" | "failed", "url": where to go once it is over}."""
+    job = _rewrite_job() or {}
+    state = job.get("state") or "none"
+    url = f"/settings/vorschlag/{job['proposal_id']}" if state == "done" and job.get("proposal_id") else "/settings"
+    return {"state": state, "url": url}
+
+
+@router.post("/settings/rewrite/dismiss", dependencies=ACTION)
+def settings_rewrite_dismiss():
+    """Hide the error of a failed job."""
+    job = _rewrite_job()
+    if job and job.get("state") == "failed":
+        db.delete_meta(REWRITE_JOB_META)
+    return RedirectResponse("/settings", status_code=303)
+
+
+def _proposal_or_404(proposal_id: int) -> dict:
+    proposal = learning.get_proposal(proposal_id)  # a pending one whose profile changed becomes "stale" here
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="Vorschlag nicht gefunden")
+    return proposal
+
+
+def _render_proposal(request: Request, proposal_id: int, *, error: str | None = None, status_code: int = 200):
+    proposal = _proposal_or_404(proposal_id)
+    return _render_section(request, "profil", template="settings_vorschlag.html", proposal=proposal,
+                           edits=_proposal_view(proposal), error=error, status_code=status_code)
+
+
+@router.get("/settings/vorschlag/{proposal_id}", dependencies=PAGE)
+def settings_proposal_page(request: Request, proposal_id: int):
+    return _render_proposal(request, proposal_id)
+
+
+@router.post("/settings/vorschlag/{proposal_id}/apply", dependencies=ACTION)
+async def settings_proposal_apply(request: Request, proposal_id: int):
+    """"Ausgewählte übernehmen": the ticked edits (form field "edit", repeated) become a profile version."""
+    _proposal_or_404(proposal_id)
+    accepted = [value for value in (await request.form()).getlist("edit") if isinstance(value, str)]
+    try:
+        result = learning.apply_rewrite(proposal_id, accepted)
+    except learning.LearningError as exc:
+        return _render_proposal(request, proposal_id, error=str(exc), status_code=409)
+    failed = f"&failed={len(result['failed'])}" if result["failed"] else ""
+    return RedirectResponse(f"/settings?applied={proposal_id}{failed}", status_code=303)
+
+
+@router.post("/settings/vorschlag/{proposal_id}/reject", dependencies=ACTION)
+def settings_proposal_reject(request: Request, proposal_id: int):
+    _proposal_or_404(proposal_id)
+    try:
+        learning.reject_rewrite(proposal_id)
+    except learning.LearningError as exc:
+        return _render_proposal(request, proposal_id, error=str(exc), status_code=409)
+    return RedirectResponse(f"/settings?rejected={proposal_id}", status_code=303)
+
+
+# --- settings: learned rules and examples (Verhalten → Lernen) ------------------------------
+
+def _learning_action(request: Request, apply, done: str):
+    """Run a rule/example change; on success back to its card (PRG), else the tab with the error."""
+    try:
+        apply()
+    except learning.LearningError as exc:
+        return _render_section(request, "verhalten", error=str(exc), status_code=409)
+    card = LEARNING_MESSAGES[done][0]
+    return RedirectResponse(f"/settings/verhalten?done={done}#{card}", status_code=303)
+
+
+@router.post("/settings/rules/{rule_id}/active", dependencies=ACTION)
+def settings_rule_active(request: Request, rule_id: int, active: str = Form("")):
+    """The "wird genutzt" switch (an unticked checkbox sends nothing: off)."""
+    on = active == "1"
+    return _learning_action(request, lambda: learning.set_rule_active(rule_id, on), "rule_on" if on else "rule_off")
+
+
+@router.post("/settings/rules/{rule_id}/text", dependencies=ACTION)
+def settings_rule_text(request: Request, rule_id: int, text: str = Form("")):
+    return _learning_action(request, lambda: learning.update_rule_text(rule_id, text), "rule_saved")
+
+
+@router.post("/settings/rules/{rule_id}/delete", dependencies=ACTION)
+def settings_rule_delete(request: Request, rule_id: int):
+    return _learning_action(request, lambda: learning.delete_rule(rule_id), "rule_deleted")
+
+
+@router.post("/settings/rules/{rule_id}/decide", dependencies=ACTION)
+def settings_rule_decide(request: Request, rule_id: int, accept: str = Form(""), text: str | None = Form(None)):
+    """✅ / ❌ on a proposed rule that was never decided in the editor; the text may be edited before accepting."""
+    yes = accept == "1"
+    return _learning_action(request, lambda: learning.decide_rule(rule_id, yes, text if yes else None),
+                            "rule_accepted" if yes else "rule_rejected")
+
+
+@router.post("/settings/examples/{session_id}/off", dependencies=ACTION)
+def settings_example_off(request: Request, session_id: int):
+    """"Nicht mehr als Beispiel nutzen"."""
+    return _learning_action(request, lambda: learning.set_session_example(session_id, False), "example_off")
+
+
+# --- credentials (all on "Zugänge": KI-Anbieter, Telegram, Fredy) ------------------------
+
+CREDENTIAL_HELP = {  # the AI keys are explained in their provider panel
     "telegram_bot_token": "Derselbe Token wie in Fredys Telegram-Adapter (von @BotFather).",
     "telegram_chat_id": "Dieselbe Chat-ID wie in Fredys Telegram-Adapter – oder per Code verbinden (Bot muss laufen).",
-    "telegram_allowed_user_ids": ("Wer im Chat Buttons drücken darf, kommagetrennt. Leer = jedes Mitglied des Chats. "
-                                  "„Chat per Code verbinden“ trägt dich automatisch ein."),
+    "telegram_allowed_user_ids": ("Wer im Chat Buttons drücken darf, kommagetrennt. Nötig für den 📝 Editor: nur diese "
+                                  "User können ihn aus Telegram öffnen. Ohne Liste darf jedes Mitglied des Chats die "
+                                  "Buttons drücken. „Chat per Code verbinden“ trägt dich automatisch ein."),
     "fredy_webhook_token": "Mindestens 32 Zeichen. Am einfachsten „Neu erzeugen“ und in Fredys HTTP-Adapter eintragen.",
 }
 # test -> credential named in the audit log when it fails
 CONNECTION_TESTS = {"anthropic": "anthropic_api_key", "deutschlandgpt": "deutschlandgpt_api_key", "telegram": "telegram_bot_token"}
 EVENT_NAME_LABELS = {**vault.LABELS, "dashboard": "Dashboard-Login"}
-OPEN_CHAT_NOTE = "Optional, nicht gesetzt: jedes Mitglied des Chats darf Buttons drücken."
+OPEN_CHAT_NOTE = "jedes Mitglied des Chats darf Buttons drücken, und der 📝 Editor lässt sich aus Telegram nicht öffnen."
 LOCKED_CHAT_WARNING = ("Die Liste erlaubter Telegram-User ist nicht entschlüsselbar (SESSION_SECRET geändert?) – "
                        "niemand darf Buttons drücken. Pairing erneut ausführen oder User-ID neu eintragen.")
+EDITOR_LOGIN_ERROR_META = "editor_login_url_error"  # set by the editor feature when Telegram rejects the login button
 ONE_TIME_TTL_S = 300
 _one_time: dict[str, tuple[float, str]] = {}  # one-time id -> (monotonic expiry, value); server memory only
 
 
 def _allowlist_warning() -> str | None:
-    """Only an unreadable list is a problem; an empty one is allowed (the setting is optional)."""
+    """An unreadable list locks everyone out; an empty one is "missing" (required) but the bot still works."""
     return LOCKED_CHAT_WARNING if bot.allowed_user_ids() is None else None
+
+
+def _is_iso_time(value: str) -> bool:
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return len(value) >= 10
+
+
+def _editor_login_error(request: Request) -> dict | None:
+    """{"text", "at"} from the meta value "editor_login_url_error" (Telegram rejected the "📝 Editor" login button,
+    usually because the domain isn't linked to the bot), or None. Accepted forms: JSON {"text"/"error"/"message",
+    "at"/"time"}, or the text with an ISO time before or after it."""
+    raw = (db.get_meta(EDITOR_LOGIN_ERROR_META) or "").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        text = next((str(data[k]) for k in ("text", "error", "message") if data.get(k)), "")
+        at = next((str(data[k]) for k in ("at", "time", "created_at") if data.get(k)), None)
+    else:
+        text, at = raw, None
+        first, _, rest = raw.partition(" ")
+        head, _, last = raw.rpartition(" ")
+        if _is_iso_time(first):
+            text, at = rest, first
+        elif _is_iso_time(last):
+            text, at = head, last
+        text = text.strip(" :|–-")
+    return {"text": redact(request, text) or "Telegram hat den Button abgelehnt.", "at": at}
 
 
 def _stash_once(value: str) -> str:
@@ -932,9 +1342,11 @@ def _hook_url(request: Request) -> str:
     return f"https://{request.headers.get('host', 'immobot.<domain>')}/hook/fredy"
 
 
-def _telegram_context(request: Request, current: dict) -> dict:
-    """What "Telegram & Fredy" shows besides its form: credential status (never values), pairing, hook URL."""
+def _zugaenge_context(request: Request, current: dict) -> dict:
+    """What "Zugänge" shows besides the provider panels and its form: credential status (never values), pairing,
+    hook URL, the address for links from Telegram and the editor login setup."""
     provider = settings.provider_of(current)
+    public_url = bot.public_url_info()
     return {
         "credentials": [{**c, "help": CREDENTIAL_HELP[c["name"]], "need": _credential_need(c["name"], provider)}
                         for c in vault.status() if c["name"] not in AI_CREDENTIALS],
@@ -945,32 +1357,32 @@ def _telegram_context(request: Request, current: dict) -> dict:
         "last_pairing": db.last_credential_event("telegram_chat_id", "pair"),
         "bot_disabled": request.app.state.config.disable_bot,
         "secret_names": vault.SECRET_NAMES,
-        "public_url": bot.public_url_info(),
+        "public_url": public_url,
+        "editor_domain": urlsplit(public_url[0]).hostname if public_url[0] else None,  # what @BotFather /setdomain wants
+        "editor_login_error": _editor_login_error(request),
         "hook_url": _hook_url(request),
     }
 
 
-def _render_telegram(request: Request, **kwargs):
+def _render_zugaenge(request: Request, **kwargs):
     """`new_token` (keyword) is the one-time display after "Neu erzeugen"; nothing else is ever a secret."""
-    return _render_section(request, "telegram", **kwargs)
+    return _render_section(request, "zugaenge", **kwargs)
 
 
 def _error_page_for(name: str):
-    """Error pages of a credential change: the page the credential is managed on."""
-    if name in AI_CREDENTIALS:
-        return lambda request, **kwargs: _render_section(request, "ki", show=AI_CREDENTIALS[name], **kwargs)
-    return _render_telegram
+    """Error pages of a credential change: "Zugänge", with the provider of an AI key preselected."""
+    return lambda request, **kwargs: _render_section(request, "zugaenge", show=AI_CREDENTIALS.get(name), **kwargs)
 
 
 def _credential_page(name: str) -> str:
-    return f"/settings/ki?show={AI_CREDENTIALS[name]}&" if name in AI_CREDENTIALS else "/settings/telegram?"
+    return f"/settings/zugaenge?show={AI_CREDENTIALS[name]}&" if name in AI_CREDENTIALS else "/settings/zugaenge?"
 
 
 async def _step_up(request: Request, password: str, error_page=None):
     """Re-check the dashboard password before a credential change. Returns an error page (by default
-    "Telegram & Fredy"), or None if ok. Wrong passwords count toward the login limit; once it is reached
+    "Zugänge"), or None if ok. Wrong passwords count toward the login limit; once it is reached
     every attempt is refused."""
-    error_page = error_page or _render_telegram
+    error_page = error_page or _render_zugaenge
     client = _client_ip(request)
     if _too_many_failures(client):
         return error_page(request, error="Zu viele Fehlversuche – bitte ein paar Minuten warten.", status_code=429)
@@ -1007,29 +1419,6 @@ def _known_credential(name: str) -> str:
     return name
 
 
-@router.get("/settings/telegram", dependencies=PAGE)
-def settings_telegram_page(request: Request, saved: str | None = None, cleared: str | None = None,
-                           token: str | None = None):
-    message = error = new_token = None
-    if saved in vault.LABELS:
-        message = f"„{vault.LABELS[saved]}“ gespeichert."
-    elif saved:
-        message = SETTINGS_MESSAGES["saved"]
-    elif cleared in vault.LABELS:
-        message = f"„{vault.LABELS[cleared]}“ entfernt."
-    elif token is not None:
-        new_token = _take_once(token)
-        if new_token is None:
-            error = "Der neue Webhook-Token wurde schon angezeigt (oder die 5 Minuten sind um). Bei Bedarf neu erzeugen."
-    return _render_telegram(request, message=message, error=error, new_token=new_token)
-
-
-@router.get("/credentials", dependencies=PAGE)
-def credentials_moved(request: Request):
-    """The former "Zugänge" page, now part of "Einstellungen" (old bookmarks)."""
-    return RedirectResponse("/settings/telegram", status_code=303)
-
-
 @router.post("/credentials/save/{name}", dependencies=ACTION)
 async def credentials_save(request: Request, name: str, value: str = Form(""), password: str = Form("")):
     name = _known_credential(name)
@@ -1063,7 +1452,7 @@ async def credentials_regenerate_webhook_token(request: Request, password: str =
     await _change(request, "fredy_webhook_token", "regenerate", lambda: vault.set("fredy_webhook_token", token))
     # Post/redirect/get, so F5 or "back" can't rotate the token again. The page after the redirect shows it
     # exactly once; until then it only exists in server memory under a random one-time id.
-    return RedirectResponse(f"/settings/telegram?token={_stash_once(token)}", status_code=303)
+    return RedirectResponse(f"/settings/zugaenge?token={_stash_once(token)}", status_code=303)
 
 
 @router.post("/credentials/pair", dependencies=ACTION)
@@ -1073,10 +1462,10 @@ async def credentials_pair(request: Request, password: str = Form("")):
         return denied
     bot_username = None if request.app.state.config.disable_bot else bot.username()
     if not bot_username:
-        return _render_telegram(request, error="Der Telegram-Bot läuft nicht – zuerst einen gültigen Bot-Token speichern.",
+        return _render_zugaenge(request, error="Der Telegram-Bot läuft nicht – zuerst einen gültigen Bot-Token speichern.",
                                 status_code=409)
     code = await _change(request, "telegram_chat_id", "pair_start", lambda: vault.start_pairing(bot_username))
-    return _render_telegram(request, pairing_code=code)
+    return _render_zugaenge(request, pairing_code=code)
 
 
 @router.post("/credentials/test/{target}", dependencies=ACTION)
@@ -1097,9 +1486,7 @@ async def credentials_test(request: Request, target: str):
     if not result["ok"]:
         db.add_credential_event(CONNECTION_TESTS[target], "test_failed", _client_ip(request))
     result["text"] = redact(request, result["text"])
-    if target in settings.PROVIDERS:
-        return _render_section(request, "ki", test_result=result, show=target)
-    return _render_telegram(request, test_result=result)
+    return _render_zugaenge(request, test_result=result, show=target if target in settings.PROVIDERS else None)
 
 
 # --- status ---------------------------------------------------------------------
@@ -1125,9 +1512,11 @@ def status_page(request: Request):
         "bot_last_error": redact(request, str(last_error)) if last_error else None,
         # Names, sources and dates only - never any part of a secret.
         "credentials": [{**c, "need": _credential_need(c["name"], provider),
-                         "page": "/settings/ki" if c["name"] in AI_CREDENTIALS else "/settings/telegram"}
+                         "page": (f"/settings/zugaenge?show={AI_CREDENTIALS[c['name']]}#anbieter"
+                                  if c["name"] in AI_CREDENTIALS else f"/settings/zugaenge#{c['name']}")}
                         for c in vault.status()],
         "ai": _ai_status(current),
+        "editor_login_error": _editor_login_error(request),
         "media_last_error": db.get_meta("media_last_error"),
         "fredy_images": {"last_webhook": db.get_meta("last_webhook_had_images"),
                          "last_at": db.get_meta("fredy_images_last_at")},

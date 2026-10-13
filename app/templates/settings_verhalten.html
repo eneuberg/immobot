@@ -1,0 +1,238 @@
+{# Einstellungen → Verhalten: how drafts are made and what they may cost, what Claude sees of a listing, how the bot
+   behaves, and what Claude learns (switches in the form; learned rules and examples below it, with their own forms). #}
+{% extends "settings_base.html" %}
+{% from "settings_macros.html" import field_error with context %}
+
+{% macro origin(r) -%}
+{% if r.listing_id %}aus <a href="/listing/{{ r.listing_id }}">„{{ r.listing_title or "(ohne Titel)" }}“</a> · {% endif %}{{ r.created_at|local_time }}
+{%- endmacro %}
+
+{% macro card_flash(name) %}{% if card == name and card_message %}<div class="flash ok" role="status">{{ card_message }}</div>{% endif %}{% endmacro %}
+
+{% block intro %}Wie Entwürfe entstehen, was sie kosten dürfen, wie sich der Bot verhält – und was Claude dazulernt.{% endblock %}
+
+{% block section %}
+<form id="verhalten-form" method="post" action="/settings">
+  <input type="hidden" name="section" value="verhalten">
+  <article id="entwuerfe" class="setting-card">
+    <h2>Entwürfe</h2>
+    <label>Denkaufwand (Effort) <small>höher = gründlicher, aber langsamer und teurer</small>
+      <select name="effort" {% if errors.effort %}aria-invalid="true"{% endif %}>
+        {% for key, label in effort_options %}
+        <option value="{{ key }}" {% if values.effort == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      {{ field_error("effort") }}
+    </label>
+    <p class="help">Anbieter und Modell stehen unter <a href="/settings/zugaenge#anbieter">Zugänge</a>.</p>
+  </article>
+
+  <article id="kosten" class="setting-card">
+    <h2>Kosten</h2>
+    <div class="form-grid">
+      <label>Monatsbudget in € <small>0 = kein Limit; ist es erreicht, entstehen keine neuen Entwürfe mehr</small>
+        <input type="text" inputmode="decimal" name="monthly_budget_eur" value="{{ values.monthly_budget_eur }}"
+          {% if errors.monthly_budget_eur %}aria-invalid="true"{% endif %}>
+        {{ field_error("monthly_budget_eur") }}
+      </label>
+      <label>Wechselkurs: 1 € = x $ <small>rechnet in Dollar abgerechnete Kosten (Anthropic) in Euro um, z. B. 1,10</small>
+        <input type="text" inputmode="decimal" name="eur_usd_rate" value="{{ values.eur_usd_rate }}"
+          {% if errors.eur_usd_rate %}aria-invalid="true"{% endif %}>
+        {{ field_error("eur_usd_rate") }}
+      </label>
+    </div>
+  </article>
+
+  <article id="fotos" class="setting-card">
+    <h2>Fotos &amp; Exposé</h2>
+    <p class="help">Was Claude vom Inserat zu sehen bekommt.</p>
+    <label class="check">
+      <input type="checkbox" role="switch" name="send_image" value="1" {% if values.send_image|as_bool %}checked{% endif %}>
+      <span>Fotos des Inserats an Claude mitschicken <small>Claude sieht dann die Fotos und kann darauf eingehen (kostet Tokens, siehe unten).</small></span>
+    </label>
+    <label>Fotos für Claude pro Entwurf <small>Wie viele Inserat-Fotos Claude beim Schreiben mitbekommt – mehr Fotos = genauer, aber je Foto ca. 1.000 Tokens (≈ 0,1–4 ct je nach Modell). Das Telegram-Album zeigt unabhängig davon bis zu 10 Fotos (Telegram-Limit).</small>
+      <input type="number" name="llm_max_images" min="0" max="20" step="1" value="{{ values.llm_max_images }}"
+        {% if errors.llm_max_images %}aria-invalid="true"{% endif %}>
+      {{ field_error("llm_max_images") }}
+    </label>
+    <label class="check">
+      <input type="checkbox" role="switch" name="is24_fetch" value="1" {% if values.is24_fetch|as_bool %}checked{% endif %}>
+      <span>Bilder &amp; Details selbst von ImmoScout24 laden <small>Wenn Fredy keine Bilder mitschickt, holt immobot bei ImmoScout24-Inseraten das Exposé selbst (1 Abruf pro Inserat, nur bei Bedarf). Schickt Fredy die Bilder mit (Fredy-PR #489 bzw. gepatchtes Fredy), wird nichts zusätzlich abgerufen.</small></span>
+    </label>
+  </article>
+
+  <article id="bot" class="setting-card">
+    <h2>Telegram-Bot</h2>
+    <label>Verzögerung nach Fredys Nachricht <small>in Sekunden, 0–60 – damit die Buttons direkt unter Fredys Inserat erscheinen</small>
+      <input type="number" name="followup_delay_s" min="0" max="60" step="1" value="{{ values.followup_delay_s }}"
+        {% if errors.followup_delay_s %}aria-invalid="true"{% endif %}>
+      {{ field_error("followup_delay_s") }}
+    </label>
+    <label class="check">
+      <input type="checkbox" role="switch" name="paused" value="1" {% if values.paused|as_bool %}checked{% endif %}>
+      <span>Pause <small>Der Bot meldet sich nicht zu neuen Inseraten.</small></span>
+    </label>
+  </article>
+
+  <article id="lernen" class="setting-card">
+    <h2>Lernen</h2>
+    <p class="help">Claude lernt aus deinen Endversionen im 📝 Editor und aus Regeln, die du freigibst – ohne Training.
+      Beides steht in Claudes Anweisungen für jeden neuen Entwurf.</p>
+    <label class="check">
+      <input type="checkbox" role="switch" name="use_examples" value="1" {% if values.use_examples|as_bool %}checked{% endif %}>
+      <span>Endversionen als Stil-Beispiele nutzen <small>Deine {{ example_count }} neuesten fertigen Texte aus dem Editor zeigen Claude Ton, Aufbau und Länge.</small></span>
+    </label>
+    <label class="check">
+      <input type="checkbox" role="switch" name="use_rules" value="1" {% if values.use_rules|as_bool %}checked{% endif %}>
+      <span>Gelernte Regeln nutzen <small>Aktive Regeln gelten für jeden Entwurf. Nach „Fertig“ im Editor schlägt Claude neue vor.</small></span>
+    </label>
+    <p class="learn-links"><a href="#vorlieben">{{ plural(rules_active, "aktive Regel", "aktive Regeln") }}</a>
+      {%- if rules_proposed %} · <a href="#vorlieben">{{ rules_proposed|length }} {{ "wartet" if rules_proposed|length == 1 else "warten" }} auf dich</a>{% endif %}
+      · <a href="#beispiele">{{ plural(examples|length, "Beispiel", "Beispiele") }}</a></p>
+  </article>
+
+  <div class="savebar">
+    <small>Gilt für alle neuen Entwürfe.</small>
+    <button type="submit">Speichern</button>
+  </div>
+</form>
+
+{# ---- Lernen: learned rules (each action is its own small form) ---- #}
+<article id="vorlieben" class="setting-card">
+  <div class="card-title">
+    <h2>Gelernte Regeln</h2>
+    <span class="badge{% if rules_active >= max_rules %} warn{% endif %}">{{ rules_active }} von {{ max_rules }} aktiv</span>
+  </div>
+  {{ card_flash("vorlieben") }}
+  {% if not values.use_rules|as_bool %}
+  <div class="callout info"><span>Regeln werden gerade nicht genutzt („Gelernte Regeln nutzen“ ist aus). Sie bleiben gespeichert.</span></div>
+  {% endif %}
+  {% if rules_active >= max_rules %}
+  <div class="callout warn"><span><strong>Höchstgrenze erreicht:</strong> {{ max_rules }} aktive Regeln. Neue erst nach dem Abschalten
+    einer Regel – oder <a href="/settings#verbessern">ins Profil einarbeiten</a>.</span></div>
+  {% elif rules_active >= merge_hint_at %}
+  <div class="callout info"><span>Schon {{ rules_active }} aktive Regeln. Zeit, sie <a href="/settings#verbessern">ins Profil einzuarbeiten</a>
+    – dann bleibt Claudes Anweisung übersichtlich (höchstens {{ max_rules }}).</span></div>
+  {% endif %}
+
+  {% if rules_proposed %}
+  <section class="rule-group" aria-labelledby="h-proposed">
+    <h3 id="h-proposed">Warten auf deine Entscheidung <span class="count">{{ rules_proposed|length }}</span></h3>
+    <p class="help">Vorschläge von Claude nach „Fertig“ im Editor, über die noch nicht entschieden wurde.</p>
+    <ul class="rule-list">
+      {% for r in rules_proposed %}
+      <li class="rule is-proposed" id="regel-{{ r.id }}">
+        <form method="post" action="/settings/rules/{{ r.id }}/decide">
+          {% if r.action == "remove" %}
+          <p class="rule-kind">Diese Regel streichen:</p>
+          <p class="rule-text">{{ r.text }}</p>
+          {% else %}
+          <p class="rule-kind">{% if r.action == "update" %}Regel ändern{% if r.target %} – bisher: <span class="old">„{{ r.target.text }}“</span>{% endif %}{% else %}Neue Regel{% endif %}</p>
+          <label class="sr-only" for="rule-text-{{ r.id }}">Text der Regel</label>
+          <textarea id="rule-text-{{ r.id }}" name="text" rows="3" maxlength="300">{{ r.text }}</textarea>
+          {% endif %}
+          {% if r.reason %}<p class="rule-reason">Warum: {{ r.reason }}</p>{% endif %}
+          <p class="rule-meta">{{ origin(r) }}</p>
+          <div class="actions">
+            <button type="submit" name="accept" value="1" class="btn-sm">✅ Übernehmen</button>
+            <button type="submit" name="accept" value="0" class="secondary outline btn-sm">❌ Verwerfen</button>
+          </div>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if rules_in_use %}
+  <ul class="rule-list">
+    {% for r in rules_in_use %}
+    <li class="rule{% if r.status == 'inactive' %} is-off{% endif %}" id="regel-{{ r.id }}">
+      <p class="rule-text">{{ r.text }}</p>
+      <div class="rule-foot">
+        {# The switch saves itself (app.js, data-autosubmit); without JS the small button does. #}
+        <form class="rule-toggle" method="post" action="/settings/rules/{{ r.id }}/active">
+          <label><input type="checkbox" role="switch" name="active" value="1" data-autosubmit
+            {% if r.status == "active" %}checked{% endif %}> wird genutzt</label>
+          <button type="submit" class="linkish nojs-only">übernehmen</button>
+        </form>
+        <span class="rule-meta">{{ origin(r) }}</span>
+      </div>
+      <details class="rule-edit">
+        <summary>Bearbeiten</summary>
+        <form method="post" action="/settings/rules/{{ r.id }}/text">
+          <label class="sr-only" for="rule-edit-{{ r.id }}">Text der Regel</label>
+          <textarea id="rule-edit-{{ r.id }}" name="text" rows="3" maxlength="300">{{ r.text }}</textarea>
+          {% if r.reason %}<p class="rule-reason">Claudes Begründung: {{ r.reason }}</p>{% endif %}
+          <div class="actions">
+            <button type="submit" class="btn-sm">Speichern</button>
+            <button type="submit" formaction="/settings/rules/{{ r.id }}/delete" class="secondary outline btn-sm"
+              data-confirm="Regel löschen? Claude kann sie später wieder vorschlagen.">Löschen</button>
+          </div>
+        </form>
+      </details>
+    </li>
+    {% endfor %}
+  </ul>
+  {% elif not rules_proposed %}
+  <p class="empty-line">Noch keine gelernten Regeln. Drückst du im 📝 Editor auf „Fertig“, schlägt Claude welche vor –
+    du entscheidest, was gilt.</p>
+  {% endif %}
+
+  {% if rules_history %}
+  <details class="disclosure">
+    <summary>Verlauf <span class="count">{{ rules_history|length }}</span></summary>
+    <div class="disclosure-body">
+      <p class="help">Verworfenes schlägt Claude nicht wieder vor.</p>
+      <ul class="rule-list compact">
+        {% for r in rules_history %}
+        <li class="rule is-off">
+          <p class="rule-text">{{ r.text }}</p>
+          <p class="rule-meta">
+            {%- if r.status == "merged" %}<span class="badge ok">ins Profil übernommen</span>
+              {%- if r.merged_version_id %} <a href="/settings/version/{{ r.merged_version_id }}">Version #{{ r.merged_version_id }}</a>{% endif %}
+            {%- elif r.status == "rejected" %}<span class="badge">{{ "Streichen verworfen" if r.action == "remove" else "verworfen" }}</span>
+            {%- else %}<span class="badge">{{ r.status_label }}</span>{% endif %}
+            · {{ (r.decided_at or r.created_at)|local_time }}</p>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </details>
+  {% endif %}
+</article>
+
+{# ---- Lernen: the examples in the system prompt ---- #}
+<article id="beispiele" class="setting-card">
+  <div class="card-title">
+    <h2>Genutzte Beispiele</h2>
+    <span class="badge">{{ examples|length }} von {{ example_count }}</span>
+  </div>
+  {{ card_flash("beispiele") }}
+  <p class="help">Die {{ example_count }} neuesten Endversionen aus dem 📝 Editor stehen als Stil-Beispiele in Claudes Anweisungen.</p>
+  {% if not values.use_examples|as_bool %}
+  <div class="callout info"><span>Beispiele werden gerade nicht genutzt („Endversionen als Stil-Beispiele nutzen“ ist aus).</span></div>
+  {% endif %}
+  {% if examples %}
+  <ul class="rule-list">
+    {% for e in examples %}
+    <li class="rule example" id="beispiel-{{ e.id }}">
+      <p class="rule-text"><a href="/listing/{{ e.listing_id }}">{{ e.listing_title or "(ohne Titel)" }}</a></p>
+      <p class="rule-meta">fertig am {{ e.finished_at|local_time }}{% if e.listing_address %} · {{ e.listing_address }}{% endif %}</p>
+      <details class="rule-edit">
+        <summary>Text ansehen</summary>
+        <pre class="draft">{{ e.final_text }}</pre>
+      </details>
+      <form method="post" action="/settings/examples/{{ e.id }}/off">
+        <button type="submit" class="secondary outline btn-sm"
+          data-confirm="Diese Endversion nicht mehr als Beispiel nutzen?">Nicht mehr als Beispiel nutzen</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% if examples_waiting %}<p class="help">{{ plural(examples_waiting, "weitere Endversion rückt", "weitere Endversionen rücken") }} nach, wenn du ein Beispiel entfernst.</p>{% endif %}
+  {% else %}
+  <p class="empty-line">Noch keine. Sobald du im 📝 Editor auf „Fertig“ drückst, wird deine Endversion zum Beispiel.</p>
+  {% endif %}
+</article>
+{% endblock %}

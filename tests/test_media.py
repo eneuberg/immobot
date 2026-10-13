@@ -337,7 +337,7 @@ def test_overview_thumbnail_only_from_downloaded_pictures(client, hosts):
 
 
 def test_settings_switch(client):
-    page = client.get("/settings/ki").text
+    page = client.get("/settings/verhalten").text
     assert 'name="is24_fetch" value="1" checked' in page
     assert "Bilder &amp; Details selbst von ImmoScout24 laden" in page
     assert ("Wenn Fredy keine Bilder mitschickt, holt immobot bei ImmoScout24-Inseraten das Exposé selbst (1 Abruf pro "

@@ -1,0 +1,291 @@
+{# Einstellungen → Zugänge: what is set up once. KI-Anbieter (key, model, test, model list), Telegram (bot token, chat,
+   allowed users, links and editor login), Fredy (webhook token, address). Credentials: status only, never values. #}
+{% extends "settings_base.html" %}
+{% from "macros.html" import cred_badge, howto, key_line %}
+{% from "settings_macros.html" import field_error, need_tag with context %}
+
+{% macro credential_status(c) %}
+{% if c.hint %}Key: <code>{{ c.hint }}</code> · {% endif %}
+{% if c.source == "dashboard" %}<span class="success">gesetzt über Dashboard am {{ c.updated_at|local_time }}</span>
+{% elif c.source == "env" %}aus Env-Variable – hier eintragen und danach in Coolify löschen
+{% elif c.need == "required" %}<span class="error">nicht gesetzt</span>
+{% else %}<span class="muted">nicht gesetzt</span>{% endif %}
+{% if c.undecryptable %}<br><span class="error">⚠ nicht entschlüsselbar – neu eintragen</span>{% endif %}
+{% endmacro %}
+
+{% macro cred_card(c) %}
+<article id="{{ c.name }}" class="cred">
+  <header>
+    <span class="cred-title"><strong>{{ c.label }}</strong>{{ need_tag(c.need) }}</span>
+    {{ cred_badge(c, c.need) }}
+  </header>
+  <p class="cred-state">{{ credential_status(c) }}</p>
+  {% if c.name == "telegram_chat_id" and chat_id %}<p>Aktuelle Chat-ID: <code>{{ chat_id }}</code></p>{% endif %}
+  {% if c.name == "telegram_chat_id" and last_pairing %}
+  <p><small class="muted">Zuletzt per Pairing verbunden am {{ last_pairing.at|local_time }}: {{ last_pairing.detail }}</small></p>
+  {% endif %}
+  {% if c.name == "telegram_allowed_user_ids" %}
+  {% if allowlist_warning %}<p><span class="error">{{ allowlist_warning }}</span></p>
+  {% elif allowed_user_ids %}<p>Aktuell erlaubt: <code>{{ allowed_user_ids }}</code></p>{% endif %}
+  {% endif %}
+  {% if c.name == "fredy_webhook_token" %}
+  <p>Endpoint-URL für Fredys HTTP-Adapter:</p>
+  <div class="command"><code id="hook-url">{{ hook_url }}</code>
+    <button type="button" class="secondary outline copy-btn btn-sm" data-copy="hook-url">Kopieren</button></div>
+  {% endif %}
+  <p class="muted"><small>{{ c.help }}</small></p>
+  {{ howto(c.name, hook_url) }}
+  <details class="disclosure">
+    <summary>
+      {%- if c.name == "fredy_webhook_token" %}{{ "Ändern oder neu erzeugen" if c.source else "Eintragen oder neu erzeugen" }}
+      {%- elif c.name == "telegram_chat_id" and not bot_disabled %}{{ "Ändern oder per Code verbinden" if c.source else "Eintragen oder per Code verbinden" }}
+      {%- else %}{{ "Ändern" if c.source else "Eintragen" }}{% endif -%}
+    </summary>
+    <div class="disclosure-body">
+      <form method="post" action="/credentials/save/{{ c.name }}">
+        <div class="form-grid">
+          <label>Neuer Wert
+            {# type=text on purpose: the step-up field must be the only password field, otherwise password managers
+               treat the form as "change password" and offer to save the API key as the site password.
+               Secret values are only masked visually (class "masked"). #}
+            <input type="text" name="value" autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="500"
+              data-1p-ignore data-lpignore="true"{% if c.name in secret_names %} class="masked"{% endif %}>
+          </label>
+          <label>Dashboard-Passwort
+            <input type="password" name="password" autocomplete="current-password" required>
+          </label>
+        </div>
+        <p class="step-up">Das Dashboard-Passwort bestätigt jede Aktion in diesem Kasten.</p>
+        <div class="actions">
+          <button type="submit">Speichern</button>
+          {% if c.name == "fredy_webhook_token" %}
+          <button type="submit" formaction="/credentials/regenerate-webhook-token" class="secondary"
+            data-confirm="Neuen Token erzeugen? Der alte gilt sofort nicht mehr – Fredy braucht dann den neuen.">Neu erzeugen</button>
+          {% endif %}
+          {% if c.name == "telegram_chat_id" and not bot_disabled %}
+          <button type="submit" formaction="/credentials/pair" class="secondary">Chat per Code verbinden</button>
+          {% endif %}
+          {% if c.source == "dashboard" or c.undecryptable %}
+          <button type="submit" formaction="/credentials/clear/{{ c.name }}" class="secondary outline"
+            data-confirm="„{{ c.label }}“ entfernen?{% if c.source == 'dashboard' %} Eine Env-Variable gilt dann wieder, falls gesetzt.{% endif %}">Entfernen</button>
+          {% endif %}
+        </div>
+      </form>
+    </div>
+  </details>
+</article>
+{% endmacro %}
+
+{% block intro %}KI-Anbieter, Telegram und Fredy – richtest du einmal ein.{% endblock %}
+
+{% block section %}
+{% if allowlist_warning %}<div class="flash warn" role="alert">{{ allowlist_warning }}</div>{% endif %}
+
+{% if new_token %}
+<article id="new-token" class="highlight-card">
+  <header><strong>Neuer Fredy-Webhook-Token</strong> – wird nur jetzt angezeigt</header>
+  <pre class="draft" id="new-token-value">{{ new_token }}</pre>
+  <div class="actions"><button type="button" class="copy-btn" data-copy="new-token-value">Kopieren</button></div>
+  <p>Jetzt in Fredy beim Job im <strong>HTTP-Adapter</strong> als <em>Auth Token</em> eintragen und speichern.
+    Der alte Token gilt ab sofort nicht mehr. Der Token wird nie wieder angezeigt – auch nicht beim Neuladen dieser Seite.</p>
+</article>
+{% endif %}
+
+{% if pairing_code and pairing %}
+<article id="pairing" class="highlight-card accent">
+  <header><strong>Telegram-Chat per Code verbinden</strong></header>
+  <ol class="steps">
+    <li>Öffne in Telegram den Chat, in dem immobot schreiben soll – eine Gruppe (Bot vorher einladen) oder den Privatchat mit dem Bot.</li>
+    {# Always with @bot: in groups with privacy mode the bot only sees commands addressed to it. #}
+    <li>Schicke dort genau diesen Befehl:
+      <div class="command">
+        <code id="pair-command">/pair@{{ pairing.bot_username }} {{ pairing_code }}</code>
+        <button type="button" class="secondary outline copy-btn" data-copy="pair-command">Kopieren</button>
+      </div>
+    </li>
+    <li>Der Bot bestätigt im Chat. Danach diese Seite neu laden: Chat-ID und deine User-ID sind eingetragen.</li>
+  </ol>
+  <p class="muted"><small>Gültig bis {{ pairing.expires_at|local_time }}. Der Code wird nur hier angezeigt; nach 5 falschen Versuchen verfällt er.
+    Wer ihn schickt, wird für diesen Chat freigeschaltet – also nicht in einer Gruppe stehen lassen, in der andere mitlesen.</small></p>
+</article>
+{% elif pairing %}
+<div class="flash" role="status">Ein Pairing-Code für @{{ pairing.bot_username }} ist noch bis {{ pairing.expires_at|local_time }} gültig.</div>
+{% endif %}
+
+<p class="lead-note">Gespeicherte Werte werden verschlüsselt abgelegt und nie wieder angezeigt. Ändern geht nur mit deinem
+  Dashboard-Passwort; jede Änderung wird in Telegram gemeldet und im <a href="/status#protokoll">Protokoll</a> festgehalten.</p>
+
+{# ---- KI-Anbieter ---- #}
+<div class="section-head"><h2>KI-Anbieter</h2></div>
+<article id="anbieter" class="setting-card">
+  <p class="help">Beide Anbieter nutzen Claude-Modelle; abgerechnet wird beim jeweiligen Anbieter.
+    Nötig ist nur der API-Key des gewählten Anbieters.</p>
+
+  {# Provider and model are saved with the form "zugaenge-form" (button below, or "Speichern" at the end). app.js
+     shows only the panel of the provider chosen here; without JS all panels stay visible. #}
+  <label for="provider">Anbieter</label>
+  <select id="provider" name="provider" form="zugaenge-form" data-provider-select data-saved="{{ saved_provider }}">
+    {% for p in panels %}
+    <option value="{{ p.provider }}" {% if p.provider == shown_provider %}selected{% endif %}>{{ p.label }}</option>
+    {% endfor %}
+  </select>
+  <p class="help" data-provider-unsaved {% if shown_provider == saved_provider %}hidden{% endif %}>
+    Noch nicht gespeichert – mit „Anbieter &amp; Modell speichern“ übernehmen.</p>
+
+  {% for p in panels %}
+  <section class="provider-panel{% if p.provider == shown_provider %} is-active{% endif %}" data-provider-panel="{{ p.provider }}"
+    aria-label="{{ p.label }}">
+    <h3>{{ p.label }} <small class="muted">· Preise und Abrechnung in {{ p.sign }}</small></h3>
+    {% if p.no_key_warning %}
+    <div class="flash warn" role="alert">Noch kein {{ p.label }}-API-Key hinterlegt – ohne Key schlagen Entwürfe mit {{ p.label }} fehl. Unten eintragen.</div>
+    {% endif %}
+    <p class="key-status"><strong>{{ p.label }}-API-Key</strong> <span class="need">Pflicht</span> <span>{{ key_line(p.key) }}</span></p>
+    <details class="disclosure" {% if not p.key.source %}open{% endif %}>
+      <summary>{{ "Key ersetzen oder entfernen" if p.key.source == "dashboard" or p.key.undecryptable else ("Key ersetzen" if p.key.source else "Key eintragen") }}</summary>
+      <div class="disclosure-body">
+        <form method="post" action="/settings/provider-key">
+          <input type="hidden" name="provider" value="{{ p.provider }}">
+          <div class="form-grid">
+            <label>{{ "Neuer" if p.key.source else "" }} {{ p.label }}-API-Key
+              {# type=text + CSS mask: the step-up field must stay the only password field (see the cards below). #}
+              <input type="text" name="value" class="masked" autocomplete="off" spellcheck="false" autocapitalize="off"
+                maxlength="500" data-1p-ignore data-lpignore="true" required>
+            </label>
+            <label>Dashboard-Passwort
+              <input type="password" name="password" autocomplete="current-password" required>
+            </label>
+          </div>
+          <p class="step-up">Zur Sicherheit bestätigst du jede Key-Änderung mit deinem Dashboard-Passwort (dasselbe wie beim Login).</p>
+          <div class="actions">
+            <button type="submit">Key speichern &amp; Modelle laden</button>
+            {% if p.key.source == "dashboard" or p.key.undecryptable %}
+            <button type="submit" formaction="/credentials/clear/{{ p.key.name }}" formnovalidate class="secondary outline"
+              data-confirm="„{{ p.key.label }}“ entfernen?{% if p.key.source == 'dashboard' %} Eine Env-Variable gilt dann wieder, falls gesetzt.{% endif %}">Entfernen</button>
+            {% endif %}
+          </div>
+        </form>
+        {{ howto(p.key.name) }}
+      </div>
+    </details>
+
+    <label>Modell <small>Preise in {{ p.sign }} pro 1 Mio. Tokens (Eingabe / Ausgabe)</small>
+      <select name="model_{{ p.provider }}" form="zugaenge-form"
+        {% if errors.model and p.provider == shown_provider %}aria-invalid="true"{% endif %}>
+        {% for key, label in p.model_options %}
+        <option value="{{ key }}" {% if key == p.current_model %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      {% if p.provider == shown_provider %}{{ field_error("model") }}{% endif %}
+    </label>
+    <p class="help">
+      {% if p.models_checked %}Modellliste von {{ p.label }} geladen am {{ p.models_fetched_at|local_time }}.
+      {% else %}Modellliste nicht geprüft{% if p.models_error %}: {{ p.models_error }}{% endif %} – angezeigt werden alle Modelle mit hinterlegtem Preis.
+      {% endif %}
+    </p>
+    {% if p.unsupported_models %}
+    <details>
+      <summary><small>{{ p.unsupported_models|length }} weitere Modelle verfügbar, aber nicht unterstützt (kein Preis hinterlegt)</small></summary>
+      <p><small class="muted">{{ p.unsupported_models|join(", ") }}</small></p>
+    </details>
+    {% endif %}
+    <div class="actions">
+      <button type="submit" form="refresh-models-{{ p.provider }}" class="secondary outline btn-sm">Modelle neu laden</button>
+      <button type="submit" form="test-{{ p.provider }}" class="secondary outline btn-sm">{{ p.label }} testen</button>
+    </div>
+  </section>
+  {% endfor %}
+  <div class="actions">
+    <button type="submit" form="zugaenge-form">Anbieter &amp; Modell speichern</button>
+  </div>
+  <p class="help">Wie gründlich Claude nachdenkt (Denkaufwand), steht unter <a href="/settings/verhalten#entwuerfe">Verhalten</a>.</p>
+</article>
+
+{# ---- Telegram ---- #}
+<div class="section-head" id="telegram">
+  <h2>Telegram</h2>
+  <form method="post" action="/credentials/test/telegram" data-once><button type="submit" class="secondary outline btn-sm">Verbindung testen</button></form>
+</div>
+<div class="cred-list">
+  {% for c in credentials if c.name != "fredy_webhook_token" %}{{ cred_card(c) }}{% endfor %}
+</div>
+
+<article id="editor-login" class="setting-card">
+  <h2>Links aus Telegram</h2>
+  {% if editor_login_error %}
+  <div class="flash warn" role="alert"><span><strong>Telegram hat den „📝 Editor“-Button abgelehnt</strong>
+    {%- if editor_login_error.at %} (zuletzt am {{ editor_login_error.at|local_time }}){% endif %}: {{ editor_login_error.text }}
+    {%- if not editor_login_error.text.endswith(".") %}.{% endif %}
+    Die Nachrichten gehen ohne den Button raus. Meist fehlt die Domain beim Bot – siehe unten.</span></div>
+  {% endif %}
+  <div class="callout {{ 'info' if public_url[0] else 'warn' }}">
+    <span><strong>Adresse für „🔗 Dashboard“ und „📝 Editor“:</strong>
+      {% if public_url[0] %}<code>{{ public_url[0] }}</code>
+        ({{ "aus IMMOBOT_PUBLIC_URL" if public_url[1] == "env" else "gemerkt aus deinen Dashboard-Aufrufen" }})
+      {%- else %}noch unbekannt – wird beim nächsten Dashboard-Aufruf über die öffentliche Domain gemerkt{% endif %}.
+      Fest einstellen mit der Env-Variable <code>IMMOBOT_PUBLIC_URL</code> (z. B. <code>https://immobot.example.com</code>).</span>
+  </div>
+  <h3>📝 Editor aus Telegram einrichten</h3>
+  <p class="help">Der Button „📝 Editor“ unter einem Entwurf öffnet den Editor ohne Dashboard-Passwort: Telegram bestätigt,
+    wer du bist. Dafür muss der Bot die Domain des Dashboards kennen – einmal pro Bot:</p>
+  <ol class="steps">
+    <li>In Telegram <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">@BotFather</a> öffnen und
+      <code>/setdomain</code> senden.</li>
+    <li>Deinen Bot wählen (derselbe wie beim Bot-Token oben).</li>
+    <li>Die Domain des Dashboards senden:
+      {% if editor_domain %}
+      <div class="command"><code id="editor-domain">{{ editor_domain }}</code>
+        <button type="button" class="secondary outline copy-btn btn-sm" data-copy="editor-domain">Kopieren</button></div>
+      {% else %}
+      <br><span class="muted">deine Dashboard-Domain ohne https://, z. B. <code>immobot.example.com</code> (noch unbekannt, siehe oben)</span>
+      {% endif %}
+    </li>
+  </ol>
+  <p class="help">Öffnen dürfen den Editor nur die <a href="#telegram_allowed_user_ids">erlaubten Telegram-User</a>.</p>
+</article>
+
+{# ---- Fredy ---- #}
+<div class="section-head" id="fredy"><h2>Fredy</h2></div>
+<div class="cred-list">
+  {% for c in credentials if c.name == "fredy_webhook_token" %}{{ cred_card(c) }}{% endfor %}
+</div>
+
+{# The settings form of this tab: the Fredy address here, provider and model above (form="zugaenge-form"). #}
+<form id="zugaenge-form" method="post" action="/settings">
+  <input type="hidden" name="section" value="zugaenge">
+  <article id="fredy-adresse" class="setting-card">
+    <label>Adresse deiner Fredy-Instanz {{ need_tag("optional") }}
+      <small>Für die Links „In Fredy öffnen“. Leer = die Links, die Fredy mitschickt.</small>
+      <input type="text" inputmode="url" name="fredy_base_url" value="{{ values.fredy_base_url }}"
+        placeholder="https://fredy.example.com" autocomplete="off" spellcheck="false" autocapitalize="off"
+        {% if errors.fredy_base_url %}aria-invalid="true"{% endif %}>
+      {{ field_error("fredy_base_url") }}
+    </label>
+    <p class="help">Die Links, die Fredy selbst mitschickt, baut Fredy aus seiner eigenen „Basis-URL“
+      (in Fredy unter Einstellungen → System).</p>
+  </article>
+  <div class="savebar">
+    <small>Speichert Fredy-Adresse, Anbieter und Modell.</small>
+    <button type="submit">Speichern</button>
+  </div>
+</form>
+
+<details class="disclosure notes-box">
+  <summary>Wichtig: Verschlüsselung und Env-Variablen</summary>
+  <div class="disclosure-body">
+    <ul class="notes">
+      <li>Die Werte (auch die API-Keys) liegen AES-GCM-verschlüsselt in der Datenbank. Der Schlüssel
+        wird aus <code>SESSION_SECRET</code> abgeleitet. <strong>Wird <code>SESSION_SECRET</code> geändert, sind alle hier
+        gespeicherten Werte nicht mehr lesbar</strong> („nicht entschlüsselbar“) und müssen neu eingetragen werden.</li>
+      <li>Steht bei einem Wert „aus Env-Variable“: hier eintragen und danach die Variable in Coolify löschen.</li>
+    </ul>
+  </div>
+</details>
+
+{# Helper forms outside the main form; the buttons in the panels point here via form="…". #}
+{% for p in panels %}
+<form id="refresh-models-{{ p.provider }}" method="post" action="/settings/models/refresh">
+  <input type="hidden" name="provider" value="{{ p.provider }}">
+</form>
+<form id="test-{{ p.provider }}" method="post" action="/credentials/test/{{ p.provider }}" data-once></form>
+{% endfor %}
+{% endblock %}

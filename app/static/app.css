@@ -494,7 +494,7 @@ pre.draft {
 .lightbox .lb-count { position: absolute; top: 1.3rem; left: 1rem; font-size: .85rem; color: rgba(255, 255, 255, .8); }
 
 /* ---------- settings ---------- */
-/* Sub-pages (Anschreiben · KI & Kosten · Telegram & Fredy) as a segmented control; a red dot = something required is missing. */
+/* Tabs (Profil · Verhalten · Zugänge) as a segmented control; a red dot = something required is missing. */
 .subnav {
   display: flex; gap: .1rem; padding: .2rem; margin: 0 0 1.25rem; border-radius: 999px; background: var(--surface-2);
   border: 1px solid var(--pico-muted-border-color); overflow-x: auto; scrollbar-width: none;
@@ -542,8 +542,88 @@ details.notes-box .notes { margin: 0; font-size: .9rem; }
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); border-top: 1px solid var(--pico-muted-border-color);
 }
 .savebar button { margin: 0; min-width: 9rem; }
+.savebar button { white-space: nowrap; }
+@media (max-width: 419px) { .savebar.button-first small { display: none; } .savebar.button-first button { flex: 1; } }
 .savebar small { color: var(--pico-muted-color); }
 @media (min-width: 768px) { .savebar { margin-left: 0; margin-right: 0; border: 1px solid var(--pico-muted-border-color); border-radius: var(--radius); bottom: .75rem; } }
+.js .nojs-only { display: none !important; }  /* fallback buttons for what app.js does by itself */
+#anbieter > .actions { margin: .5rem 0 .75rem; }
+.empty-line { color: var(--pico-muted-color); font-size: .92rem; margin: 0 0 1rem; }
+
+/* Profil → "Aus Feedback verbessern": a card when there is something to do, else one muted line */
+.rewrite-card.is-active { border-color: color-mix(in srgb, var(--accent) 45%, transparent); box-shadow: 0 0 0 2px var(--accent-soft), var(--pico-card-box-shadow); }
+.rewrite-card > p { margin-bottom: .6rem; }
+.rewrite-card form.actions { margin: .25rem 0 .6rem; }
+.rewrite-busy { font-weight: 600; }
+.rewrite-busy [aria-busy=true]::before { margin-right: .5rem; }
+.rewrite-line { margin: -.25rem 0 1rem; color: var(--pico-muted-color); }
+.flash .flash-dismiss { margin: 0 0 0 auto; flex: none; }
+
+/* Profil → Verlauf (profile versions) */
+.version-list { list-style: none; margin: .75rem 0 0; padding: 0; }
+.version-list > li {
+  list-style: none; margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: .15rem .75rem;
+  padding: .55rem 0; border-top: 1px solid var(--pico-muted-border-color); font-size: .9rem;
+}
+.version-list .v-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .5rem; min-width: 0; }
+.version-list .v-when { color: var(--pico-muted-color); font-size: .84rem; font-variant-numeric: tabular-nums; }
+.version-list .v-current { color: var(--accent-strong); font-size: .8rem; font-weight: 600; }
+.version-list .v-note { flex-basis: 100%; color: var(--pico-muted-color); font-size: .84rem; overflow-wrap: anywhere; }
+.version-list .v-actions { display: inline-flex; align-items: baseline; gap: .9rem; margin-left: auto; font-size: .84rem; }
+.version-list .v-actions form { margin: 0; }
+.version-field.is-same { padding-top: .7rem; padding-bottom: .7rem; }
+.version-field.is-same .card-title { margin: 0; }
+.version-field.is-same h3 { color: var(--pico-muted-color); }
+
+/* Profil → a rewrite proposal: one card per edit, its diff in the context of the field */
+.edit-card .edit-head { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .6rem; margin-bottom: .6rem; }
+.edit-card .edit-head .check { margin: 0; }
+.edit-card.is-fact { border-color: var(--warn-line); }
+.edit-card.is-off .edit-diff { opacity: .7; }
+.edit-diff {
+  margin: 0 0 .65rem; padding: .7rem .85rem; border-radius: var(--radius-sm); background: var(--surface-2);
+  font-size: .93rem; max-height: 22rem; overflow-y: auto;
+}
+.edit-note { font-size: .88rem; margin: 0 0 .5rem; }
+.edit-note.fact-note { color: var(--warn); }
+.edit-reason { margin: 0 0 .4rem; font-size: .93rem; }
+.evidence { list-style: none; margin: 0 0 .5rem; padding: 0; font-size: .84rem; color: var(--pico-muted-color); }
+.evidence > li { list-style: none; position: relative; margin: .15rem 0; padding-left: 1.1rem; overflow-wrap: anywhere; }
+.evidence > li::before { content: "↳"; position: absolute; left: 0; }
+.stale-actions { margin-bottom: 1.25rem; }
+.reject-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem; margin: 1.25rem 0 0; }
+.reject-row button { width: auto; margin: 0; }
+
+/* Verhalten → Lernen: learned rules and examples */
+.learn-links { margin: 0; font-size: .88rem; }
+.rule-group { margin: .9rem 0 1rem; }
+.rule-group h3 { display: flex; align-items: center; gap: .4rem; margin-bottom: .2rem; }
+.rule-list { list-style: none; margin: 0 0 1rem; padding: 0; display: grid; gap: .5rem; }
+.rule-list > li {
+  list-style: none; margin: 0; min-width: 0; padding: .7rem .85rem; border-radius: var(--radius-sm);
+  border: 1px solid var(--pico-card-border-color); background: var(--pico-card-background-color);
+}
+.rule-list.compact > li { padding: .5rem .75rem; }
+.rule-list form { margin: 0; }
+.rule-list button { width: auto; margin: 0; }  /* small inline buttons, also on phones */
+.rule-list textarea { margin-bottom: .5rem; font-size: .93rem; }
+.rule.is-proposed { border-color: var(--warn-line); background: var(--warn-soft); }
+.rule.is-off .rule-text { color: var(--pico-muted-color); }
+.rule-kind { margin: 0 0 .35rem; font-size: .82rem; font-weight: 600; color: var(--pico-muted-color); }
+.rule-kind .old { font-weight: 400; text-decoration: line-through; }
+.rule-text { margin: 0 0 .3rem; font-size: .95rem; overflow-wrap: anywhere; }
+.rule-reason { margin: 0 0 .35rem; font-size: .85rem; color: var(--pico-muted-color); }
+.rule-meta { margin: 0 0 .35rem; font-size: .82rem; color: var(--pico-muted-color); overflow-wrap: anywhere; }
+.rule-list.compact .rule-meta { margin: 0; }
+.rule-foot { display: flex; flex-wrap: wrap; align-items: center; gap: .1rem 1rem; }
+.rule-foot .rule-meta { margin: 0; }
+.rule-toggle { display: inline-flex; align-items: center; gap: .6rem; }
+.rule-toggle label { display: inline-flex; align-items: center; gap: .1rem; margin: 0; font-size: .86rem; white-space: nowrap; }
+.rule-edit { margin: .4rem 0 0; }
+.rule-edit > summary { font-size: .84rem; color: var(--pico-primary); }
+.rule-edit[open] > summary { margin-bottom: .5rem; }
+.rule-edit pre.draft { font-size: .9rem; margin-bottom: .5rem; }
+.rule.example form { margin-top: .5rem; }
 
 /* ---------- credentials ---------- */
 .cred-list { display: grid; gap: .75rem; margin-bottom: 1.5rem; }

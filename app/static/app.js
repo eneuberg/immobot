@@ -82,6 +82,42 @@
   document.addEventListener("DOMContentLoaded", syncProviderPanels);
   window.addEventListener("pageshow", syncProviderPanels);  // the browser may restore another selection
 
+  // ---- Einstellungen: background proposal, self-saving switches (begin) ----------------------------------
+  // Profil → "Verbesserung vorschlagen" runs in the background (minutes): poll its status, then open the proposal
+  // or reload to show the error. Without JS a <noscript> meta refresh reloads the page instead.
+  function pollRewrite(el) {
+    var failures = 0;
+    function tick() {
+      fetch(el.dataset.rewritePoll, { headers: { Accept: "application/json" }, credentials: "same-origin" })
+        .then(function (r) {
+          if (!r.ok || r.redirected) throw new Error("status " + r.status);  // e.g. logged out: reload shows the login
+          return r.json();
+        })
+        .then(function (job) {
+          failures = 0;
+          if (job.state === "running") { setTimeout(tick, 3000); return; }
+          if (job.url && job.url !== location.pathname + location.search) location.href = job.url;
+          else location.reload();
+        })
+        .catch(function () {
+          if (++failures >= 5) location.reload(); else setTimeout(tick, 6000);
+        });
+    }
+    setTimeout(tick, 2500);
+  }
+  document.addEventListener("DOMContentLoaded", function () {
+    var el = document.querySelector("[data-rewrite-poll]");
+    if (el) pollRewrite(el);
+  });
+  // <input data-autosubmit> (Verhalten → "wird genutzt" of a learned rule) saves its form on change; without JS a
+  // fallback button (class nojs-only) does that.
+  document.addEventListener("change", function (e) {
+    var input = e.target.closest ? e.target.closest("[data-autosubmit]") : null;
+    if (!input || !input.form) return;
+    if (input.form.requestSubmit) input.form.requestSubmit(); else input.form.submit();
+  });
+  // ---- Einstellungen (end) ----------------------------------------------------------------------------------
+
   // Thumbnails: an image that fails to load is hidden, so the placeholder underneath shows.
   function markBroken(img) { img.classList.add("is-broken"); }
   document.addEventListener("error", function (e) {

@@ -1,4 +1,5 @@
-{# Einstellungen → Anschreiben: what the drafts say about you and how they sound. Nothing technical here. #}
+{# Einstellungen → Profil: what the drafts say about you and how they sound, every change as a version ("Verlauf"),
+   and improvements from feedback (card at the top, only when there is something to do). Nothing technical here. #}
 {% extends "settings_base.html" %}
 {% from "macros.html" import draft_meta %}
 {% from "settings_macros.html" import field_error with context %}
@@ -20,6 +21,11 @@
 {{ field_error(key) }}
 {% endmacro %}
 
+{% block head %}
+{# The proposal is made in the background: app.js polls its status; without JS the page reloads itself. #}
+{% if job and job.state == "running" %}<noscript><meta http-equiv="refresh" content="10"></noscript>{% endif %}
+{% endblock %}
+
 {% block intro %}Was über dich in den Anschreiben steht und wie sie klingen.{% endblock %}
 
 {% block section %}
@@ -35,8 +41,54 @@
 </article>
 {% endif %}
 
+{# ---- "Aus Feedback verbessern": a card when there is something to do, else one muted line ---- #}
+{% set job_state = job.state if job else None %}
+{% set feedback_count = rewrite.feedback + rewrite.sessions %}
+{% if job_state in ("running", "failed") or rewrite.pending or rewrite.enabled or stale_proposal %}
+<article id="verbessern" class="setting-card rewrite-card{% if rewrite.pending or job_state == 'running' %} is-active{% endif %}">
+  <h2>Aus Feedback verbessern</h2>
+  {% if job_state == "running" %}
+  <p class="rewrite-busy"><span aria-busy="true" data-rewrite-poll="/settings/rewrite/status">Vorschlag wird erstellt …</span></p>
+  <p class="help">Claude liest deine Rückmeldungen und sucht kleine Verbesserungen für dein Profil. Das dauert bis zu ein
+    paar Minuten. Die Seite aktualisiert sich selbst; du kannst sie auch verlassen.</p>
+  {% elif rewrite.pending %}
+  {% set n = rewrite.pending.edits|length %}
+  <p>{% if n %}Vorschlag bereit: <strong>{{ plural(n, "Änderung", "Änderungen") }}</strong> an deinem Profil.
+    {% else %}Claude hat diesmal keine Änderung gefunden.{% endif %}
+    <small class="muted">Erstellt am {{ rewrite.pending.created_at|local_time }}.</small></p>
+  <div class="actions"><a role="button" href="/settings/vorschlag/{{ rewrite.pending.id }}">Vorschlag ansehen</a></div>
+  {% else %}
+  {% if job_state == "failed" %}
+  <div class="flash err" role="alert">
+    <span>Der letzte Vorschlag ist fehlgeschlagen{% if job.finished_at %} ({{ job.finished_at|local_time }}){% endif %}: {{ job.error }}</span>
+    <form method="post" action="/settings/rewrite/dismiss" class="flash-dismiss"><button type="submit" class="linkish">Ausblenden</button></form>
+  </div>
+  {% endif %}
+  {% if stale_proposal %}
+  <div class="callout info"><span>Vorschlag #{{ stale_proposal.id }} passt nicht mehr, weil du das Profil danach geändert hast.
+    Einfach einen neuen erstellen lassen.</span></div>
+  {% endif %}
+  <p>{{ plural(feedback_count, "Rückmeldung", "Rückmeldungen") }} und {{ plural(rewrite.rules, "gelernte Regel", "gelernte Regeln") }}
+    {%- if rewrite.base_version %} seit Version #{{ rewrite.base_version.id }}{% endif %}.</p>
+  {% if rewrite.merge_hint %}<p class="help">Schon {{ rewrite.rules }} aktive Regeln – ein Vorschlag kann sie ins Profil einarbeiten.</p>{% endif %}
+  {% if rewrite.enabled %}
+  <form method="post" action="/settings/rewrite" data-once class="actions">
+    <button type="submit">{{ "Neu erstellen" if stale_proposal else "Verbesserung vorschlagen" }}</button>
+  </form>
+  <p class="help">Claude schlägt kleine Änderungen an deinem Profil vor; du entscheidest über jede einzeln.
+    Dauert bis zu ein paar Minuten und kostet etwa so viel wie ein gründlicher Entwurf.</p>
+  {% else %}
+  <p class="help">Möglich ab 3 Rückmeldungen oder einer aktiven Regel.</p>
+  {% endif %}
+  {% endif %}
+</article>
+{% else %}
+<p class="rewrite-line" id="verbessern"><small><strong>Aus Feedback verbessern:</strong> möglich ab 3 Rückmeldungen
+  (bisher {{ feedback_count }}) oder einer gelernten Regel – Rückmeldungen sammelt immobot aus „Kürzer“, „Anpassen“ und dem 📝 Editor.</small></p>
+{% endif %}
+
 <form id="settings-form" method="post" action="/settings">
-  <input type="hidden" name="section" value="texte">
+  <input type="hidden" name="section" value="profil">
   <article id="profil" class="setting-card">
     {{ textarea("profile", "Über mich", "Dein Steckbrief für die Anschreiben: Person, Job/Einkommen, Haushalt, Haustiere/Raucher, Einzug, Umzugsgrund, Unterlagen, Kontakt/Signatur. Was hier nicht steht, wird auch nicht behauptet.", 14) }}
   </article>
@@ -77,6 +129,38 @@
 {% for key in ["profile", "wishes", "style", "system_prompt"] %}
 <form id="reset-{{ key }}" method="post" action="/settings/reset/{{ key }}"></form>
 {% endfor %}
+
+{# ---- Verlauf: every change of the profile as a version (never deleted) ---- #}
+<article id="verlauf" class="setting-card">
+  <details {% if verlauf_open %}open{% endif %}>
+    <summary><strong>Verlauf</strong> <span class="count">{{ versions_total }}</span>
+      <small class="muted">– jede Änderung als Version</small></summary>
+    <ol class="version-list">
+      {% for v in versions %}
+      <li>
+        <div class="v-main">
+          <strong>#{{ v.id }}</strong>
+          <span class="badge">{{ version_labels.get(v.source, v.source) }}</span>
+          <span class="v-when">{{ v.created_at|local_time }}</span>
+          {% if loop.first %}<span class="v-current">aktuell</span>{% endif %}
+        </div>
+        {% if v.note %}<div class="v-note">{{ v.note }}</div>{% endif %}
+        {% if not loop.first %}
+        <div class="v-actions">
+          <a href="/settings/version/{{ v.id }}">Ansehen</a>
+          <form method="post" action="/settings/version/{{ v.id }}/restore">
+            <button type="submit" class="linkish" data-confirm="Version #{{ v.id }} wiederherstellen? Das aktuelle Profil bleibt als Version im Verlauf.">Wiederherstellen</button>
+          </form>
+        </div>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    {% if versions_total > versions|length %}
+    <p class="help"><a href="/settings?verlauf=alle#verlauf">Alle {{ versions_total }} Versionen zeigen</a></p>
+    {% endif %}
+  </details>
+</article>
 
 <article id="testen" class="setting-card">
   <h2>Testen</h2>

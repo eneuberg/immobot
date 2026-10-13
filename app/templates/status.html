@@ -20,7 +20,7 @@
 
 <section class="health" aria-label="Überblick">
   {% call tile("err" if ai.no_key_warning else ("warn" if ai.key.undecryptable else "ok"), "KI-Anbieter") %}
-    <p>{{ ai.label }} · {{ ai.model_label }} · <a href="/settings/ki">ändern</a></p>
+    <p>{{ ai.label }} · {{ ai.model_label }} · <a href="/settings/zugaenge#anbieter">ändern</a></p>
     <p>{{ ai.label }}-API-Key: {{ key_line(ai.key) }}</p>
   {% endcall %}
 
@@ -31,20 +31,28 @@
   {% call tile(bot_tone, "Telegram-Bot") %}
     <p>
       {% if bot_disabled %}deaktiviert (IMMOBOT_DISABLE_BOT)
-      {% elif not bot_configured %}<span class="error">nicht konfiguriert</span> – Bot-Token unter <a href="/settings/telegram">Einstellungen → Telegram &amp; Fredy</a> eintragen
+      {% elif not bot_configured %}<span class="error">nicht konfiguriert</span> – Bot-Token unter <a href="/settings/zugaenge#telegram">Einstellungen → Zugänge</a> eintragen
       {% elif bot_running %}<span class="success">läuft</span>{% if not chat_connected %} – noch kein Chat verbunden{% endif %}
       {% else %}<span class="error">läuft nicht</span>{% endif %}
     </p>
     <p>Letztes Telegram-Update: {{ bot_last_update_at|local_time }}</p>
   {% endcall %}
 
-  {% call tile("warn" if allowlist_warning else ("ok" if allowed_user_ids else ""), "Erlaubte Telegram-User") %}
+  {% call tile("ok" if allowed_user_ids and not allowlist_warning else "warn", "Erlaubte Telegram-User") %}
     <p>
       {% if allowlist_warning %}<span class="error">⚠ {{ allowlist_warning }}</span>
       {% elif allowed_user_ids %}{{ allowed_user_ids|join(", ") }}
-      {% else %}{{ open_chat_note }}{% endif %}
+      {% else %}<span class="error">Nicht gesetzt</span> – {{ open_chat_note }}{% endif %}
     </p>
+    {% if allowlist_warning or not allowed_user_ids %}<p><a href="/settings/zugaenge#telegram_allowed_user_ids">Eintragen</a> (Pflicht für den 📝 Editor)</p>{% endif %}
   {% endcall %}
+
+  {% if editor_login_error %}
+  {% call tile("warn", "📝 Editor-Button") %}
+    <p>Telegram hat den Button abgelehnt{% if editor_login_error.at %} ({{ editor_login_error.at|local_time }}){% endif %}: {{ editor_login_error.text }}</p>
+    <p>Meist fehlt die Domain beim Bot: in @BotFather <code>/setdomain</code> – <a href="/settings/zugaenge#editor-login">so geht's</a></p>
+  {% endcall %}
+  {% endif %}
 
   {% call tile("ok" if last_webhook_at else "", "Fredy-Webhook") %}
     <p>{% if last_webhook_at %}Letzter Aufruf: {{ last_webhook_at|local_time }}{% else %}Noch kein Aufruf von Fredy{% endif %}</p>
@@ -77,7 +85,7 @@
   {% endif %}
 </section>
 
-<div class="section-head"><h2>Zugänge</h2><small class="muted">ändern unter <a href="/settings/ki">KI &amp; Kosten</a> bzw. <a href="/settings/telegram">Telegram &amp; Fredy</a></small></div>
+<div class="section-head"><h2>Zugänge</h2><small class="muted">ändern unter <a href="/settings/zugaenge">Einstellungen → Zugänge</a></small></div>
 <ul class="kv">
   {% for c in credentials %}
   <li>
@@ -119,7 +127,7 @@
       <div class="command"><code id="hook-url">{{ hook_url }}</code>
         <button type="button" class="secondary outline copy-btn btn-sm" data-copy="hook-url">Kopieren</button></div>
     </li>
-    <li>Auth Token = der Fredy-Webhook-Token aus <a href="/settings/telegram">Einstellungen → Telegram &amp; Fredy</a> (wird als <code>Authorization: Bearer …</code> gesendet; Pfad <code>/hook/fredy</code>).</li>
+    <li>Auth Token = der Fredy-Webhook-Token aus <a href="/settings/zugaenge#fredy_webhook_token">Einstellungen → Zugänge</a> (wird als <code>Authorization: Bearer …</code> gesendet; Pfad <code>/hook/fredy</code>).</li>
   </ol>
   <p class="muted"><small>API-Keys und Tokens werden unter Einstellungen gepflegt und nirgends im Dashboard angezeigt.</small></p>
 </article>

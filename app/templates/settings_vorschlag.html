@@ -1,0 +1,90 @@
+{# Einstellungen → Profil → a rewrite proposal ("Aus Feedback verbessern"): each edit as a diff in its field, with
+   reason and evidence; pick the edits to apply. Decided or stale proposals are shown read-only. #}
+{% extends "settings_base.html" %}
+{% from "macros.html" import text_diff %}
+
+{% block title %}Vorschlag #{{ proposal.id }} · Profil · Einstellungen{% endblock %}
+{% block intro %}Kleine Änderungen an deinem Profil aus deinen Rückmeldungen – du entscheidest einzeln.{% endblock %}
+
+{% block section %}
+{% set pending = proposal.status == "pending" %}
+{% set choosable = edits|selectattr("applicable")|list %}
+<p class="backlink"><a href="/settings">← Profil</a></p>
+
+<div class="section-head">
+  <h2>Vorschlag #{{ proposal.id }}</h2>
+  <small class="muted">vom {{ proposal.created_at|local_time }} · zu Version #{{ proposal.base_version_id }}</small>
+</div>
+
+{% if proposal.status == "stale" %}
+<div class="callout warn">
+  <span><strong>Veraltet:</strong> Du hast das Profil geändert, nachdem Claude diesen Vorschlag gemacht hat. Die Änderungen
+    passen deshalb nicht mehr sicher und lassen sich nicht übernehmen. Deine Rückmeldungen sind nicht verloren.</span>
+</div>
+<form method="post" action="/settings/rewrite" data-once class="actions stale-actions">
+  <button type="submit">Neu erstellen</button>
+</form>
+{% elif proposal.status == "accepted" %}
+<div class="callout info"><span>Übernommen am {{ proposal.decided_at|local_time }}
+  {%- if proposal.applied_version_id %} – jetzt <a href="/settings/version/{{ proposal.applied_version_id }}">Version #{{ proposal.applied_version_id }}</a>{% endif %}.</span></div>
+{% elif proposal.status == "rejected" %}
+<div class="callout info"><span>Verworfen am {{ proposal.decided_at|local_time }}. Claude schlägt diese Änderungen nicht wieder vor.</span></div>
+{% endif %}
+
+{% if pending %}
+<form id="apply-form" method="post" action="/settings/vorschlag/{{ proposal.id }}/apply">
+{% endif %}
+
+{% if not edits %}
+<div class="empty">
+  <strong>Keine Änderung vorgeschlagen</strong>
+  <p>Claude hat in den Rückmeldungen kein allgemeines Muster gefunden.
+    {%- if pending %} „Als verarbeitet markieren“ zählt sie beim nächsten Mal nicht mehr; „Verwerfen“ lässt sie stehen.{% endif %}</p>
+</div>
+{% elif pending %}
+<p class="help">Grün = kommt dazu, rot durchgestrichen = fällt weg. Angaben über dich (Fakten) sind nicht vorausgewählt.</p>
+{% endif %}
+
+{% for e in edits %}
+<article class="edit-card{% if e.is_fact %} is-fact{% endif %}{% if not e.applicable %} is-off{% endif %}" id="aenderung-{{ e.id }}">
+  <header class="edit-head">
+    {% if pending and e.applicable %}
+    <label class="check"><input type="checkbox" name="edit" value="{{ e.id }}" {% if e.checked %}checked{% endif %}>
+      <span><strong>{{ e.label }}</strong></span></label>
+    {% else %}
+    <strong>{{ e.label }}</strong>
+    {% endif %}
+    {% if e.is_fact %}<span class="badge warn">⚠ Fakt</span>{% endif %}
+    {% if not pending and e.decision_label %}<span class="badge{% if e.decision == 'accepted' %} ok{% endif %}">{{ e.decision_label }}</span>{% endif %}
+  </header>
+  {% if e.is_fact and pending and e.applicable %}
+  <p class="edit-note fact-note">Ändert Angaben über dich. Nur übernehmen, wenn es stimmt.</p>
+  {% endif %}
+  {% if not e.applicable and e.problem %}<p class="edit-note error">Nicht anwendbar: {{ e.problem }}</p>{% endif %}
+  {% if not e.old and e.field != "target_words" and not (pending and e.applicable) %}<p class="edit-note">Wird ans Ende angehängt:</p>{% endif %}
+  {{ text_diff(e.before|word_diff(e.after)|trim_diff, "edit-diff") }}
+  {% if e.reason %}<p class="edit-reason">{{ e.reason }}</p>{% endif %}
+  {% if e.evidence_items %}
+  <ul class="evidence" aria-label="Belege">
+    {% for item in e.evidence_items %}<li>{{ item }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% if e.covers and pending %}
+  <p class="edit-note">Arbeitet {{ "die Regel" if e.covers|length == 1 else "die Regeln" }} {% for text in e.covers %}„{{ text }}“{{ ", " if not loop.last }}{% endfor %} ins Profil ein – {{ "sie gilt" if e.covers|length == 1 else "sie gelten" }} dann nicht mehr einzeln.</p>
+  {% endif %}
+</article>
+{% endfor %}
+
+{% if pending %}
+  <div class="reject-row">
+    <button type="submit" formaction="/settings/vorschlag/{{ proposal.id }}/reject" class="secondary outline btn-sm"
+      data-confirm="Vorschlag verwerfen? Claude schlägt diese Änderungen nicht wieder vor.">Verwerfen</button>
+    <small class="muted">Nichts übernehmen – Claude schlägt diese Änderungen nicht wieder vor.</small>
+  </div>
+  <div class="savebar button-first">
+    <small>{% if choosable %}Nur Angehaktes wird übernommen.{% else %}Nichts zum Übernehmen.{% endif %}</small>
+    <button type="submit">{{ "Ausgewählte übernehmen" if choosable else "Als verarbeitet markieren" }}</button>
+  </div>
+</form>
+{% endif %}
+{% endblock %}
