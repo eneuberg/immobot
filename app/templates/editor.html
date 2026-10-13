@@ -1,5 +1,6 @@
 {% extends "editor_base.html" %}
 {% from "macros.html" import flashes, status_badge, text_diff %}
+{% from "rule_macros.html" import manual_rule_form %}
 {% block title %}Editor · {{ listing.title or "Inserat" }}{% endblock %}
 {% block head %}
 <script src="/static/editor.js?v={{ EDITOR_JS_VERSION }}" defer></script>
@@ -77,7 +78,8 @@
   {% endif %}
 
   {% if session.status == "open" %}
-  {# One form for text and critique: every button saves the hand edits (formaction picks the action). #}
+  {# One form for text and critique: every button saves the hand edits (formaction picks the action). The text also
+     saves itself (editor.js → /save, JSON); without JS "Zwischenspeichern" posts the form to /save. #}
   <form method="post" action="/editor/{{ listing.id }}/save" class="ed-grid" id="ed-form" data-editor>
     {{ hidden() }}
     <div class="ed-main">
@@ -85,7 +87,9 @@
         <header class="ed-card-head">
           <h2><label for="ed-text">Dein Text</label></h2>
           <span class="badge accent">Fassung {{ version_no }}</span>
-          <span class="ed-unsaved" data-unsaved hidden>nicht gespeichert</span>
+          <span class="ed-save" data-save-state role="status"></span>
+          <button type="submit" class="linkish ed-save-reload" data-save-reload hidden>Neu laden (Text bleibt erhalten)</button>
+          <button type="submit" class="linkish ed-save-nojs nojs-only" title="Speichern, ohne Claude">Zwischenspeichern</button>
         </header>
         {% if version_no == 1 and not changed %}{# orientation for a fresh round only #}
         <p class="help ed-intro">Selbst ändern oder unten Claude überarbeiten lassen; „Fertig“ speichert die Endversion.</p>
@@ -94,8 +98,8 @@
         <textarea id="ed-text" name="text" rows="12" maxlength="20000" spellcheck="true" data-autosize>{{ text }}</textarea>
         <div class="ed-bar">
           <button type="button" class="secondary outline" data-copy-field="ed-text">Kopieren</button>
-          <button type="submit" class="secondary" title="Speichern, ohne Claude">Speichern</button>
-          <button type="submit" formaction="/editor/{{ listing.id }}/finish" title="Endversion speichern">Fertig ✓</button>
+          <button type="submit" formaction="/editor/{{ listing.id }}/finish" aria-describedby="ed-done-note">Fertig ✓</button>
+          <p class="ed-bar-note" id="ed-done-note">„Fertig“ = das ist meine Endversion → Claude sucht Regeln, Telegram zeigt diese Fassung.</p>
         </div>
       </article>
       <details class="disclosure ed-diff">
@@ -168,8 +172,8 @@
       {% if use_rules or proposals or decided %}
       <article class="ed-card ed-rules" id="regeln">
         <h2>Regeln für künftige Entwürfe</h2>
-        <p class="help">Aus deinen Änderungen und deiner Kritik leitet Claude allgemeine Regeln ab. Übernommene Regeln gelten
-          für jeden neuen Entwurf; den Text kannst du vorher anpassen.
+        <p class="help">Claude vergleicht seinen Entwurf mit deiner Endversion (inkl. geänderter Sätze) und deiner Kritik
+          und schlägt allgemeine Regeln vor – du entscheidest. Übernommene Regeln gelten für jeden neuen Entwurf.
           {% if logged_in %}<a href="/settings/verhalten#regeln">Alle Regeln</a>{% else %}Alle Regeln: im Dashboard unter Einstellungen → Verhalten.{% endif %}</p>
         {% if job and job.state == "running" %}
         <p class="ed-wait" aria-busy="true" data-rules-poll="/editor/{{ listing.id }}/rules/status">Claude sucht nach Regeln …</p>
@@ -199,6 +203,9 @@
         {% if not job and rule_state == "due" %}
         <p class="ed-norules">Für diese Endversion hat Claude noch keine Regeln vorgeschlagen.</p>
         <form method="post" action="/editor/{{ listing.id }}/rules/retry" class="ed-ask">{{ hidden() }}<button type="submit" class="secondary outline btn-sm">Regeln vorschlagen lassen</button></form>
+        {% elif not job and rule_state == "done" and session.rules_note %}
+        {# Claude's no_rule_reason: why this round brought no proposal #}
+        <p class="ed-norules"><strong>Claude:</strong> {{ session.rules_note }}</p>
         {% elif not job and not decided %}
         <p class="muted ed-norules">{% if rule_state == "nothing" %}Du hast Claudes Entwurf unverändert übernommen – daraus gibt es nichts zu lernen.
           {%- else %}Claude hat in dieser Runde keine allgemeine Regel gefunden.{% endif %}</p>
@@ -207,9 +214,16 @@
 
         {% if decided %}
         <ul class="ed-decided">
-          {% for rule in decided %}<li><span class="badge {{ 'ok' if rule.status == 'active' else '' }}">{{ rule.status_label }}</span> {{ rule.text }}</li>{% endfor %}
+          {% for rule in decided %}<li><span class="badge {{ 'ok' if rule.status == 'active' else '' }}">{{ rule.status_label }}</span> {{ rule.text }}
+            {%- if rule.proposed_text is none %} <small class="muted">(selbst eingetragen)</small>{% endif %}</li>{% endfor %}
         </ul>
         {% endif %}
+
+        {# Open when Claude proposed nothing in this round and nothing was decided: then this is the way to a rule. #}
+        {% set manual_first = manual_rule is not none or (not proposals and not decided and rule_state != "due"
+                                                          and not (job and job.state == "running")) %}
+        {% call manual_rule_form("/editor/" ~ listing.id ~ "/rules/add", "ed-manual-rule", "Regel selbst eintragen",
+                                 open=manual_first, value=manual_rule or "", max_chars=rule_max_chars, prominent=manual_first) %}{{ hidden() }}{% endcall %}
       </article>
       {% endif %}
 

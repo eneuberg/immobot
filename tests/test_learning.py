@@ -124,11 +124,39 @@ def test_word_diff_joins_neighbouring_changes_but_keeps_line_breaks():
 def test_sentence_diff_shows_only_changed_sentences():
     old = "Guten Tag. Ich bin Erika. Ich arbeite als Ärztin.\nViele Grüße"
     new = "Guten Tag. Ich bin Erika, 34. Ich arbeite als Ärztin.\nViele Grüße"
-    assert textdiff.sentence_diff(old, new) == "- Ich bin Erika.\n+ Ich bin Erika, 34."
+    assert textdiff.sentence_diff(old, new) == "- Ich bin Erika.\n+ Ich bin Erika, 34.\n  Wörter: „, 34“ ergänzt"
     assert textdiff.sentence_diff(old, old) == ""
     assert textdiff.sentences("Er sagt „Hallo.“ Dann geht er.") == ["Er sagt „Hallo.“", "Dann geht er."]
     long = textdiff.sentence_diff("", "\n".join(f"Satz {i}." for i in range(100)), max_chars=40)
     assert long.endswith("…") and len(long) <= 42
+
+
+def test_sentence_diff_catches_word_level_changes():
+    """A one-word change inside a sentence shows as the pair vorher / nachher plus the changed words, so it can't
+    get lost in a long text; a sentence replaced as a whole, an added and a removed one stand alone."""
+    old = ("Sehr geehrte Damen und Herren,\n\nich freue mich sehr auf Ihre Antwort. Ich komme gern vorbei.\n\n"
+           "Mit freundlichen Grüßen\nErika")
+    new = ("Guten Tag,\n\nich freue mich auf Ihre Antwort. Ich bin flexibel. Ich komme gern vorbei.\n\n"
+           "Viele Grüße\nErika")
+    assert textdiff.sentence_diff(old, new).splitlines() == [
+        "- Sehr geehrte Damen und Herren,",
+        "+ Guten Tag,",
+        "- ich freue mich sehr auf Ihre Antwort.",
+        "+ ich freue mich auf Ihre Antwort.",
+        "  Wörter: „sehr“ gestrichen",
+        "+ Ich bin flexibel.",
+        "- Mit freundlichen Grüßen",
+        "+ Viele Grüße",
+    ]
+    assert textdiff.sentence_diff("Ich wohne in Berlin.", "Ich wohne seit 2020 in Leipzig.") == (
+        "- Ich wohne in Berlin.\n+ Ich wohne seit 2020 in Leipzig.\n"
+        "  Wörter: „seit 2020“ ergänzt · „Berlin“ → „Leipzig“")
+    assert textdiff.sentence_diff("Hallo. Wie geht es?", "Hallo. Ganz anders.") == "- Wie geht es?\n+ Ganz anders."
+    # only spaces, paragraphs or line breaks: said so instead of "(keine)"
+    assert textdiff.sentence_diff("Eins. Zwei.", "Eins.\n\nZwei.") == textdiff.STRUCTURE_ONLY
+    assert textdiff.sentence_diff("Eins  zwei.", "Eins zwei.") == textdiff.STRUCTURE_ONLY
+    assert textdiff.sentence_diff("Eins.", "Eins.\n") == ""
+    assert textdiff.word_changes("a b c d e f g h i", "1 b 2 d 3 f 4 h 5") == ""  # rewritten: too many to list
 
 
 def test_trim_equal_keeps_context_around_changes():
@@ -196,6 +224,9 @@ def test_create_and_store_draft_records_feedback(lid, fake_generate):
     assert db.quick_feedback_counts() == {"shorter": 1, "regenerate": 1}
     with pytest.raises(ValueError):
         asyncio.run(llm.create_and_store_draft(lid, "shorter", source="sms"))
+    sources = [(d["kind"], d["source"]) for d in db.list_drafts(lid)]  # for the cost breakdown
+    assert sources == [("initial", "telegram"), ("test", "dashboard"), ("shorter", "telegram"),
+                       ("regenerate", "dashboard"), ("custom", "telegram"), ("formal", "editor")]
 
 
 def test_failed_generation_records_no_feedback(lid, monkeypatch):
@@ -344,6 +375,7 @@ def test_revise_in_editor(lid, fake_generate):
     assert result["session"]["current_text"] == "Fassung 1" and result["session"]["original_text"] == "Original"
     draft = result["draft"]
     assert (draft["kind"], draft["instruction"], draft["text"]) == ("custom", "Kürzer bitte", "Fassung 1")
+    assert draft["source"] == "editor"  # "Überarbeitungen im Editor" in the cost bar
     (feedback,) = db.list_feedback()  # exactly one row: the editor's, not a second one from create_and_store_draft
     assert (feedback["source"], feedback["kind"], feedback["text"], feedback["before_text"], feedback["session_id"]) == (
         "editor", "critique", "Kürzer bitte", "Original mit Handänderung", session["id"])
@@ -447,7 +479,8 @@ def test_propose_rules_request_and_storage(lid, client):
     user = call["messages"][0]["content"]
     assert "<original>\nGuten Tag. Ich bin Erika.\n</original>" in user
     assert "<endversion>\nHallo. Ich bin Erika, 34.\n</endversion>" in user
-    assert "<geaenderte_saetze>\n- Guten Tag.\n- Ich bin Erika.\n+ Hallo.\n+ Ich bin Erika, 34.\n</geaenderte_saetze>" in user
+    assert ("<geaenderte_saetze>\n- Guten Tag.\n+ Hallo.\n- Ich bin Erika.\n+ Ich bin Erika, 34.\n"
+            "  Wörter: „, 34“ ergänzt\n</geaenderte_saetze>") in user
     assert "- „Nicht so förmlich“" in user and f"{active}: Nenne kein Einzugsdatum." in user
     assert "verworfen: „Schreib immer auf Englisch.“" in user
     assert "Helle 2-Zimmer-Wohnung · ImmoScout24 · 780 € · 54 m² · Musterstr. 12, Berlin" in user
@@ -456,6 +489,46 @@ def test_propose_rules_request_and_storage(lid, client):
     # Nothing changed since: no second call, the same proposals.
     assert [p["id"] for p in asyncio.run(learning.propose_rules(session["id"]))] == [p["id"] for p in proposals]
     assert len(client.calls) == 1
+
+
+def test_rules_prompt_asks_for_rules_and_a_reason_without(lid, client):
+    """Less timid: a plausible general preference should become a rule (the user checks every proposal anyway);
+    an empty list comes with no_rule_reason."""
+    assert "Lieber keine Regel als eine schwache" not in learning.RULES_SYSTEM
+    assert "mindestens eine Regel" in learning.RULES_SYSTEM and "no_rule_reason" in learning.RULES_SYSTEM
+    assert learning.RULES_SCHEMA["required"] == ["actions", "no_rule_reason"]
+    assert learning.RULES_SCHEMA["properties"]["no_rule_reason"]["type"] == "string"
+    assert '"no_rule_reason": "…"' in learning.RULES_SHAPE
+
+
+def test_propose_rules_without_a_rule_stores_why(lid, client):
+    session = done_session(lid, original="Guten Tag Frau Meier. Ich bin Erika.",
+                           final="Guten Tag Frau Maier. Ich bin Erika.")
+    client.responses.append(fake_response({"actions": [],
+                                           "no_rule_reason": " Nur ein Tippfehler im Namen\n korrigiert. "}))
+    assert asyncio.run(learning.propose_rules(session["id"])) == []
+    assert db.get_session(session["id"])["rules_note"] == "Nur ein Tippfehler im Namen korrigiert."
+    user = client.calls[0]["messages"][0]["content"]
+    assert "- Guten Tag Frau Meier.\n+ Guten Tag Frau Maier.\n  Wörter: „Meier“ → „Maier“" in user  # the one word
+
+    learning.reopen(session["id"])  # a new round with a proposal: no note
+    learning.finish(session["id"], "Hallo Frau Maier. Ich bin Erika.")
+    client.responses.append(fake_response({"actions": [{"action": "add", "rule_id": None, "text": "Grüß mit „Hallo“.",
+                                                        "reason": "Anrede geändert"}], "no_rule_reason": "egal"}))
+    assert [p["text"] for p in asyncio.run(learning.propose_rules(session["id"]))] == ["Grüß mit „Hallo“."]
+    assert db.get_session(session["id"])["rules_note"] is None
+
+    db.add_rule("Schreib kurz.", status="active")  # everything Claude proposes exists already: say so
+    learning.reopen(session["id"])
+    learning.finish(session["id"], "Hallo Frau Maier. Ich bin Erika!")
+    client.responses.append(rules_answer(("add", None, "schreib kurz", "x")))
+    assert asyncio.run(learning.propose_rules(session["id"])) == []
+    assert "gab es schon" in db.get_session(session["id"])["rules_note"]
+    learning.reopen(session["id"])  # an answer from before no_rule_reason existed (or an empty one): no note
+    learning.finish(session["id"], "Hallo Frau Maier. Ich bin Erika.")
+    client.responses.append(rules_answer())
+    asyncio.run(learning.propose_rules(session["id"]))
+    assert db.get_session(session["id"])["rules_note"] is None
 
 
 def test_propose_rules_drops_invalid_actions(lid, client):
@@ -614,6 +687,33 @@ def test_rule_limit_and_editing(lid, monkeypatch):
     assert db.get_rule(first) is None and db.get_rule(pending) is None  # its open proposals go too
     with pytest.raises(learning.LearningError, match="nicht gefunden"):
         learning.delete_rule(first)
+
+
+def test_add_manual_rule(lid, monkeypatch):
+    session = done_session(lid)
+    rule = learning.add_manual_rule("  Schreib „Viele Grüße“\n statt „Mit freundlichen Grüßen“.  ",
+                                    session_id=session["id"])
+    assert (rule["status"], rule["text"], rule["action"], rule["session_id"], rule["listing_id"]) == (
+        "active", "Schreib „Viele Grüße“ statt „Mit freundlichen Grüßen“.", "add", session["id"], lid)
+    assert rule["proposed_text"] is None and rule["reason"] is None and rule["decided_at"]  # written by the user
+    loose = learning.add_manual_rule("Nenne kein Einzugsdatum.")  # Verhalten → Lernen: without a session
+    assert db.get_rule(loose["id"])["session_id"] is None
+    assert llm.learned_context(db.get_settings())[0] == [rule["text"], "Nenne kein Einzugsdatum."]  # in use at once
+    with pytest.raises(learning.LearningError, match="leer"):
+        learning.add_manual_rule("   ")
+    with pytest.raises(learning.LearningError, match="Höchstens 300"):
+        learning.add_manual_rule("x" * 301)
+    with pytest.raises(learning.LearningError, match="gibt es schon"):
+        learning.add_manual_rule("nenne kein einzugsdatum")
+    learning.set_rule_active(loose["id"], False)
+    with pytest.raises(learning.LearningError, match="gibt es schon"):  # switched off: switch it on instead
+        learning.add_manual_rule("Nenne kein Einzugsdatum.")
+    with pytest.raises(learning.LearningError, match="Sitzung nicht gefunden"):
+        learning.add_manual_rule("Neue Regel.", session_id=99999)
+    monkeypatch.setattr(learning, "MAX_ACTIVE_RULES", 1)
+    with pytest.raises(learning.LearningError, match="Höchstens 1 aktive Regeln"):
+        learning.add_manual_rule("Noch eine.")
+    assert db.count_rules("active") == 1
 
 
 # --- profile rewrite ---------------------------------------------------------------------------

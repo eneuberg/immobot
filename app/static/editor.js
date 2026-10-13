@@ -1,6 +1,7 @@
 // immobot draft editor (/editor/{id}): comfort on top of plain forms, which work without JS.
-// Autosize, "Kopieren" for the text field, unsaved-changes warning, "Claude schreibt …" while revising, a live word
-// diff against Claude's original and polling while Claude looks for rules. Loaded with defer, only on this page.
+// Autosize, "Kopieren" for the text field, autosave of the text (with a warning on leaving while it isn't saved),
+// "Claude schreibt …" while revising, a live word diff against Claude's original and polling while Claude looks for
+// rules. Loaded with defer, only on this page.
 (function () {
   "use strict";
 
@@ -49,23 +50,96 @@
     }
   });
 
-  // --- unsaved changes ----------------------------------------------------------------------------
-  function dirty() { return !!text && text.value !== text.defaultValue; }
-  var unsaved = document.querySelector("[data-unsaved]");
-  if (text) {
-    text.addEventListener("input", function () { if (unsaved) unsaved.hidden = !dirty(); });
+  // --- autosave ------------------------------------------------------------------------------------
+  // The text goes to the form's action (/save) with "Accept: application/json": 1.5 s after typing stops, when the
+  // field loses focus and when the tab is hidden. "Überarbeiten lassen" and "Fertig" post the text themselves.
+  // Answers: {ok: true}, or {ok: false, error, stale}; 401/403/409 mean this page can't save anymore (session over,
+  // another tab started a new round or finished): stop, say so, and for a stale page offer "Neu laden", which posts
+  // the form normally - the server then shows the text that wasn't saved.
+  var saveState = document.querySelector("[data-save-state]");
+  var saveReload = document.querySelector("[data-save-reload]");
+  var savedValue = text ? text.defaultValue : "";  // what the server has
+  var saveTimer = null, saving = false, saveStopped = false;
+  var SAVE_DELAY = 1500, RETRY_DELAY = 10000;
+  var SAVE_TEXTS = { saving: "Speichert …", saved: "Gespeichert ✓", error: "Nicht gespeichert – Verbindung?" };
+
+  function dirty() { return !!text && text.value !== savedValue; }
+
+  function showSave(state, message) {
+    if (!saveState) return;
+    saveState.textContent = message || SAVE_TEXTS[state] || "";
+    saveState.dataset.state = state;
+  }
+
+  function scheduleSave(delay) {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, delay);
+  }
+
+  function save(keepalive) {
+    clearTimeout(saveTimer);
+    if (!form || !text || saveStopped || leaving) return;
+    if (!dirty()) {  // nothing new (e.g. typed and deleted again)
+      if (!saving && saveState && saveState.dataset.state) showSave("saved");
+      return;
+    }
+    if (saving) { scheduleSave(SAVE_DELAY); return; }  // one request at a time, the next follows
+    var value = text.value;
+    var data = new FormData();
+    data.append("token", form.elements.token.value);
+    data.append("session_id", form.elements.session_id.value);
+    data.append("text", value);
+    saving = true;
+    showSave("saving");
+    fetch(form.action, {
+      method: "POST", body: data, credentials: "same-origin", keepalive: keepalive === true,
+      headers: { Accept: "application/json" }
+    })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (body) { return { status: r.status, body: body }; });
+      })
+      .then(function (res) {
+        saving = false;
+        if (res.body.ok) {
+          savedValue = value;
+          if (dirty()) scheduleSave(SAVE_DELAY); else showSave("saved");
+        } else if (res.status === 401 || res.status === 403 || res.status === 409) {
+          saveStopped = true;
+          showSave("error", "Nicht gespeichert: " + (res.body.error || "Seite veraltet – bitte neu laden."));
+          if (saveReload && res.body.stale) saveReload.hidden = false;
+        } else if (res.body.error) {  // e.g. too long: try again after the next change
+          showSave("error", "Nicht gespeichert: " + res.body.error);
+        } else {
+          showSave("error");
+          scheduleSave(RETRY_DELAY);
+        }
+      })
+      .catch(function () { saving = false; showSave("error"); scheduleSave(RETRY_DELAY); });
+  }
+
+  if (form && text) {
+    text.addEventListener("input", function () {
+      if (saveStopped) return;
+      showSave("saving");
+      scheduleSave(SAVE_DELAY);
+    });
+    text.addEventListener("blur", function () { save(); });
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") save(true);
+    });
   }
   window.addEventListener("beforeunload", function (e) {
-    if (leaving || !dirty()) return;
+    if (leaving || !dirty()) return;  // only while a save is pending or failed
     e.preventDefault();
     e.returnValue = "";
   });
 
-  // Submitting saves the text: no warning. "Claude schreibt …" on buttons with data-busy-label (app.js already
+  // Submitting saves the text: no warning, no autosave on top. "Claude schreibt …" on buttons with data-busy-label (app.js already
   // blocks a second submit and shows the spinner); the text stays readable but can't change meanwhile.
   document.addEventListener("submit", function (e) {
     if (e.defaultPrevented) return;
     leaving = true;
+    clearTimeout(saveTimer);
     var btn = e.submitter;
     if (btn && btn.dataset.busyLabel) {
       btn.textContent = btn.dataset.busyLabel;
@@ -75,6 +149,7 @@
   window.addEventListener("pageshow", function (e) {
     if (!e.persisted) return;
     leaving = false;
+    if (dirty()) scheduleSave(SAVE_DELAY);
     document.querySelectorAll("textarea").forEach(function (field) { field.readOnly = false; });
   });
 

@@ -657,3 +657,130 @@ def test_finish_and_reopen_refresh_the_telegram_message(client, lid, fake_rules,
     _, fields = open_editor(client, lid)
     assert post(client, lid, "reopen", fields).status_code == 303
     assert refreshed == [lid, lid]
+
+
+# --- autosave ("Speichern" is gone: the text saves itself) --------------------------------------------------
+
+def autosave(client, listing_id, fields, text):
+    return client.post(f"/editor/{listing_id}/save", data={**fields, "text": text},
+                       headers={"Accept": "application/json"})
+
+
+def test_page_without_a_save_button(client, lid):
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    editor_cookie(client, lid)
+    r, _ = open_editor(client, lid)
+    bar = r.text.split('<div class="ed-bar">')[1].split("</div>")[0]
+    assert ">Kopieren</button>" in bar and ">Fertig ✓</button>" in bar and "Speichern" not in bar
+    head = r.text.split('<header class="ed-card-head">')[1].split("</header>")[0]
+    assert 'class="linkish ed-save-nojs nojs-only"' in head and ">Zwischenspeichern</button>" in head  # without JS
+    assert "„Fertig“ = das ist meine Endversion → Claude sucht Regeln, Telegram zeigt diese Fassung." in bar
+    assert 'data-save-state role="status"' in r.text and "data-save-reload hidden" in r.text
+
+
+def test_autosave_answers_in_json(client, lid):
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    editor_cookie(client, lid)
+    _, fields = open_editor(client, lid)
+    r = autosave(client, lid, fields, "Von Hand\r\ngeändert")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert_editor_headers(r)
+    assert db.latest_session(lid)["current_text"] == "Von Hand\ngeändert"
+    r = autosave(client, lid, fields, "x" * (learning.TEXT_MAX_CHARS + 1))
+    assert r.status_code == 400 and r.json() == {"ok": False, "error": "Höchstens 20000 Zeichen.", "stale": False}
+    r = autosave(client, lid, {**fields, "token": "0" * 32}, "Fremd")
+    assert r.status_code == 403 and r.json()["error"] == "Seite veraltet – bitte neu laden."
+    r = client.post(f"/editor/{lid}/save", data={**fields, "text": "Fremd"},
+                    headers={"Accept": "application/json", "Origin": "https://evil.example.com"})
+    assert r.status_code == 403
+    assert db.latest_session(lid)["current_text"] == "Von Hand\ngeändert"
+
+    learning.finish(int(fields["session_id"]), "Fertig in einem anderen Tab")
+    r = autosave(client, lid, fields, "Noch getippt")
+    assert r.status_code == 409 and r.json() == {"ok": False, "error": editor.AUTOSAVE_STALE, "stale": True}
+    r = post(client, lid, "save", fields, text="Noch getippt")  # "Neu laden" posts the form: the text stays visible
+    assert r.status_code == 409 and "nicht mehr aktuell" in r.text and "Noch getippt</pre>" in r.text
+    assert db.latest_session(lid)["final_text"] == "Fertig in einem anderen Tab"
+
+    with db.connect() as conn:  # the editor session from Telegram is over
+        conn.execute("UPDATE editor_access_sessions SET expires_at = ?", (db.now_iso().replace("20", "19", 1),))
+    r = autosave(client, lid, fields, "Später")
+    assert r.status_code == 401 and r.json()["error"].startswith("Sitzung abgelaufen")
+    client.cookies.clear()
+    r = autosave(client, lid, fields, "Ohne Anmeldung")  # not a redirect to the login page
+    assert r.status_code == 401 and r.json()["ok"] is False
+
+
+def test_autosave_of_an_old_round_is_stale(client, lid):
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    login(client)
+    _, fields = open_editor(client, lid)
+    db.add_draft(lid, "shorter", "Kürzer", "claude-opus-5-5")
+    learning.start_new_round(lid)
+    r = autosave(client, lid, fields, "Aus dem alten Tab")
+    assert r.status_code == 409 and r.json()["stale"] is True
+    assert db.latest_session(lid)["current_text"] == "Kürzer"
+
+
+# --- rules: why none, and rules of one's own --------------------------------------------------------------
+
+def test_rules_card_explains_the_search(client, lid, fake_rules):
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    login(client)
+    _, fields = open_editor(client, lid)
+    post(client, lid, "finish", fields, text="Geändert")
+    wait_for_rules(client, lid)
+    page = client.get(f"/editor/{lid}").text
+    assert ("Claude vergleicht seinen Entwurf mit deiner Endversion (inkl. geänderter Sätze) und deiner Kritik\n"
+            "          und schlägt allgemeine Regeln vor – du entscheidest.") in page
+    # Claude proposed something: "Regel selbst eintragen" is there, but collapsed
+    assert '<details class="rule-add">\n  <summary>Regel selbst eintragen</summary>' in page
+
+
+def test_no_rule_shows_claudes_reason_and_the_manual_form(client, lid):
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    editor_cookie(client, lid)
+    _, fields = open_editor(client, lid)
+    session = learning.finish(int(fields["session_id"]), "Geändert")
+    db.update_session(session["id"], rules_basis=learning._rules_basis(session, []),
+                      rules_note="Die Änderung betraf nur den Namen der Ansprechperson.")
+    page = client.get(f"/editor/{lid}").text
+    assert "<strong>Claude:</strong> Die Änderung betraf nur den Namen der Ansprechperson." in page
+    assert "keine allgemeine Regel gefunden" not in page
+    assert '<details class="rule-add is-prominent" open>' in page and f'action="/editor/{lid}/rules/add"' in page
+    assert "Ein kurzer Satz als Anweisung an Claude, in Du-Form – eine Regel pro Eintrag." in page
+
+
+def test_add_own_rule_in_the_editor(client, lid):
+    other = db.insert_listing({"fredy_id": "e2", "title": "Andere"})[0]
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    editor_cookie(client, lid)  # from Telegram: allowed for its own listing
+    _, fields = open_editor(client, lid)
+    r = post(client, lid, "rules/add", fields, text="Schreib „Viele Grüße“.")
+    assert r.status_code == 409 and db.list_rules() == []  # only after "Fertig"
+    session = learning.finish(int(fields["session_id"]), "Ende")
+    r = post(client, lid, "rules/add", fields, text=" Schreib „Viele Grüße“\nstatt „Mit freundlichen Grüßen“. ")
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=rule_added#regeln"
+    (rule,) = db.list_rules("active")
+    assert (rule["text"], rule["session_id"], rule["proposed_text"]) == (
+        "Schreib „Viele Grüße“ statt „Mit freundlichen Grüßen“.", session["id"], None)
+    page = client.get(r.headers["location"]).text
+    assert "Regel gespeichert – sie gilt ab dem nächsten Entwurf." in page
+    assert '<details class="rule-add">' in page  # done: the form folds away
+    assert ('Schreib „Viele Grüße“ statt „Mit freundlichen Grüßen“. <small class="muted">(selbst eingetragen)</small>'
+            in page)
+
+    r = post(client, lid, "rules/add", fields, text="x" * 301)
+    assert r.status_code == 400 and "Höchstens 300 Zeichen." in r.text
+    assert '<details class="rule-add is-prominent" open>' in r.text and "x" * 301 + "</textarea>" in r.text  # kept
+    r = post(client, lid, "rules/add", {**fields, "token": "0" * 32}, text="Fremd.")
+    assert r.status_code == 403
+    r = post(client, other, "rules/add", fields, text="Fremd.")  # another listing: no access
+    assert r.status_code == 303 and r.headers["location"].startswith("/login")
+    assert db.count_rules("active") == 1
+
+    client.cookies.clear()
+    login(client)  # the dashboard login may do it too
+    _, fields = open_editor(client, lid)
+    assert post(client, lid, "rules/add", fields, text="Nenne kein Datum.").status_code == 303
+    assert db.count_rules("active") == 2
