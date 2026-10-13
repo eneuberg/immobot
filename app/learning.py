@@ -234,9 +234,11 @@ def set_session_example(session_id: int, use: bool) -> dict:
 
 
 def editor_calls_today(listing_id: int) -> int:
-    """Claude calls through the editor for this listing within the last 24 hours (revisions and rule proposals)."""
+    """Claude calls through the editor for this listing within the last 24 hours (revisions after a critique, quick
+    buttons and rule proposals)."""
     since = _since(24)
     return (db.count_feedback_since(listing_id, "editor", since, kind="critique")
+            + db.count_feedback_since(listing_id, "editor", since, kind="quick")
             + db.count_llm_usage_since(listing_id, "rules", since))
 
 
@@ -252,17 +254,12 @@ def _claim(session_id: int) -> None:
     _busy_sessions.add(session_id)
 
 
-async def revise_in_editor(session_id: int, text: str, critique: str) -> dict:
-    """"Überarbeiten lassen": Claude rewrites `text` (the current text with the hand edits, saved first) following
-    the critique. Stored as a draft (kind "custom", instruction = critique) and as feedback (source "editor",
-    kind "critique", before_text = text); the result becomes the session's current_text.
-    Returns {"session": session row, "draft": drafts row (text, hint, cost, ...)}.
-    Raises LearningError (session not open, empty input, daily limit), BudgetExceeded, LLMError."""
+async def _editor_draft(session_id: int, text: str, kind: str, instruction: str | None = None) -> tuple[str, dict]:
+    """The Claude call behind the editor's buttons: save `text` (the current text with the hand edits), check the
+    daily limit and the budget, let Claude write a draft of `kind` from it (llm._task: the same instructions as in
+    Telegram) and store it. Returns (the cleaned text, the drafts row)."""
     session = _session(session_id, "open")
     text = _clean_text(text)
-    critique = (critique or "").strip()[:llm.INSTRUCTION_MAX_CHARS]
-    if not critique:
-        raise LearningError("Bitte schreiben, was Claude ändern soll.")
     if not text.strip():
         raise LearningError("Der Text ist leer.")
     if text != session["current_text"]:  # hand edits are saved with every action
@@ -279,14 +276,46 @@ async def revise_in_editor(session_id: int, text: str, critique: str) -> dict:
     try:
         listing, pictures = await llm.prepare_listing(listing_id, listing, settings)
         rules, examples = llm.learned_context(settings)
-        result = await llm.generate_draft(listing, settings, "custom", previous_text=text, instruction=critique,
+        result = await llm.generate_draft(listing, settings, kind, previous_text=text, instruction=instruction,
                                           pictures=pictures, rules=rules, examples=examples)
     finally:
         _busy_sessions.discard(session_id)
-    draft_id = llm.store_draft(listing_id, "custom", result, critique)
-    db.add_feedback(listing_id, "editor", "critique", critique, session_id=session_id, before_text=text)
-    db.update_session(session_id, current_text=result.text, last_draft_id=draft_id)  # not a "newer draft" (newer_draft)
-    return {"session": db.get_session(session_id), "draft": db.get_draft(draft_id)}
+    return text, db.get_draft(llm.store_draft(listing_id, kind, result, instruction))
+
+
+async def revise_in_editor(session_id: int, text: str, critique: str) -> dict:
+    """"Überarbeiten lassen": Claude rewrites `text` (the current text with the hand edits, saved first) following
+    the critique. Stored as a draft (kind "custom", instruction = critique) and as feedback (source "editor",
+    kind "critique", before_text = text); the result becomes the session's current_text.
+    Returns {"session": session row, "draft": drafts row (text, hint, cost, ...)}.
+    Raises LearningError (session not open, empty input, daily limit), BudgetExceeded, LLMError."""
+    session = _session(session_id, "open")
+    critique = (critique or "").strip()[:llm.INSTRUCTION_MAX_CHARS]
+    if not critique:
+        raise LearningError("Bitte schreiben, was Claude ändern soll.")
+    text, draft = await _editor_draft(session_id, text, "custom", critique)
+    db.add_feedback(session["listing_id"], "editor", "critique", critique, session_id=session_id, before_text=text)
+    db.update_session(session_id, current_text=draft["text"], last_draft_id=draft["id"])  # not a "newer draft"
+    return {"session": db.get_session(session_id), "draft": draft}
+
+
+async def quick_in_editor(session_id: int, text: str, kind: str) -> dict:
+    """The editor's quick buttons next to the critique field, like Telegram's: "Kürzer" / "Förmlicher" (kind
+    "shorter" / "formal") revise `text` with Telegram's instructions; the result becomes the session's current_text.
+    "Ganz neu schreiben" ("regenerate") lets Claude write a new draft that differs from `text` and starts a new round
+    from it (start_new_round: this session is superseded, the new one starts with that draft as original).
+    Stored as a draft of that kind and as feedback (source "editor", kind "quick", text = kind, before_text = text):
+    the quick-button counters of the profile rewrite count them like Telegram's.
+    Returns {"session": the session to go on with, "draft": drafts row}. Raises like revise_in_editor."""
+    if kind not in QUICK_LABELS:
+        raise LearningError("Unbekannte Aktion.")
+    listing_id = _session(session_id, "open")["listing_id"]
+    text, draft = await _editor_draft(session_id, text, kind)
+    db.add_feedback(listing_id, "editor", "quick", kind, session_id=session_id, before_text=text)
+    if kind == "regenerate":
+        return {"session": start_new_round(listing_id), "draft": draft}
+    db.update_session(session_id, current_text=draft["text"], last_draft_id=draft["id"])
+    return {"session": db.get_session(session_id), "draft": draft}
 
 
 # --- Claude calls with a JSON answer -------------------------------------------------------

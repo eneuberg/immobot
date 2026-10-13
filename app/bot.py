@@ -5,20 +5,28 @@ follow-up message under it with buttons, and on demand turns that message into a
 immobot is the only process polling updates for this bot token (long polling, no webhook).
 
 Security: only updates from the configured chat are processed (vault "telegram_chat_id", read on
-every update), everything else is dropped silently. If the allowlist "telegram_allowed_user_ids" is
-not empty, only those users may press buttons or send replies there (others get a short refusal for a
-button press, everything else is ignored); an empty allowlist means every chat member may, and an
-undecryptable one means nobody may. "/pair CODE" is handled completely inside the guard (_guard ->
-_pair) and never reaches the other handlers; strangers with a wrong code get no answer at all.
-All listing and draft text is HTML-escaped. The bot token is never logged.
+every update), everything else is dropped silently. Only users on the allowlist "telegram_allowed_user_ids"
+may press buttons or send replies there (others get a short refusal for a button press, everything else is
+ignored). The list is required: while it is empty, or can't be decrypted, nobody may (a button press then
+says how to fill it). "/pair CODE" is handled completely inside the guard (_guard -> _pair) and never reaches
+the other handlers, so pairing works with an empty list and fills it; strangers with a wrong code get no
+answer at all. All listing and draft text is HTML-escaped. The bot token is never logged.
 
 Listings with a gallery (pictures from Fredy, or ImmoScout24 with the own fetch switched on, see media.py) get
 a "🖼 Bilder" button: it sends the stored pictures as one album
 (uploaded bytes, max 10) under the listing's message. Every listing gets a "🔗 Dashboard" link when the
 dashboard's public address is known (IMMOBOT_PUBLIC_URL, else remembered from dashboard requests).
-Draft messages then also get "📝 Editor", a login_url button to the draft editor (editor_access.py). Telegram
-rejects such a message while the dashboard domain isn't linked to the bot (@BotFather /setdomain): it is then sent
-without that button and meta EDITOR_BUTTON_ERROR_META says why (shown on the status and settings pages).
+Draft messages have two layouts (draft_keyboard):
+- editor first, whenever the "📝 Bearbeiten" button can be used: "📝 Bearbeiten" (a login_url button to the draft
+  editor, editor_access.py) and "📨 Inserat öffnen", "✅ Gesendet" / "❌ Uninteressant", pictures / dashboard.
+  Shorter, more formal, new and own wishes happen in the editor (its quick buttons and critique field).
+- full, the fallback while the public address is unknown or Telegram rejected the button: "🔁 Neu" / "✂️ Kürzer" /
+  "🎩 Förmlicher", "✏️ Anpassen" (reply with a wish), "📨 Inserat öffnen", sent / skip, pictures / dashboard.
+Telegram rejects a message with the login_url button while the dashboard domain isn't linked to the bot (@BotFather
+/setdomain): it is then sent with the full layout and meta EDITOR_BUTTON_ERROR_META says why (shown on the status
+and settings pages). The full layout keeps trying the button, so the first message Telegram accepts with it clears
+the note and the next drafts get the editor layout again. Buttons of older messages ("new", "short", "formal",
+"edit") keep working in either layout. "✍️ Anschreiben" shows the existing draft if there already is one.
 
 Token and chat id come from vault.py. Without a token the bot stays off ("nicht konfiguriert"); without
 a chat id it polls anyway so that "/pair" can connect a chat. reload() restarts it after a change.
@@ -76,6 +84,8 @@ PAIR_FAILED = "❌ Code ungültig oder abgelaufen."
 PAIR_NEEDS_USER = ("⚠️ Bitte von einem normalen Telegram-Konto aus koppeln (nicht anonym, nicht als Kanal oder Bot). "
                    "Der Code bleibt gültig.")
 NOT_OWNER = "Nur für den Besitzer dieses Bots."
+NO_USERS_YET = "🔒 Noch keine erlaubten User – im Dashboard unter Zugänge eintragen oder mit /pair verbinden."
+DRAFT_EXISTS = "Es gibt schon einen Entwurf – hier ist er."
 LOADING_PICTURES = "⏳ lade Bilder …"
 PICTURES_ALREADY_SENT = "Bilder sind schon oben ↑"
 NO_PICTURES_HERE = "Für dieses Inserat gibt es keine Bildergalerie."
@@ -173,21 +183,30 @@ def generating_text(listing: dict) -> str:
     return header(listing) + "\n\n⏳ schreibe Entwurf …"
 
 
-def draft_keyboard(listing: dict) -> InlineKeyboardMarkup:
-    """Variants · "📝 Editor" + "✏️ Anpassen" · "📨 Inserat öffnen" · sent/skip · pictures/dashboard. Without the
-    editor button (public address unknown) "📨 Inserat öffnen" sits next to "✏️ Anpassen"."""
+def draft_keyboard(listing: dict, editor: bool = True) -> InlineKeyboardMarkup:
+    """The buttons under a draft, in one of two layouts (module docstring):
+    - editor first, when the "📝 Bearbeiten" button can be used (public address known, Telegram didn't reject it
+      last time): "📝 Bearbeiten" + "📨 Inserat öffnen" · sent/skip · pictures/dashboard;
+    - full otherwise: variants · "✏️ Anpassen" + "📨 Inserat öffnen" · sent/skip · pictures/dashboard. While Telegram
+      rejects the button it is still tried here ("📝 Bearbeiten" + "✏️ Anpassen", then "📨 Inserat öffnen" in its own
+      row), so the layout comes back once the domain is linked.
+    editor=False: the full layout without the button (the retry after Telegram rejected it)."""
     lid = listing["id"]
-    editor = editor_button(lid)
+    edit = editor_button(lid) if editor else None
     link = portals.contact_url(listing.get("provider"), listing.get("url"))
-    open_listing = InlineKeyboardButton("📨 Inserat öffnen ↗", url=link) if link else None
-    rows = [[_button("🔁 Neu", "new", lid), _button("✂️ Kürzer", "short", lid), _button("🎩 Förmlicher", "formal", lid)]]
-    if editor:
-        rows.append([editor, _button("✏️ Anpassen", "edit", lid)])
-        if open_listing:
-            rows.append([open_listing])
+    open_listing = [InlineKeyboardButton("📨 Inserat öffnen ↗", url=link)] if link else []
+    status_row = [_button("✅ Gesendet", "sent", lid), _button("❌ Uninteressant", "skip", lid)]
+    if edit and editor_button_error() is None:
+        rows = [[edit] + open_listing, status_row]
     else:
-        rows.append([_button("✏️ Anpassen", "edit", lid)] + ([open_listing] if open_listing else []))
-    rows.append([_button("✅ Gesendet", "sent", lid), _button("❌ Uninteressant", "skip", lid)])
+        rows = [[_button("🔁 Neu", "new", lid), _button("✂️ Kürzer", "short", lid), _button("🎩 Förmlicher", "formal", lid)]]
+        if edit:
+            rows.append([edit, _button("✏️ Anpassen", "edit", lid)])
+            if open_listing:
+                rows.append(open_listing)
+        else:
+            rows.append([_button("✏️ Anpassen", "edit", lid)] + open_listing)
+        rows.append(status_row)
     if _links_row(listing):
         rows.append(_links_row(listing))
     return InlineKeyboardMarkup(rows)
@@ -326,11 +345,11 @@ def editor_url(listing_id: int) -> str | None:
 
 
 def editor_button(listing_id: int) -> InlineKeyboardButton | None:
-    """"📝 Editor" as a login_url button: Telegram appends the user's signed login data when it is tapped
-    (editor_access.start_editor_browser_session checks them). None while the public address is unknown.
+    """"📝 Bearbeiten" as a login_url button to the draft editor: Telegram appends the user's signed login data when
+    it is tapped (editor_access.start_editor_browser_session checks them). None while the public address is unknown.
     Needs the dashboard domain linked to the bot (@BotFather /setdomain), else Telegram rejects the message."""
     url = editor_url(listing_id)
-    return InlineKeyboardButton("📝 Editor", login_url=LoginUrl(url=url)) if url else None
+    return InlineKeyboardButton("📝 Bearbeiten", login_url=LoginUrl(url=url)) if url else None
 
 
 # --- input checks (pure) -----------------------------------------------------
@@ -372,19 +391,17 @@ def is_allowed_chat(update, chat_id: int | None) -> bool:
 
 
 def is_allowed_user(update, allowed: set[int] | None) -> bool:
-    """None = nobody (allowlist undecryptable); empty = every chat member; else the sender / presser must be on it."""
-    if allowed is None:
-        return False
+    """The sender / presser must be on the allowlist. None (undecryptable) or empty (not set yet) = nobody."""
     if not allowed:
-        return True
+        return False
     user = update.effective_user
     return user is not None and user.id in allowed
 
 
 def allowed_user_ids() -> set[int] | None:
-    """The Telegram user allowlist (dashboard value, else env). Empty set = no restriction.
-    None = a saved list can't be decrypted (SESSION_SECRET changed): fail closed, nobody may use the bot
-    until the list is entered again or a new pairing is done."""
+    """The Telegram user allowlist (dashboard value, else env). Empty set = not set yet: nobody may use the bot's
+    buttons until IDs are entered or a pairing adds one. None = a saved list can't be decrypted (SESSION_SECRET
+    changed): fail closed the same way until the list is entered again or a new pairing is done."""
     return vault.allowed_user_ids()
 
 
@@ -425,7 +442,7 @@ def _has_login_url(keyboard) -> bool:
 
 
 def without_login_url(keyboard: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
-    """The keyboard without login_url buttons ("📝 Editor"); rows left empty are dropped."""
+    """The keyboard without login_url buttons ("📝 Bearbeiten"); rows left empty are dropped."""
     rows = [[button for button in row if button.login_url is None] for row in keyboard.inline_keyboard]
     return InlineKeyboardMarkup([row for row in rows if row])
 
@@ -447,7 +464,7 @@ def _note_editor_button_error(exc: BadRequest) -> None:
 
 
 def editor_button_error() -> tuple[str, str] | None:
-    """(ISO time, German reason) of the last rejection of the "📝 Editor" button, or None while it works."""
+    """(ISO time, German reason) of the last rejection of the "📝 Bearbeiten" button, or None while it works."""
     value = db.get_meta(EDITOR_BUTTON_ERROR_META)
     if not value:
         return None
@@ -455,9 +472,10 @@ def editor_button_error() -> tuple[str, str] | None:
     return at, reason
 
 
-async def _with_editor_fallback(call, keyboard):
-    """call(keyboard). If Telegram rejects a keyboard with the login_url "📝 Editor" button, note why and call once
-    more without it. A message accepted with the button clears the note."""
+async def _with_editor_fallback(call, keyboard, fallback=None):
+    """call(keyboard). If Telegram rejects a keyboard with the login_url "📝 Bearbeiten" button, note why and call once
+    more with fallback() (a keyboard without the button), or else the same keyboard minus the button. A message
+    accepted with the button clears the note."""
     if not _has_login_url(keyboard):
         return await call(keyboard)
     try:
@@ -466,7 +484,7 @@ async def _with_editor_fallback(call, keyboard):
         if not _editor_button_rejected(exc):
             raise
         _note_editor_button_error(exc)
-        return await call(without_login_url(keyboard))
+        return await call(fallback() if fallback is not None else without_login_url(keyboard))
     if db.get_meta(EDITOR_BUTTON_ERROR_META) is not None:
         db.delete_meta(EDITOR_BUTTON_ERROR_META)
     return result
@@ -501,7 +519,9 @@ async def _edit(tg_bot, listing: dict, text: str, keyboard) -> None:
             if "not modified" not in str(exc).lower():
                 raise
 
-    await _with_editor_fallback(edit, keyboard)
+    # Only draft keyboards carry the button. Rejected, the editor layout would lose every way to change the draft:
+    # the retry gets the full layout instead.
+    await _with_editor_fallback(edit, keyboard, lambda: draft_keyboard(listing, editor=False))
 
 
 async def _show(tg_bot, listing: dict, note: str | None = None) -> None:
@@ -526,6 +546,11 @@ def _lock(listing_id: int) -> asyncio.Lock:
     return _locks.setdefault(listing_id, asyncio.Lock())
 
 
+def has_draft(listing_id: int) -> bool:
+    """A non-test draft or a finished editor session exists: "✍️ Anschreiben" shows it instead of writing one."""
+    return db.latest_draft(listing_id) is not None or db.latest_session(listing_id, "done") is not None
+
+
 # --- actions -----------------------------------------------------------------
 
 async def _generate(tg_bot, listing: dict, kind: str, instruction: str | None = None) -> None:
@@ -547,10 +572,10 @@ async def _generate(tg_bot, listing: dict, kind: str, instruction: str | None = 
     if fresh.get("status") == "new":
         db.set_listing_status(listing_id, "drafted")
     try:
-        await _edit(tg_bot, listing, *draft_view(fresh, draft))
+        await _edit(tg_bot, fresh, *draft_view(fresh, draft))
     except TelegramError:  # the draft is paid for and stored – try once more before giving up
         await asyncio.sleep(2)
-        await _edit(tg_bot, listing, *draft_view(fresh, draft))
+        await _edit(tg_bot, fresh, *draft_view(fresh, draft))
 
 
 async def _ask_instruction(tg_bot, listing: dict) -> None:
@@ -566,18 +591,20 @@ async def _ask_instruction(tg_bot, listing: dict) -> None:
 # --- handlers ----------------------------------------------------------------
 
 async def _guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Runs first for every update: note the activity, handle "/pair" right here, and drop everything
-    that isn't from our chat or (with an allowlist) from an allowed user."""
+    """Runs first for every update: note the activity, handle "/pair" right here (also with an empty allowlist:
+    that is how it gets filled), and drop everything that isn't from our chat and from an allowed user."""
     _state["last_update_at"] = db.now_iso()
     in_our_chat = is_allowed_chat(update, configured_chat_id())
-    trusted = in_our_chat and is_allowed_user(update, allowed_user_ids())
+    allowed = allowed_user_ids()
+    trusted = in_our_chat and is_allowed_user(update, allowed)
     if is_pair_command(update, context.bot.username):
         await _pair(update, context, trusted)
         raise ApplicationHandlerStop  # pairing traffic never reaches the other handlers
     if trusted:
         return
     if in_our_chat and update.callback_query is not None:
-        await _answer(update.callback_query, NOT_OWNER)  # a chat member who isn't on the allowlist
+        # A button press has to be answered anyway; the answer is a short popup only the presser sees.
+        await _answer(update.callback_query, NO_USERS_YET if allowed == set() else NOT_OWNER)
     raise ApplicationHandlerStop
 
 
@@ -648,7 +675,10 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     async with lock:
         await _answer(query)
         tg_bot = context.bot
-        if action in GENERATE_KINDS:
+        if action == "gen" and has_draft(listing_id):  # written in the dashboard or editor meanwhile: no second one
+            collapsed = listing.get("status") in ("sent", "dismissed")  # a stale message: just show the state
+            await _show(tg_bot, listing, note=None if collapsed else DRAFT_EXISTS)
+        elif action in GENERATE_KINDS:
             await _generate(tg_bot, listing, GENERATE_KINDS[action])
         elif action == "edit":
             await _ask_instruction(tg_bot, listing)

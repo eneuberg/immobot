@@ -1,6 +1,6 @@
 """Access to the draft editor from Telegram, without the dashboard password (PLAN-LERNEN.md section 2).
 
-The "📝 Editor" button is a Telegram login_url button (bot.editor_button) pointing at a signed link:
+The "📝 Bearbeiten" button is a Telegram login_url button (bot.editor_button) pointing at a signed link:
   /e/{listing_id}/{exp}/{sig}  sig = base64url HMAC-SHA256 (no padding) of "editor:{listing_id}:{exp}", keyed with
                                vault.editor_link_key() (HKDF from SESSION_SECRET); exp = creation + LINK_VALID_S.
 When tapped, Telegram appends the user's signed login data (id, first_name, ..., auth_date, hash).

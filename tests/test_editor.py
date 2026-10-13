@@ -311,6 +311,58 @@ def test_revise_with_critique_and_history(client, lid, fake_generate):
     assert len(fake_generate) == 1
 
 
+def test_quick_buttons_shorter_and_formal(client, lid, fake_generate):
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    editor_cookie(client, lid)
+    r, fields = open_editor(client, lid)
+    quick = r.text.split('class="ed-quick"')[1].split("</div>")[0]
+    for kind, label in [("shorter", "Kürzer"), ("formal", "Förmlicher"), ("regenerate", "Ganz neu schreiben")]:
+        assert re.search(rf'formaction="/editor/{lid}/quick" name="kind" value="{kind}"[^>]*>{label}</button>', quick)
+    assert "data-confirm=" not in quick and "data-confirm-changed=" in quick  # Claude's text unchanged: no question
+
+    r = post(client, lid, "quick", fields, text="Original von Hand", critique="", kind="shorter")
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=shorter#text"
+    assert fake_generate == [{"kind": "shorter", "previous_text": "Original von Hand", "instruction": None}]
+    page = client.get(r.headers["location"]).text
+    assert "Claude hat den Text gekürzt." in page and "Fassung von Claude 1</textarea>" in page and "Fassung 2" in page
+    assert "Kürzer <small class=\"muted\">(Schnellbutton)</small>" in page  # in the history
+    (feedback,) = db.list_feedback()
+    assert (feedback["source"], feedback["kind"], feedback["text"]) == ("editor", "quick", "shorter")
+    assert 'value="regenerate"' in page and "data-confirm=" in page.split('class="ed-quick"')[1].split("</div>")[0]
+
+    # a critique typed but not sent stays in its field (by a one-time id, never in the URL)
+    r = post(client, lid, "quick", fields, text="Fassung von Claude 1", critique="Balkon erwähnen", kind="formal")
+    location = r.headers["location"]
+    assert r.status_code == 303 and location.startswith(f"/editor/{lid}?m=formal&k=") and "Balkon" not in location
+    page = client.get(location).text
+    assert "förmlicher formuliert" in page and "Balkon erwähnen</textarea>" in page
+    assert "Balkon erwähnen</textarea>" not in client.get(location).text  # shown once
+    assert fake_generate[-1]["kind"] == "formal" and len(fake_generate) == 2
+
+    r = post(client, lid, "quick", fields, text="x", kind="custom")
+    assert r.status_code == 400 and "Unbekannte Aktion" in r.text and len(fake_generate) == 2
+    db.update_settings({"monthly_budget_eur": "0.001"})
+    r = post(client, lid, "quick", fields, text="Fassung von Claude 2", critique="Noch da", kind="shorter")
+    assert r.status_code == 400 and "Monatsbudget" in r.text and "Noch da</textarea>" in r.text
+    assert client.refreshed == []  # like "Überarbeiten lassen": Telegram isn't touched
+
+
+def test_quick_button_regenerate_starts_a_new_round(client, lid, fake_generate):
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    login(client)
+    _, fields = open_editor(client, lid)
+    r = post(client, lid, "quick", fields, text="Original, von Hand", kind="regenerate")
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=regenerate#text"
+    assert fake_generate == [{"kind": "regenerate", "previous_text": "Original, von Hand", "instruction": None}]
+    old, new = db.get_session(int(fields["session_id"])), db.latest_session(lid)
+    assert old["status"] == "superseded" and new["status"] == "open" and new["original_text"] == "Fassung von Claude 1"
+    page = client.get(r.headers["location"]).text
+    assert "ganz neu geschrieben" in page and "Fassung von Claude 1</textarea>" in page and "Fassung 1" in page
+    assert "Es gibt einen neueren Entwurf" not in page and "Noch keine Änderungen" in page  # the diff starts afresh
+    assert post(client, lid, "quick", fields, text="Alter Tab", kind="shorter").status_code == 409  # old round's form
+    assert len(fake_generate) == 1
+
+
 def test_daily_limit_shows_up_nicely(client, lid, fake_generate, monkeypatch):
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     monkeypatch.setattr(learning, "EDITOR_DAILY_LIMIT", 0)

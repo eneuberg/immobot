@@ -391,10 +391,23 @@ def test_create_draft_shows_llm_error(client, monkeypatch):
         raise llm.BudgetExceeded("Monatsbudget erreicht")
 
     monkeypatch.setattr(llm, "create_and_store_draft", fail)
+    refreshed = []
+    monkeypatch.setattr(web.bot, "schedule_refresh", refreshed.append)
     login(client)
     lid = add_listing()
     r = client.post(f"/listing/{lid}/draft")
     assert r.status_code == 200 and "Monatsbudget erreicht" in r.text
+    assert refreshed == []  # nothing new to show in Telegram
+
+
+def test_create_draft_refreshes_the_telegram_message(client, fake_llm, monkeypatch):
+    """A draft written on the listing page replaces "✍️ Anschreiben" in Telegram (bot.current_view)."""
+    refreshed = []
+    monkeypatch.setattr(web.bot, "schedule_refresh", refreshed.append)
+    login(client)
+    lid = add_listing()
+    assert client.post(f"/listing/{lid}/draft").status_code == 303
+    assert refreshed == [lid]
 
 
 # --- settings -------------------------------------------------------------------
@@ -1099,31 +1112,34 @@ def test_credentials_page_shows_last_pairing(client):
 
 def test_allowlist_is_required_and_shown(client, notices):
     login(client)
-    status = client.get("/status").text  # empty: missing (required for the editor login), but no lockout
-    assert web.OPEN_CHAT_NOTE in status and '<a href="/settings/zugaenge#telegram_allowed_user_ids">Eintragen</a>' in status
+    status = client.get("/status").text  # empty: missing (required), nobody can use the buttons
+    assert web.EMPTY_ALLOWLIST_NOTE in status and "niemand kann die Buttons" in web.EMPTY_ALLOWLIST_NOTE
+    assert '<a href="/settings/zugaenge#telegram_allowed_user_ids">Eintragen</a>' in status
     assert re.search(r'Erlaubte Telegram-User-IDs</a></span>\s*<span class="v">\s*<span class="error">nicht gesetzt</span>', status)
     page = client.get("/settings/zugaenge").text
     card = page.split('<article id="telegram_allowed_user_ids" class="cred">')[1].split("</article>")[0]
     assert '<span class="need">Pflicht</span>' in card and '<span class="badge err dot">fehlt</span>' in card
-    assert "Nötig für den 📝 Editor" in card and "Ohne Liste darf jedes Mitglied des Chats die Buttons drücken." in card
+    assert "Ohne Liste kann niemand die Buttons nutzen." in card and "jedes Mitglied" not in page
     assert 'class="alert-dot"' in page
     r = save_credential(client, "telegram_allowed_user_ids", " 1001, 2002,1001 ")
     assert r.status_code == 303 and r.headers["location"] == "/settings/zugaenge?saved=telegram_allowed_user_ids"
     assert vault.get("telegram_allowed_user_ids") == "1001,2002"
     page = client.get("/settings/zugaenge").text
     assert "Aktuell erlaubt: <code>1001,2002</code>" in page and 'class="alert-dot"' not in page
+    assert web.EMPTY_ALLOWLIST_NOTE not in page
     status = client.get("/status").text
-    assert web.OPEN_CHAT_NOTE not in status and "1001, 2002" in status
+    assert web.EMPTY_ALLOWLIST_NOTE not in status and "1001, 2002" in status
     assert "Erlaubte Telegram-User-IDs – gespeichert" in notices[-1][0]
     assert save_credential(client, "telegram_allowed_user_ids", "-5").status_code == 400
     assert save_credential(client, "telegram_allowed_user_ids", "abc").status_code == 400
 
 
-def test_empty_allowlist_is_missing_but_no_lockout(client):
-    """Required for the editor login now; the bot's behaviour with an empty list is unchanged (test_bot.py)."""
+def test_empty_allowlist_is_missing(client):
+    """Required: with an empty list nobody may use the bot's buttons (test_bot.py). That is "missing" (red dot,
+    EMPTY_ALLOWLIST_NOTE), not the warning about an unreadable list."""
     assert "telegram_allowed_user_ids" not in web.OPTIONAL_CREDENTIALS
     assert web._credential_need("telegram_allowed_user_ids", "anthropic") == "required"
-    assert bot.allowed_user_ids() == set() and web._allowlist_warning() is None  # only an unreadable list locks out
+    assert bot.allowed_user_ids() == set() and web._allowlist_warning() is None
 
 
 def test_undecryptable_allowlist_is_explained(client):
@@ -1134,7 +1150,7 @@ def test_undecryptable_allowlist_is_explained(client):
     for path in ["/settings/zugaenge", "/status"]:
         page = client.get(path).text
         assert "nicht entschlüsselbar (SESSION_SECRET geändert?) – niemand darf Buttons drücken" in page, path
-        assert web.OPEN_CHAT_NOTE not in page, path
+        assert web.EMPTY_ALLOWLIST_NOTE not in page, path
     assert 'class="alert-dot"' in client.get("/settings/zugaenge").text
 
 

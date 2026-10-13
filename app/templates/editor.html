@@ -20,7 +20,7 @@
 <ol class="ed-history">
   <li><span class="n">1</span><span class="t">Claudes Entwurf</span></li>
   {% for f in history %}
-  <li><span class="n">{{ loop.index + 1 }}</span><span class="t">„{{ f.text }}“</span><span class="when">{{ f.created_at|local_time }}</span></li>
+  <li><span class="n">{{ loop.index + 1 }}</span><span class="t">{% if f.quick_label %}{{ f.quick_label }} <small class="muted">(Schnellbutton)</small>{% else %}„{{ f.text }}“{% endif %}</span><span class="when">{{ f.created_at|local_time }}</span></li>
   {% endfor %}
   {% for f in notes %}
   <li class="is-note"><span class="n" aria-hidden="true">✎</span><span class="t">„{{ f.text }}“ <small class="muted">– bei „Fertig“ notiert, nicht an Claude geschickt</small></span><span class="when">{{ f.created_at|local_time }}</span></li>
@@ -110,11 +110,24 @@
     <div class="ed-side">
       <article class="ed-card" id="kritik">
         <h2><label for="ed-critique">Was soll Claude ändern?</label></h2>
-        <textarea id="ed-critique" name="critique" rows="3" maxlength="500" placeholder="z. B. kürzer, Homeoffice erwähnen, weniger förmlich">{{ critique or "" }}</textarea>
+        <textarea id="ed-critique" name="critique" rows="3" maxlength="500" placeholder="z. B. Homeoffice erwähnen, Balkon weglassen, persönlicher">{{ critique or "" }}</textarea>
         <p class="help">Claude überarbeitet deinen aktuellen Text samt deiner Änderungen (10–60 Sekunden).
           {%- if calls_today >= calls_shown_from %} Heute schon {{ calls_today }} von {{ calls_limit }} Claude-Aufrufen für
           dieses Inserat.{% endif %}</p>
         <button type="submit" formaction="/editor/{{ listing.id }}/revise" class="ed-revise" data-busy-label="Claude schreibt …">Überarbeiten lassen</button>
+        {# Quick buttons (editor.py editor_quick), like Telegram's. "Ganz neu schreiben" starts a new round: it asks
+           first when the text differs from Claude's original (editor.js keeps data-confirm up to date while typing). #}
+        {% set regen_question = "Dein Text samt deinen Änderungen wird durch einen ganz neuen Entwurf ersetzt. Trotzdem neu schreiben?" %}
+        <div class="ed-quick" role="group" aria-labelledby="ed-quick-label">
+          <span class="ed-quick-label" id="ed-quick-label">Oder mit einem Tipp:</span>
+          <button type="submit" formaction="/editor/{{ listing.id }}/quick" name="kind" value="shorter" class="secondary outline"
+                  title="Auf etwa 60 % kürzen" data-busy-label="Claude kürzt …">Kürzer</button>
+          <button type="submit" formaction="/editor/{{ listing.id }}/quick" name="kind" value="formal" class="secondary outline"
+                  title="Sie-Form, sachlich-höflicher Ton" data-busy-label="Claude schreibt …">Förmlicher</button>
+          <button type="submit" formaction="/editor/{{ listing.id }}/quick" name="kind" value="regenerate" class="secondary outline"
+                  title="Neuer Entwurf, deutlich anders als dieser" data-busy-label="Claude schreibt neu …"
+                  data-confirm-changed="{{ regen_question }}"{% if changed %} data-confirm="{{ regen_question }}"{% endif %}>Ganz neu schreiben</button>
+        </div>
         {% if history or notes %}{{ history_list() }}{% endif %}
       </article>
     </div>

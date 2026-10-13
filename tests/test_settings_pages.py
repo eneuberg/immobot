@@ -505,7 +505,7 @@ def test_editor_login_error_warning(client, stored, text, when):
         assert text.split(": ", 1)[-1] in page and (when is None or when in page)
         assert "lehnt den Editor-Button ab" not in page
     assert text in zugaenge
-    assert "Telegram hat den „📝 Editor“-Button abgelehnt" in zugaenge and "/setdomain" in zugaenge
+    assert "Telegram hat den „📝 Bearbeiten“-Button abgelehnt" in zugaenge and "/setdomain" in zugaenge
     assert "📝 Editor-Button" in status and 'href="/settings/zugaenge#editor-login"' in status
 
 

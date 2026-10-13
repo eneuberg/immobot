@@ -355,6 +355,44 @@ def test_revise_in_editor(lid, fake_generate):
         asyncio.run(learning.revise_in_editor(session["id"], "Text", "Kürzer"))
 
 
+def test_quick_buttons_in_editor(lid, fake_generate):
+    """"Kürzer" / "Förmlicher" revise the current text with Telegram's instructions (kind shorter / formal, no
+    instruction: llm._task words it), "Ganz neu schreiben" writes a new draft and starts a new round from it. Each is
+    feedback "quick" from the editor, counted like Telegram's buttons and in the daily limit."""
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    session = learning.open_or_create_session(lid)
+    result = asyncio.run(learning.quick_in_editor(session["id"], "Original von Hand", "shorter"))
+    assert fake_generate[-1] == {"kind": "shorter", "previous_text": "Original von Hand", "instruction": None,
+                                 "rules": [], "examples": []}
+    assert (result["draft"]["kind"], result["draft"]["instruction"]) == ("shorter", None)
+    assert result["session"]["id"] == session["id"] and result["session"]["current_text"] == "Fassung 1"
+    assert learning.newer_draft(result["session"]) is None  # its own revision, not a "newer draft"
+    asyncio.run(learning.quick_in_editor(session["id"], "Fassung 1", "formal"))
+    assert fake_generate[-1]["kind"] == "formal" and db.get_session(session["id"])["current_text"] == "Fassung 2"
+    rows = [(f["source"], f["kind"], f["text"], f["before_text"], f["session_id"]) for f in db.list_feedback()]
+    assert rows == [("editor", "quick", "formal", "Fassung 1", session["id"]),
+                    ("editor", "quick", "shorter", "Original von Hand", session["id"])]
+    assert db.quick_feedback_counts() == {"shorter": 1, "formal": 1}
+    assert learning.editor_calls_today(lid) == 2
+
+    result = asyncio.run(learning.quick_in_editor(session["id"], "Fassung 2, von Hand", "regenerate"))
+    assert fake_generate[-1] == {"kind": "regenerate", "previous_text": "Fassung 2, von Hand", "instruction": None,
+                                 "rules": [], "examples": []}
+    old, new = db.get_session(session["id"]), result["session"]
+    assert old["status"] == "superseded" and old["current_text"] == "Fassung 2, von Hand"
+    assert (new["status"], new["base_draft_id"], new["original_text"]) == ("open", result["draft"]["id"], "Fassung 3")
+    assert db.list_feedback()[0]["text"] == "regenerate" and db.list_feedback()[0]["session_id"] == old["id"]
+    assert learning.editor_calls_today(lid) == 3
+
+    with pytest.raises(learning.LearningError, match="Unbekannte Aktion"):
+        asyncio.run(learning.quick_in_editor(new["id"], "Text", "custom"))
+    with pytest.raises(learning.LearningError, match="leer"):
+        asyncio.run(learning.quick_in_editor(new["id"], "  ", "shorter"))
+    with pytest.raises(learning.LearningError, match="Weiter bearbeiten"):  # the old round is closed
+        asyncio.run(learning.quick_in_editor(old["id"], "Text", "shorter"))
+    assert len(fake_generate) == 3
+
+
 def test_editor_daily_limit_and_budget(lid, fake_generate, monkeypatch):
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     session = learning.open_or_create_session(lid)
