@@ -1277,3 +1277,19 @@ def test_public_url_remembered_unless_fixed_by_env(fresh_db):
     assert bot.public_url_info() == ("https://fixed.example.de", "env")
     bot.init_public_url("http://localhost")  # unusable env value: ignored, remembered one used
     assert bot.public_url_info() == ("https://immobot.example.de", "remembered")
+
+
+def test_current_view_shows_the_endversion_until_a_newer_draft(fresh_db):
+    lid = add_listing(fresh_db)
+    first = fresh_db.add_draft(lid, "initial", "Claudes Text", "claude-opus-5-5")
+    sid = fresh_db.create_session(lid, first, "Claudes Text", None)
+    text, _ = bot.current_view(fresh_db.get_listing(lid))
+    assert "Claudes Text" in text  # open session: still Claude's draft
+    fresh_db.update_session(sid, status="done", final_text="Meine <Endversion>", finished_at=fresh_db.now_iso())
+    text, keyboard = bot.current_view(fresh_db.get_listing(lid))
+    assert "<pre>Meine &lt;Endversion&gt;</pre>" in text and bot.FINAL_LABEL in text
+    assert "Claudes Text" not in text and " ct" not in text  # no model or cost line for your own text
+    assert keyboard.inline_keyboard  # the usual draft buttons stay
+    fresh_db.add_draft(lid, "shorter", "Neuer kürzerer Text", "claude-opus-5-5")  # e.g. "Kürzer" in Telegram
+    text, _ = bot.current_view(fresh_db.get_listing(lid))
+    assert "Neuer kürzerer Text" in text and bot.FINAL_LABEL not in text

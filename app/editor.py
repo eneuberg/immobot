@@ -379,6 +379,7 @@ async def editor_finish(request: Request, listing_id: str, token: str = Form("")
         return _failed(request, listing, mode, exc, critique=critique)
     if settings.as_bool(db.get_settings().get("use_rules")):
         _start_rule_job(session["id"])
+    bot.schedule_refresh(listing["id"])  # Telegram shows the Endversion instead of Claude's draft
     return _back(listing["id"], "done_note" if critique.strip() else "done", "ende")
 
 
@@ -398,7 +399,7 @@ async def editor_rules_retry(request: Request, listing_id: str, token: str = For
 
 
 @router.post("/editor/{listing_id}/reopen", dependencies=ACTION)
-def editor_reopen(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form("")):
+async def editor_reopen(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form("")):
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
         return denied
@@ -413,6 +414,7 @@ def editor_reopen(request: Request, listing_id: str, token: str = Form(""), sess
     except Exception as exc:
         return _failed(request, listing, mode, exc)
     _rule_jobs.pop(session["id"], None)
+    bot.schedule_refresh(listing["id"])  # back to Claude's latest draft in Telegram
     return _back(listing["id"], "reopened", "text")
 
 

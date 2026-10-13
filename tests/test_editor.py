@@ -508,7 +508,7 @@ def test_mark_sent(client, lid):
     assert "✅ Als gesendet markieren" in client.get(f"/editor/{lid}").text
     r = post(client, lid, "sent", {"token": fields["token"]})
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=sent#ende"
-    assert db.get_listing(lid)["status"] == "sent" and client.refreshed == [lid]  # Telegram message too
+    assert db.get_listing(lid)["status"] == "sent" and client.refreshed == [lid, lid]  # Telegram: Endversion, then "gesendet"
     page = client.get(f"/editor/{lid}").text
     assert "als gesendet markiert" in page and "✅ Als gesendet markieren" not in page
 
@@ -575,3 +575,17 @@ def test_diff_shows_changes_to_claudes_original(client, lid):
     assert "<del>Guten Tag</del><ins>Hallo</ins>" in page and "&amp; Max" in page
     assert 'data-original="Guten Tag, ich bin Erika."' in page
     assert word_diff("a", "a") == [("equal", "a")]
+
+
+def test_finish_and_reopen_refresh_the_telegram_message(client, lid, fake_rules, monkeypatch):
+    refreshed = []
+    monkeypatch.setattr(bot, "schedule_refresh", refreshed.append)
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    editor_cookie(client, lid)
+    _, fields = open_editor(client, lid)
+    assert post(client, lid, "finish", fields, text="Meine Endversion").status_code == 303
+    assert refreshed == [lid]  # Telegram now shows the Endversion (bot.current_view)
+    wait_for_rules(client, lid)
+    _, fields = open_editor(client, lid)
+    assert post(client, lid, "reopen", fields).status_code == 303
+    assert refreshed == [lid, lid]

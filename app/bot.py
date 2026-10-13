@@ -95,6 +95,7 @@ KIND_LABELS = {
     "custom": "Angepasst",
     "test": "Test",
 }
+FINAL_LABEL = "✅ Endversion aus dem Editor"
 
 # --- module state ------------------------------------------------------------
 _app: Application | None = None  # set only while the bot is running
@@ -210,8 +211,11 @@ def draft_view(listing: dict, draft: dict, note: str | None = None) -> tuple[str
     if draft.get("hint"):
         top += f"\n⚠️ {_esc(_shorten(draft['hint'], HINT_MAX))}"
     provider, kind = draft.get("provider") or settings.DEFAULT_PROVIDER, draft.get("kind") or ""
-    meta = [KIND_LABELS.get(kind, kind), settings.model_label(provider, draft.get("model")), settings.provider_label(provider),
-            settings.draft_cost_text(draft)]
+    if kind == "final":  # the Endversion from the editor: your text, so no model or cost
+        meta = [FINAL_LABEL]
+    else:
+        meta = [KIND_LABELS.get(kind, kind), settings.model_label(provider, draft.get("model")),
+                settings.provider_label(provider), settings.draft_cost_text(draft)]
     bottom = f"\n<i>{_esc(' · '.join(part for part in meta if part))}</i>" + _note(note)
 
     body = draft.get("text") or "–"
@@ -230,11 +234,18 @@ def collapsed_view(listing: dict, note: str | None = None) -> tuple[str, InlineK
 
 
 def current_view(listing: dict, note: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
-    """What the listing's message should show for its current status (reads the latest non-test draft)."""
+    """What the listing's message should show for its current status: the latest non-test draft, or the Endversion
+    of a finished editor session when no newer draft came after it (so copying from Telegram copies your text)."""
     if listing.get("status") in ("sent", "dismissed"):
         return collapsed_view(listing, note)
     draft = db.latest_draft(listing["id"])
-    return draft_view(listing, draft, note) if draft else followup_view(listing, note)
+    if draft is None:
+        return followup_view(listing, note)
+    session = db.latest_session(listing["id"])
+    if (session and session["status"] == "done" and (session.get("final_text") or "").strip()
+            and (session.get("last_draft_id") or 0) >= draft["id"]):
+        draft = {**draft, "text": session["final_text"], "kind": "final", "hint": None}
+    return draft_view(listing, draft, note)
 
 
 def album_caption(rows: list[dict], total: int, link: str | None) -> str:
