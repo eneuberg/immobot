@@ -475,7 +475,7 @@ def test_waiting_page_while_rules_run(client, lid):
     editor._rule_jobs[session_id] = {"state": "running", "error": None}
     page = client.get(f"/editor/{lid}").text
     assert "Claude sucht nach Regeln …" in page and f'data-rules-poll="/editor/{lid}/rules/status"' in page
-    assert '<noscript><meta http-equiv="refresh" content="5"></noscript>' in page
+    assert f'<noscript><meta http-equiv="refresh" content="5; url=/editor/{lid}"></noscript>' in page  # no "#…"
     assert client.get(f"/editor/{lid}/rules/status").json() == {"state": "running"}
     r = post(client, lid, "reopen", fields)
     assert r.status_code == 409 and db.get_session(session_id)["status"] == "done"

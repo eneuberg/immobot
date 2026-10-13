@@ -175,7 +175,7 @@ def test_rewrite_runs_in_the_background(client, gated_rewrite):
     assert client.get("/settings/rewrite/status").json()["state"] == "running"
     page = client.get("/settings").text
     assert "Vorschlag wird erstellt …" in page and 'data-rewrite-poll="/settings/rewrite/status"' in page
-    assert '<noscript><meta http-equiv="refresh" content="10"></noscript>' in page  # without JS
+    assert '<noscript><meta http-equiv="refresh" content="10; url=/settings"></noscript>' in page  # without JS
     assert client.post("/settings/rewrite").status_code == 303  # one job at a time
     assert wait_for(lambda: gated_rewrite["calls"] == 1) and gated_rewrite["calls"] == 1
 

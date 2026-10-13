@@ -23,7 +23,8 @@
 
 {% block head %}
 {# The proposal is made in the background: app.js polls its status; without JS the page reloads itself. #}
-{% if job and job.state == "running" %}<noscript><meta http-equiv="refresh" content="10"></noscript>{% endif %}
+{# An explicit URL without "#verbessern": a refresh to the same URL with a fragment doesn't reload. #}
+{% if job and job.state == "running" %}<noscript><meta http-equiv="refresh" content="10; url=/settings"></noscript>{% endif %}
 {% endblock %}
 
 {% block intro %}Was über dich in den Anschreiben steht und wie sie klingen.{% endblock %}

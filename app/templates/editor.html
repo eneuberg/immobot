@@ -3,7 +3,9 @@
 {% block title %}Editor · {{ listing.title or "Inserat" }}{% endblock %}
 {% block head %}
 <script src="/static/editor.js?v={{ EDITOR_JS_VERSION }}" defer></script>
-{% if job and job.state == "running" %}<noscript><meta http-equiv="refresh" content="5"></noscript>{% endif %}
+{# Without JS: reload every 5 s. An explicit URL without "#…": a refresh to the same URL with a fragment is only a
+   jump within the page in browsers, not a reload. #}
+{% if job and job.state == "running" %}<noscript><meta http-equiv="refresh" content="5; url=/editor/{{ listing.id }}"></noscript>{% endif %}
 {% endblock %}
 
 {# Every form posts the form token and the session it was made for (editor.py checks both). #}
