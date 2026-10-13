@@ -15,7 +15,8 @@ Tables:
 
 Learning (see learning.py; the current profile itself stays in `settings`):
   profile_versions   snapshot of the five profile settings (settings.PROFILE_FIELDS) after every change; never deleted
-  edit_sessions      one editor session per listing and round: Claude's original, the current and the final text
+  edit_sessions      one editor session per listing and round: Claude's original, the current and the final text;
+                     status open | done | superseded (an open round replaced by a new one from a newer draft)
   feedback           critiques and quick buttons ("Kürzer", ...) from editor, Telegram and dashboard; never test drafts
   learned_rules      rules proposed on "Fertig" and their decisions (proposed / active / inactive / rejected / merged /
                      replaced); update and remove proposals point at their rule with replaces_rule_id
@@ -135,7 +136,8 @@ CREATE TABLE IF NOT EXISTS edit_sessions (
     updated_at TEXT NOT NULL,
     finished_at TEXT,
     rules_basis TEXT,
-    processed_version_id INTEGER REFERENCES profile_versions(id)
+    processed_version_id INTEGER REFERENCES profile_versions(id),
+    last_draft_id INTEGER REFERENCES drafts(id)
 );
 CREATE INDEX IF NOT EXISTS idx_edit_sessions_listing ON edit_sessions(listing_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_edit_sessions_open ON edit_sessions(listing_id) WHERE status = 'open';
@@ -229,6 +231,7 @@ ADDED_COLUMNS = {
         ("cost_native", "REAL"),
     ],
     "credentials": [("hint", "TEXT")],
+    "edit_sessions": [("last_draft_id", "INTEGER REFERENCES drafts(id)")],
 }
 
 LISTING_FIELDS = ["fredy_id", "job_id", "provider", "title", "price", "size", "address", "description", "image_url", "url", "fredy_url"]
@@ -762,19 +765,20 @@ def _ensure_initial_version() -> None:
 # --- edit sessions --------------------------------------------------------------
 
 SESSION_UPDATE_COLUMNS = {"current_text", "final_text", "status", "use_as_example", "finished_at", "rules_basis",
-                          "processed_version_id"}
+                          "processed_version_id", "last_draft_id"}
 
 
 def create_session(listing_id: int, base_draft_id: int | None, text: str, profile_version_id: int | None) -> int:
-    """A new open session with `text` as original and current text. Raises sqlite3.IntegrityError when the
-    listing already has an open session (unique index idx_edit_sessions_open)."""
+    """A new open session with `text` as original and current text. last_draft_id (the newest draft the session
+    knows: its base, later its latest editor revision) starts as base_draft_id. Raises sqlite3.IntegrityError when
+    the listing already has an open session (unique index idx_edit_sessions_open)."""
     ts = now_iso()
     with connect() as conn:
         cur = conn.execute(
             """INSERT INTO edit_sessions (listing_id, base_draft_id, original_text, current_text, status,
-                                          profile_version_id, created_at, updated_at)
-               VALUES (?, ?, ?, ?, 'open', ?, ?, ?)""",
-            (listing_id, base_draft_id, text, text, profile_version_id, ts, ts),
+                                          profile_version_id, created_at, updated_at, last_draft_id)
+               VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)""",
+            (listing_id, base_draft_id, text, text, profile_version_id, ts, ts, base_draft_id),
         )
         return cur.lastrowid
 
@@ -790,11 +794,12 @@ def open_session(listing_id: int) -> dict | None:
                                  (listing_id,)).fetchone())
 
 
-def latest_session(listing_id: int) -> dict | None:
-    """The listing's newest session, open or done."""
+def latest_session(listing_id: int, status: str | None = None) -> dict | None:
+    """The listing's newest session (any status), or its newest one with `status`."""
+    sql = "SELECT * FROM edit_sessions WHERE listing_id = ?" + (" AND status = ?" if status else "")
     with connect() as conn:
-        return _row(conn.execute("SELECT * FROM edit_sessions WHERE listing_id = ? ORDER BY id DESC LIMIT 1",
-                                 (listing_id,)).fetchone())
+        return _row(conn.execute(sql + " ORDER BY id DESC LIMIT 1",
+                                 (listing_id, status) if status else (listing_id,)).fetchone())
 
 
 def update_session(session_id: int, **fields) -> None:

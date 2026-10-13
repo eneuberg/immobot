@@ -296,6 +296,44 @@ def test_only_one_open_session_per_listing(lid):
     assert learning.open_or_create_session(lid)["id"] == second_id
 
 
+def test_newer_draft_and_new_round(lid, fake_generate):
+    base = db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    session = learning.open_or_create_session(lid)
+    assert session["last_draft_id"] == base and learning.newer_draft(session) is None
+    asyncio.run(learning.revise_in_editor(session["id"], "Original, von Hand", "Kürzer"))
+    session = db.get_session(session["id"])
+    assert session["last_draft_id"] != base and learning.newer_draft(session) is None  # its own revision isn't newer
+    with pytest.raises(learning.LearningError, match="keinen neueren"):
+        learning.start_new_round(lid)
+    db.add_draft(lid, "test", "Test", "claude-opus-5-5")  # test drafts never count
+    assert learning.newer_draft(session) is None
+    shorter = db.add_draft(lid, "shorter", "Kurz aus Telegram", "claude-opus-5-5")
+    assert learning.newer_draft(session)["id"] == shorter
+    db.add_rule("Vorschlag einer offenen Runde", session_id=session["id"])
+
+    learning._busy_sessions.add(session["id"])  # Claude is still writing for the old round
+    with pytest.raises(learning.LearningError, match="arbeitet gerade"):
+        learning.start_new_round(lid)
+    learning._busy_sessions.clear()
+
+    new = learning.start_new_round(lid)
+    old = db.get_session(session["id"])
+    assert old["status"] == "superseded" and old["current_text"] == "Fassung 1"  # kept, but no longer open
+    assert db.list_rules("proposed", session_id=old["id"]) == []
+    assert (new["status"], new["base_draft_id"], new["original_text"]) == ("open", shorter, "Kurz aus Telegram")
+    assert db.open_session(lid)["id"] == new["id"] == learning.open_or_create_session(lid)["id"]
+    with db.connect() as conn:  # at most one open session per listing
+        assert conn.execute("SELECT COUNT(*) FROM edit_sessions WHERE listing_id = ? AND status = 'open'",
+                            (lid,)).fetchone()[0] == 1
+    assert old["id"] not in [s["id"] for s in db.example_sessions(None) + db.unprocessed_sessions()]
+
+    done = learning.finish(new["id"], "Endfassung")  # a done round stays done when the next one starts
+    newest = db.add_draft(lid, "regenerate", "Ganz neu", "claude-opus-5-5")
+    third = learning.start_new_round(lid)
+    assert db.get_session(done["id"])["status"] == "done" and third["base_draft_id"] == newest
+    assert db.latest_session(lid, "done")["id"] == done["id"]
+
+
 def test_revise_in_editor(lid, fake_generate):
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     db.add_rule("Regel", status="active")
