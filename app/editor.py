@@ -72,6 +72,11 @@ LINK_ERRORS = {
     "bad_link": (400, "Link ungültig", "Dieser Editor-Link ist ungültig oder unvollständig. " + TAP_AGAIN),
     "link_expired": (410, "Link abgelaufen", "Editor-Links aus Telegram gelten 7 Tage. Im Dashboard anmelden oder in "
                                              "Telegram einen neuen Entwurf anfordern."),
+    "login_missing": (400, "Keine Anmeldung von Telegram",
+                      "Telegram hat beim Öffnen keine Anmeldedaten mitgeschickt. Beim Tippen auf „📝\u00a0Bearbeiten“ "
+                      "fragt Telegram, ob du dich bei dieser Seite anmelden willst – dort „Anmelden“ wählen bzw. den "
+                      "Haken drin lassen. Kommt diese Frage gar nicht, ist beim Bot (@BotFather → Bot Settings → "
+                      "Domain) eine andere Domain eingetragen als die dieser Seite. " + TAP_AGAIN),
     "bad_login": (400, "Anmeldung ungültig", "Die Anmeldedaten von Telegram ließen sich nicht prüfen. " + TAP_AGAIN),
     "login_stale": (410, "Link abgelaufen", "Die Anmeldung aus Telegram gilt nur 10 Minuten. " + TAP_AGAIN),
     "login_reused": (410, "Link schon benutzt", "Jeder Tipp auf „📝\u00a0Bearbeiten“ öffnet den Editor genau einmal – "
@@ -175,7 +180,9 @@ def editor_link(request: Request, listing_id: str, exp: str, sig: str):
     cookie, error = editor_access.start_editor_browser_session(listing_id, exp, sig, dict(request.query_params))
     lid = _listing_id(listing_id)
     if error:
-        log.info("Editor link refused: %s", error)
+        log.info("Editor link refused: %s (login fields: %s; %s)", error,
+                 ",".join(sorted(k for k in request.query_params if k.isidentifier())[:8]) or "none",
+                 (request.headers.get("user-agent") or "?")[:120])
         return _message_page(request, LINK_ERRORS.get(error, LINK_ERRORS["bad_link"]), lid)
     session = editor_access.get_editor_browser_session(cookie)
     max_age = max(0, int(datetime.fromisoformat(session["expires_at"]).timestamp() - time.time()))

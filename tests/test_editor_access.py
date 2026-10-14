@@ -111,6 +111,7 @@ def test_start_session_errors(lid, fresh_vault):
     assert start(listing + 1, exp, sig, login_params(), now=NOW) == (None, "bad_link")
     assert start(*link(999), login_params(), now=NOW) == (None, "bad_link")  # signed, but no such listing
     assert start(*link(lid, created=NOW - 8 * DAY), login_params(), now=NOW) == (None, "link_expired")
+    assert start(listing, exp, sig, {}, now=NOW) == (None, "login_missing")  # declined, or another linked domain
     assert start(listing, exp, sig, {**login_params(), "username": "mallory"}, now=NOW) == (None, "bad_login")
     assert start(listing, exp, sig, login_params(auth_date=NOW - 3600), now=NOW) == (None, "login_stale")
     assert start(listing, exp, sig, login_params(user_id=2002), now=NOW) == (None, "not_allowed")
@@ -121,7 +122,7 @@ def test_start_session_errors(lid, fresh_vault):
     assert start(listing, exp, sig, login_params(auth_date=NOW - 2), now=NOW) == (None, "allowlist_missing")
     fresh_vault.clear("telegram_bot_token")
     assert start(listing, exp, sig, login_params(auth_date=NOW - 3), now=NOW) == (None, "bad_login")
-    assert set(editor_access.ERROR_CODES) == {"bad_link", "link_expired", "bad_login", "login_stale", "login_reused",
+    assert set(editor_access.ERROR_CODES) == {"bad_link", "link_expired", "login_missing", "bad_login", "login_stale", "login_reused",
                                               "allowlist_missing", "not_allowed", "window_over"}
 
 

@@ -6,7 +6,9 @@ The "📝 Bearbeiten" button is a Telegram login_url button (bot.editor_button) 
 When tapped, Telegram appends the user's signed login data (id, first_name, ..., auth_date, hash).
 start_editor_browser_session() checks, in this order:
   (a) link signature and expiry            -> "bad_link" / "link_expired"
-  (b) Telegram login hash (bot token)      -> "bad_login"
+  (b) Telegram login data present         -> "login_missing" (the user declined the login, or the bot's linked
+                                              domain isn't this one: Telegram then opens the bare URL)
+      and its hash (bot token)             -> "bad_login"
   (c) auth_date at most 10 minutes old, at most 60 s in the future -> "login_stale"
   (d) login hash never used before         -> "login_reused" (remembered for a day)
   (e) Telegram user on "Erlaubte Telegram-User-IDs" (required here) -> "allowlist_missing" / "not_allowed"
@@ -32,7 +34,7 @@ LOGIN_MAX_AGE_S = 600
 LOGIN_FUTURE_SKEW_S = 60
 USED_HASH_KEEP_S = 24 * 3600
 EDITOR_COOKIE = "immobot_editor"  # HttpOnly, Secure like the session cookie, SameSite=Lax
-ERROR_CODES = ("bad_link", "link_expired", "bad_login", "login_stale", "login_reused", "allowlist_missing",
+ERROR_CODES = ("bad_link", "link_expired", "login_missing", "bad_login", "login_stale", "login_reused", "allowlist_missing",
                "not_allowed", "window_over")
 
 _EXP = re.compile(r"[0-9]{1,12}")
@@ -89,8 +91,10 @@ def verify_editor_link(listing_id, exp, sig, now: float | None = None) -> bool:
 # --- Telegram login data -------------------------------------------------------------------
 
 def _telegram_login(params: dict, bot_token: str, now: float, max_age_s: int) -> tuple[int | None, str | None]:
-    """(user id, None) or (None, "bad_login" / "login_stale")."""
+    """(user id, None) or (None, "login_missing" / "bad_login" / "login_stale")."""
     fields = {str(key): str(value) for key, value in (params or {}).items()}
+    if "hash" not in fields and "id" not in fields:
+        return None, "login_missing"
     given = fields.pop("hash", "")
     if not bot_token or not _HASH.fullmatch(given) or not fields.get("id", "").isdigit():
         return None, "bad_login"
