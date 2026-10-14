@@ -3,6 +3,7 @@ import dataclasses
 import hmac
 import json
 import re
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -45,6 +46,8 @@ def client(tmp_path, monkeypatch):
 
 
 def login(client):
+    """Logs in from an already known IP, so tests about audit entries and notices see only their own."""
+    db.set_meta(web.KNOWN_LOGIN_IPS_META, json.dumps({"testclient": datetime.now(timezone.utc).isoformat()}))
     r = client.post("/login", data={"password": PASSWORD})
     assert r.status_code == 303 and r.headers["location"] == "/"
 
@@ -1780,3 +1783,21 @@ def test_listing_status_change_refreshes_telegram(client, monkeypatch):
     lid = add_listing()
     assert client.post(f"/listing/{lid}/status", data={"status": "sent"}).status_code == 303
     assert refreshed == [lid]
+
+
+def test_login_from_new_ip_sends_notice_once(client, notices):
+    assert client.post("/login", data={"password": PASSWORD}).status_code == 303
+    (text, chat), = notices
+    assert text.startswith("🔓 Dashboard-Login von neuer IP ") and "Abmelden" in text and chat == 42
+    assert PASSWORD not in text
+    assert events()[0][:2] == ("dashboard", "login_new_ip")
+    assert client.post("/login", data={"password": PASSWORD}).status_code == 303  # known IP now: quiet
+    assert client.post("/login", data={"password": "wrong"}).status_code == 401  # a single failure: quiet
+    assert len(notices) == 1 and len(events()) == 1
+
+
+def test_known_login_ip_is_forgotten_after_90_days(client, notices):
+    old = (datetime.now(timezone.utc) - timedelta(days=web.KNOWN_LOGIN_IP_DAYS + 1)).isoformat()
+    db.set_meta(web.KNOWN_LOGIN_IPS_META, json.dumps({"testclient": old}))
+    assert client.post("/login", data={"password": PASSWORD}).status_code == 303
+    assert len(notices) == 1

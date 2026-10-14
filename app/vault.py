@@ -53,6 +53,7 @@ ACTION_LABELS = {  # credential_events.action -> German label
     "test_failed": "Verbindungstest fehlgeschlagen",
     "login_failed": "wiederholt falsches Passwort",
     "login_failed_many": "viele Fehlversuche von verschiedenen IPs",
+    "login_new_ip": "Login von neuer IP",
 }
 MAX_LEN = 500
 KDF_INFO = b"immobot credentials v1"

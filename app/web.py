@@ -25,7 +25,7 @@ import re
 import secrets
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
@@ -422,7 +422,36 @@ async def login(request: Request, password: str = Form(""), next: str = Form("")
     request.session["auth"] = True
     request.session["stamp"] = _session_stamp(request)
     request.session["login_at"] = request.session["seen_at"] = int(_now())
+    await _login_notice(client)
     return RedirectResponse(next_path or "/", status_code=303)
+
+
+KNOWN_LOGIN_IPS_META = "known_login_ips"  # {limiter key: last successful login (ISO)}
+KNOWN_LOGIN_IPS_MAX = 50
+KNOWN_LOGIN_IP_DAYS = 90
+
+
+async def _login_notice(client: str) -> None:
+    """A successful login from an IP (IPv6: /64) without a login in the last 90 days: an audit entry and a
+    Telegram notice, so a login that wasn't the owner shows up at once. Never contains the password."""
+    key, now = _limiter_key(client), datetime.now(timezone.utc)
+    try:
+        known = json.loads(db.get_meta(KNOWN_LOGIN_IPS_META) or "{}")
+        known = {k: v for k, v in known.items()
+                 if now - datetime.fromisoformat(v) < timedelta(days=KNOWN_LOGIN_IP_DAYS)}
+    except (ValueError, TypeError, AttributeError):
+        known = {}
+    is_new = key not in known
+    known[key] = now.isoformat()
+    newest = sorted(known.items(), key=lambda kv: kv[1])[-KNOWN_LOGIN_IPS_MAX:]
+    db.set_meta(KNOWN_LOGIN_IPS_META, json.dumps(dict(newest)))
+    if not is_new:
+        return
+    db.add_credential_event("dashboard", "login_new_ip", key)
+    when = datetime.now(LOCAL_TZ).strftime("%d.%m. %H:%M")
+    await bot.notify(f"🔓 Dashboard-Login von neuer IP {key} ({when})\n"
+                     "Nicht du? Im Dashboard „Abmelden“ (beendet alle Sitzungen) und DASHBOARD_PASSWORD in Coolify "
+                     "ändern.", bot.configured_chat_id())
 
 
 @router.post("/logout", dependencies=[Depends(same_origin)])
