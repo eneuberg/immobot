@@ -91,6 +91,7 @@ LINK_ERRORS = {
                                             "gerechnet ab dem ersten Tipp. Im Dashboard anmelden oder in Telegram "
                                             "einen neuen Entwurf anfordern."),
 }
+REENTRY_ERRORS = ("login_missing", "login_stale", "login_reused")  # checked after the link signature
 EXPIRED = (401, "Sitzung abgelaufen – bitte anmelden",
            "Der Editor aus Telegram gilt einen Tag. Danach geht es mit dem Dashboard-Login weiter – oder in Telegram "
            "unter einem neuen Entwurf noch einmal auf „📝\u00a0Bearbeiten“ tippen.")
@@ -179,6 +180,11 @@ def editor_link(request: Request, listing_id: str, exp: str, sig: str):
     """The "📝 Bearbeiten" button: check link and Telegram login (editor_access), start the editor browser session."""
     cookie, error = editor_access.start_editor_browser_session(listing_id, exp, sig, dict(request.query_params))
     lid = _listing_id(listing_id)
+    if error in REENTRY_ERRORS and lid is not None and _access(request, lid) in ("dashboard", "editor"):
+        # A valid link, but no (usable) Telegram login data - Telegram doesn't always attach them, e.g. on a
+        # message it edited. This browser already has access to the listing (its 24 h editor session or the
+        # dashboard login), so the button simply opens the editor again.
+        return RedirectResponse(f"/editor/{lid}", status_code=303)
     if error:
         log.info("Editor link refused: %s (login fields: %s; %s)", error,
                  ",".join(sorted(k for k in request.query_params if k.isidentifier())[:8]) or "none",

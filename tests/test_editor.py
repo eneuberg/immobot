@@ -841,3 +841,14 @@ def test_first_editor_visit_fetches_pictures(client, lid, monkeypatch):
     assert "Frisch geladen." in client.get(f"/editor/{lid}").text
     client.get(f"/editor/{lid}")
     assert calls == [lid]  # once; later visits read what's stored
+
+
+def test_button_without_login_data_reopens_an_existing_session(client, lid):
+    other = db.insert_listing({"fredy_id": "e3", "provider": "immoscout", "title": "Andere"})[0]
+    path = editor_access.make_editor_path(lid)
+    assert client.get(path).status_code == 400  # no session yet: "Keine Anmeldung von Telegram"
+    editor_cookie(client, lid)
+    r = client.get(editor_access.make_editor_path(lid))  # e.g. the new button after "Fertig", Telegram sent nothing
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}"
+    assert client.get(editor_access.make_editor_path(other)).status_code == 400  # the session is for one listing
+    assert client.get(path[:-3] + "AAA").status_code == 400  # a forged link never counts
