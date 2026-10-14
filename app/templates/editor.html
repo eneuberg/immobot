@@ -1,6 +1,7 @@
 {% extends "editor_base.html" %}
 {% from "macros.html" import flashes, status_badge, text_diff %}
 {% from "rule_macros.html" import manual_rule_form %}
+{% from "listing_macros.html" import media_label, details_article %}
 {% block title %}Editor · {{ listing.title or "Inserat" }}{% endblock %}
 {% block head %}
 <script src="/static/editor.js?v={{ EDITOR_JS_VERSION }}" defer></script>
@@ -42,6 +43,37 @@
     </div>
     {% endif %}
   </header>
+
+  {# The rest of the listing, collapsed so the text stays on top. Pictures load only when opened (lazy). #}
+  <div class="ed-info">
+    {% if media or has_gallery %}
+    <details class="disclosure">
+      <summary>🖼 Bilder <span class="count">{{ media|length }}</span></summary>
+      <div class="disclosure-body">
+        {% if media %}
+        <div class="gallery">
+          {% for m in media %}
+          <a class="gallery-item" href="/editor/{{ listing.id }}/media/{{ m.position }}" target="_blank" rel="noopener"
+            data-lightbox data-caption="{{ media_label(m) }}">
+            <img src="/editor/{{ listing.id }}/media/{{ m.position }}" alt="{{ m.caption or 'Bild ' ~ m.position }}" loading="lazy" decoding="async">
+            <span class="gallery-caption">{{ media_label(m) }}</span>
+          </a>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="help">Noch keine Bilder geladen – das passiert beim ersten Entwurf{% if logged_in %} oder im Dashboard mit „Bilder laden“{% endif %}.</p>
+        {% endif %}
+      </div>
+    </details>
+    {% endif %}
+    <details class="disclosure">
+      <summary>📄 {% if listing.details %}Beschreibung &amp; Details{% else %}Beschreibung{% endif %}</summary>
+      <div class="disclosure-body">
+        {% if listing.details %}{{ details_article(listing, details) }}
+        {% else %}<p class="description pre-wrap">{{ listing.description or "–" }}</p>{% endif %}
+      </div>
+    </details>
+  </div>
 
   {{ flashes(message, error) }}
   {% if lost_text %}

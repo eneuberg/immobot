@@ -769,6 +769,9 @@ details.notes-box .notes { margin: 0; font-size: .9rem; }
    itself; without JS "Zwischenspeichern" next to the heading does). */
 .ed-brand-note { grid-area: out; font-size: .85rem; font-weight: 500; color: var(--pico-muted-color); }
 .ed-head { margin: 0 0 1rem; }
+.ed-info { margin: 0 0 1rem; }
+.ed-info > details { margin: 0 0 .5rem; }
+.ed-info article.details { margin: 0; padding: 0; border: 0; box-shadow: none; background: none; }
 .ed-top { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .5rem; margin-bottom: .4rem; }
 .ed-head h1 { --pico-font-size: 1.3rem; margin: 0 0 .2rem; overflow-wrap: anywhere; }
 @media (min-width: 768px) { .ed-head h1 { --pico-font-size: 1.55rem; } }

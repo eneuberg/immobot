@@ -1,9 +1,8 @@
 {% extends "base.html" %}
 {% from "macros.html" import status_badge, draft_meta, icon %}
+{% from "listing_macros.html" import media_label, details_article %}
 {% block title %}{{ listing.title or "Inserat" }}{% endblock %}
 
-{# "3 · Balkon": the number is the one Claude and the Telegram album use for this picture. #}
-{% macro media_label(m) %}{{ m.position }}{% if m.caption %} · {{ m.caption }}{% endif %}{% endmacro %}
 
 {% block content %}
 <p class="backlink"><a href="/">← Inserate</a></p>
@@ -86,32 +85,7 @@
 {# Full exposé text from ImmoScout24 (replaces Fredy's short description). #}
 <section id="beschreibung">
   <div class="section-head"><h2>Details</h2><span class="chip">aus dem ImmoScout24-Exposé</span></div>
-  <article class="details">
-    {# Key facts first (with the contact person), then the titled sections: lists as label/value rows, texts as text. #}
-    {% set top = details|selectattr("title", "none")|selectattr("facts")|first %}
-    {% if listing.contact_name or top %}
-    <dl class="facts">
-      {% if listing.contact_name %}<div class="wide"><dt>Ansprechperson</dt><dd>{{ listing.contact_name }}</dd></div>{% endif %}
-      {% if top %}{% for label, value in top.facts %}<div{% if value|length > 24 %} class="wide"{% endif %}><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endfor %}{% endif %}
-    </dl>
-    {% endif %}
-    {% for s in details if s is not sameas top %}
-    {% if s.facts %}
-    {# Label/value lists (Hauptkriterien, Kosten, …) are collapsed, except the costs. #}
-    <details class="disclosure details-section is-list" {% if "kosten" in (s.title or "")|lower %}open{% endif %}>
-      <summary>{{ s.title or "Weitere Angaben" }} <span class="count">{{ s.facts|length }}</span></summary>
-      <dl class="kvlist disclosure-body">
-        {% for label, value in s.facts %}<div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endfor %}
-      </dl>
-    </details>
-    {% else %}
-    <div class="details-section">
-      {% if s.title %}<h3>{{ s.title }}</h3>{% endif %}
-      <p class="description pre-wrap">{{ s.text }}</p>
-    </div>
-    {% endif %}
-    {% endfor %}
-  </article>
+  {{ details_article(listing, details) }}
 </section>
 {% else %}
 <section id="beschreibung">

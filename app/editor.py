@@ -27,9 +27,9 @@ import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
-from . import bot, db, editor_access, learning, llm, portals, settings, textdiff, web
+from . import bot, db, editor_access, learning, llm, media, portals, settings, textdiff, web
 
 log = logging.getLogger(__name__)
 
@@ -233,6 +233,10 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
         "manual_rule": manual_rule,  # "Regel selbst eintragen" typed, but refused: shown again
         "use_rules": settings.as_bool(current.get("use_rules")),
         "rule_max_chars": learning.RULE_MAX_CHARS,
+        # "Inserat-Infos" (collapsed): pictures via /editor/{id}/media/{position}, the exposé text or Fredy's text
+        "media": media.stored_pictures(listing_id),
+        "has_gallery": media.has_gallery(listing),
+        "details": web.details_sections(listing.get("details")),
     }
     if session is not None:
         text = session["final_text"] if session["status"] == "done" else session["current_text"]
@@ -274,6 +278,19 @@ def editor_page(request: Request, listing_id: str, m: str | None = None, k: str 
     if denied is not None:
         return denied
     return _render(request, listing, mode, message=MESSAGES.get(m or ""), critique=web._take_once(k) if k else None)
+
+
+@router.get("/editor/{listing_id}/media/{position}")
+def editor_media(request: Request, listing_id: str, position: int):
+    """A stored picture of the listing, for an editor session from Telegram as well as the dashboard login."""
+    listing, mode, denied = _gate(request, listing_id)
+    if denied is not None:
+        return denied
+    path = media.media_file(listing["id"], position) if position > 0 else None
+    if path is None:
+        return _message_page(request, (404, "Bild nicht gefunden", "Dieses Bild gibt es nicht (mehr)."),
+                             login_link=False)
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @router.get("/editor/{listing_id}/rules/status")

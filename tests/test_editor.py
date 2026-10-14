@@ -784,3 +784,43 @@ def test_add_own_rule_in_the_editor(client, lid):
     _, fields = open_editor(client, lid)
     assert post(client, lid, "rules/add", fields, text="Nenne kein Datum.").status_code == 303
     assert db.count_rules("active") == 2
+
+
+def test_editor_shows_pictures_and_details_collapsed(client, lid):
+    import io
+
+    from PIL import Image
+
+    other = db.insert_listing({"fredy_id": "e2", "provider": "immoscout", "title": "Andere"})[0]
+    for listing_id in (lid, other):
+        folder = media.media_root() / str(listing_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        out = io.BytesIO()
+        Image.new("RGB", (30, 20), (200, 100, 1)).save(out, format="JPEG")
+        (folder / "1.jpg").write_bytes(out.getvalue())
+        db.replace_media(listing_id, [{"position": 1, "caption": "Balkon", "source_url": "https://x.example/1",
+                                       "file": "1.jpg"}])
+    db.set_listing_details(lid, "Kaltmiete: 780 €\n\n## Objektbeschreibung\nSonnig und ruhig.", "Frau Muster")
+    db.add_draft(lid, "initial", "Entwurf", "claude-opus-5-5")
+    from_telegram(client, lid)
+    page = client.get(f"/editor/{lid}").text
+    assert 'Bilder <span class="count">1</span>' in page and f'src="/editor/{lid}/media/1"' in page
+    assert "Beschreibung &amp; Details" in page and "Sonnig und ruhig." in page and "Frau Muster" in page
+    assert "<details class=\"disclosure\" open" not in page.split('class="ed-info"')[1].split("</div>\n\n")[0]
+    r = client.get(f"/editor/{lid}/media/1")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert r.headers["cache-control"] == "no-store"
+    assert client.get(f"/editor/{lid}/media/2").status_code == 404
+    # the Telegram session is for this one listing only; without any session: login
+    assert client.get(f"/editor/{other}/media/1").status_code in (303, 401)
+    client.cookies.clear()
+    assert client.get(f"/editor/{lid}/media/1").headers["location"] == f"/login?next=/editor/{lid}"
+
+
+def test_editor_without_exposé_shows_fredys_description(client, lid):
+    db.add_draft(lid, "initial", "Entwurf", "claude-opus-5-5")
+    login(client)
+    with db.connect() as conn:
+        conn.execute("UPDATE listings SET description = ? WHERE id = ?", ("Kurzer Fredy-Text", lid))
+    page = client.get(f"/editor/{lid}").text
+    assert "📄 Beschreibung</summary>" in page and "Kurzer Fredy-Text" in page
