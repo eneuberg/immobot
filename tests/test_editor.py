@@ -824,3 +824,20 @@ def test_editor_without_exposé_shows_fredys_description(client, lid):
         conn.execute("UPDATE listings SET description = ? WHERE id = ?", ("Kurzer Fredy-Text", lid))
     page = client.get(f"/editor/{lid}").text
     assert "📄 Beschreibung</summary>" in page and "Kurzer Fredy-Text" in page
+
+
+def test_first_editor_visit_fetches_pictures(client, lid, monkeypatch):
+    calls = []
+
+    async def fetch(listing_id, retry=False, want_images=True):
+        calls.append(listing_id)
+        db.set_media_state(listing_id, db.now_iso(), None)
+        db.set_listing_details(listing_id, "## Objektbeschreibung\nFrisch geladen.", None)
+        return []
+
+    monkeypatch.setattr(media, "ensure_media", fetch)
+    monkeypatch.setattr(media, "has_gallery", lambda listing: True)
+    login(client)
+    assert "Frisch geladen." in client.get(f"/editor/{lid}").text
+    client.get(f"/editor/{lid}")
+    assert calls == [lid]  # once; later visits read what's stored

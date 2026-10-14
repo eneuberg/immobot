@@ -295,3 +295,15 @@ IMMOBOT_DISABLE_BOT=1 COOKIE_SECURE=0 DATA_DIR=./data DASHBOARD_PASSWORD=dev \
   SESSION_SECRET=<fester Wert, mind. 32 Zeichen> .venv/bin/uvicorn app.main:app --reload
 # API-Key usw. dann unter http://127.0.0.1:8000/settings/zugaenge eintragen.
 ```
+
+### Test-Inserat schicken
+
+Schickt ein echtes ImmoScout24-Inserat wie Fredy an immobot (Titel, Preis, Größe, Adresse und Beschreibung aus dem
+Exposé; Bilder und Exposé-Text lädt immobot selbst). Praktisch zum Ausprobieren von Telegram und Editor:
+
+```bash
+.venv/bin/python scripts/test_listing.py https://immobot.example.com --env-file immobot.env \
+  --expose https://www.immobilienscout24.de/expose/123456789
+```
+
+Der Webhook-Token kommt aus `FREDY_WEBHOOK_TOKEN` (Env-Variable oder Env-Datei) und wird nie ausgegeben.

@@ -272,11 +272,16 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
 
 
 @router.get("/editor/{listing_id}")
-def editor_page(request: Request, listing_id: str, m: str | None = None, k: str | None = None):
-    """k: a critique kept across a quick button (editor_quick), by a one-time id; the text never is in the URL."""
+async def editor_page(request: Request, listing_id: str, m: str | None = None, k: str | None = None):
+    """k: a critique kept across a quick button (editor_quick), by a one-time id; the text never is in the URL.
+    The first visit gets the pictures (and the ImmoScout24 exposé text) if nothing was fetched yet, like a draft
+    would: opening the editor is the same intent. Takes a few seconds once; later visits only read what's stored."""
     listing, mode, denied = _gate(request, listing_id)
     if denied is not None:
         return denied
+    if media.has_gallery(listing) and not listing.get("media_fetched_at"):
+        await media.ensure_media(listing["id"])
+        listing = db.get_listing(listing["id"]) or listing
     return _render(request, listing, mode, message=MESSAGES.get(m or ""), critique=web._take_once(k) if k else None)
 
 
