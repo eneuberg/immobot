@@ -172,8 +172,15 @@ def _links_row(listing: dict) -> list[InlineKeyboardButton]:
     return row
 
 
-def followup_view(listing: dict, note: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
-    rows = [[_button("✍️ Anschreiben", "gen", listing["id"]), _button("❌ Uninteressant", "skip", listing["id"])]]
+def followup_view(listing: dict, note: str | None = None, editor: bool = True) -> tuple[str, InlineKeyboardMarkup]:
+    """A listing without a draft: "✍️ Anschreiben" (draft right here) and, when the editor button can be used,
+    "📝 Bearbeiten" (the editor, which offers "Entwurf erzeugen"), then "❌ Uninteressant". editor=False: without it."""
+    lid = listing["id"]
+    edit = editor_button(lid) if editor and editor_button_error() is None else None
+    if edit:
+        rows = [[_button("✍️ Anschreiben", "gen", lid), edit], [_button("❌ Uninteressant", "skip", lid)]]
+    else:
+        rows = [[_button("✍️ Anschreiben", "gen", lid), _button("❌ Uninteressant", "skip", lid)]]
     if _links_row(listing):
         rows.append(_links_row(listing))
     return header(listing) + _note(note), InlineKeyboardMarkup(rows)
@@ -529,9 +536,14 @@ async def _edit(tg_bot, listing: dict, text: str, keyboard) -> None:
             if "not modified" not in str(exc).lower():
                 raise
 
-    # Only draft keyboards carry the button. Rejected, the editor layout would lose every way to change the draft:
-    # the retry gets the full layout instead.
-    await _with_editor_fallback(edit, keyboard, lambda: draft_keyboard(listing, editor=False))
+    # Rejected, the editor layout would lose every way to change the draft: the retry gets the full layout instead.
+    await _with_editor_fallback(edit, keyboard, lambda: _keyboard_without_editor(listing))
+
+
+def _keyboard_without_editor(listing: dict) -> InlineKeyboardMarkup:
+    if db.latest_draft(listing["id"]) is None:
+        return followup_view(listing, editor=False)[1]
+    return draft_keyboard(listing, editor=False)
 
 
 async def _show(tg_bot, listing: dict, note: str | None = None) -> None:

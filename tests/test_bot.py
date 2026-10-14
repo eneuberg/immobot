@@ -269,9 +269,14 @@ def test_draft_keyboard_editor_first(fresh_vault, monkeypatch):
     assert [b.callback_data for b in rows[1]] == ["sent:12", "skip:12"]
     monkeypatch.setattr(portals, "contact_url", lambda provider, url: None)
     assert texts(bot.draft_keyboard(listing_dict(id=12)))[0] == ["📝 Bearbeiten"]
-    # follow-up and collapsed messages never carry it
-    assert not any(b.login_url for markup in (bot.followup_view(listing_dict())[1], bot.collapsed_view(listing_dict())[1])
-                   for row in markup.inline_keyboard for b in row)
+    # a listing without a draft gets it next to "✍️ Anschreiben"; collapsed messages never carry it
+    followup = bot.followup_view(listing_dict(id=12))[1]
+    assert texts(followup)[:2] == [["✍️ Anschreiben", "📝 Bearbeiten"], ["❌ Uninteressant"]]
+    assert followup.inline_keyboard[0][1].login_url.url.startswith("https://immobot.example.com/e/12/")
+    assert texts(bot.followup_view(listing_dict(id=12), editor=False)[1])[0] == ["✍️ Anschreiben", "❌ Uninteressant"]
+    assert not any(b.login_url for row in bot.collapsed_view(listing_dict())[1].inline_keyboard for b in row)
+    bot.db.set_meta(bot.EDITOR_BUTTON_ERROR_META, "2026-10-13T07:12:00+00:00 Telegram lehnt den Editor-Button ab.")
+    assert texts(bot.followup_view(listing_dict(id=12))[1])[0] == ["✍️ Anschreiben", "❌ Uninteressant"]
 
 
 def test_draft_keyboard_full_layout_while_telegram_rejects_the_button(fresh_vault, monkeypatch):
@@ -337,6 +342,16 @@ def test_rejected_editor_button_falls_back_and_is_noted(tg, monkeypatch):
     assert bot.editor_button_error() is None
     assert texts(picky.edits[-1]["reply_markup"]) == [  # from then on: editor first
         ["📝 Bearbeiten", "📨 Inserat öffnen ↗"], ["✅ Gesendet", "❌ Uninteressant"], ["🔗 Dashboard"]]
+
+
+def test_rejected_editor_button_on_a_listing_without_draft(tg, monkeypatch):
+    db = bot.db
+    monkeypatch.setattr(bot, "_public_base", "https://immobot.example.com")
+    listing_id = add_listing(db)
+    picky = PickyBot()
+    asyncio.run(bot._edit(picky, db.get_listing(listing_id), "text", bot.followup_view(db.get_listing(listing_id))[1]))
+    assert picky.rejected == 1
+    assert texts(picky.edits[-1]["reply_markup"])[0] == ["✍️ Anschreiben", "❌ Uninteressant"]  # not a draft keyboard
 
 
 def test_editor_button_fallback_when_sending_and_other_errors(tg, monkeypatch, fresh_vault):
