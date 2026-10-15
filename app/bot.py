@@ -795,6 +795,63 @@ async def announce(tg_bot, chat_id: int, listing_ids: list[int]) -> None:
             _announcing.discard(listing_id)
 
 
+def manual_album_caption(listing: dict, rows: list[dict], total: int) -> str:
+    """Plain-text caption of a hand-added listing's album: title, facts and portal, then the picture list."""
+    facts = " · ".join(_shorten(listing[k], FACT_MAX) for k in ("price", "size", "address") if str(listing.get(k) or "").strip())
+    head = "\n".join(filter(None, [f"🏠 {_shorten(_title(listing), 200)}", facts, "ImmoScout24 · per Link hinzugefügt"]))
+    pictures = album_caption(rows, total, None)
+    caption = f"{head}\n{pictures}"
+    if _tg_len(caption) > CAPTION_MAX:
+        caption = f"{head}\n📷 {total} Foto{'' if total == 1 else 's'}"
+    return caption if _tg_len(caption) <= CAPTION_MAX else caption[: CAPTION_MAX // 2]
+
+
+async def post_manual(tg_bot, chat_id: int, listing_id: int, write_draft: bool) -> None:
+    """A listing added by hand: there is no Fredy message, so the pictures go first (one album, up to ALBUM_MAX, like
+    Fredy's preview), then the usual message with the buttons; with write_draft Claude writes the first draft right
+    away (shown in that message)."""
+    listing = db.get_listing(listing_id)
+    if listing is None or listing.get("tg_message_id") or listing_id in _announcing:
+        return
+    _announcing.add(listing_id)
+    try:
+        pictures = media.read_pictures(listing_id, media.stored_pictures(listing_id))
+        if pictures:
+            caption = manual_album_caption(listing, [row for row, _ in pictures[:ALBUM_MAX]], len(pictures))
+            try:
+                if len(pictures) == 1:
+                    album = await tg_bot.send_photo(chat_id=chat_id, photo=pictures[0][1], caption=caption)
+                else:
+                    album = (await tg_bot.send_media_group(chat_id=chat_id, media=album_media(pictures, caption)))[0]
+                db.set_album_sent(listing_id, album.message_id)
+            except TelegramError as exc:  # the message with the buttons still matters more
+                _record_error(exc)
+        message = await _send(tg_bot, chat_id, *current_view(db.get_listing(listing_id) or listing))
+        db.set_listing_tg_message(listing_id, message.message_id)
+    except TelegramError as exc:
+        _record_error(exc)
+        return
+    finally:
+        _announcing.discard(listing_id)
+    if write_draft and not has_draft(listing_id):
+        async with _lock(listing_id):
+            fresh = db.get_listing(listing_id)
+            if fresh and not has_draft(listing_id):
+                await _generate(tg_bot, fresh, "initial")
+
+
+def schedule_post_manual(listing_id: int, write_draft: bool) -> bool:
+    """Non-blocking post_manual in the background. False if there is no running bot or no chat."""
+    chat = configured_chat_id()
+    if _app is None or chat is None:
+        log.warning("Telegram bot or chat missing – hand-added listing %s not posted", listing_id)
+        return False
+    task = asyncio.create_task(post_manual(_app.bot, chat, listing_id, write_draft))
+    _tasks.add(task)
+    task.add_done_callback(_task_done)
+    return True
+
+
 def _task_done(task: asyncio.Task) -> None:
     _tasks.discard(task)
     if not task.cancelled() and task.exception() is not None:

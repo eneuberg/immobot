@@ -4,6 +4,7 @@ import hmac
 import json
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1801,3 +1802,73 @@ def test_known_login_ip_is_forgotten_after_90_days(client, notices):
     db.set_meta(web.KNOWN_LOGIN_IPS_META, json.dumps({"testclient": old}))
     assert client.post("/login", data={"password": PASSWORD}).status_code == 303
     assert len(notices) == 1
+
+
+@pytest.fixture
+def manual_add(client, monkeypatch):
+    """"Inserat per Link" with the exposé request, the picture download and the Telegram post replaced."""
+    from app import is24, media
+
+    expose = json.loads((Path(__file__).parent / "fixtures" / "is24_expose.json").read_text())
+    calls = {"fetch": [], "store": [], "post": []}
+
+    async def fetch(expose_id):
+        calls["fetch"].append(expose_id)
+        return expose
+
+    async def store(listing_id, parsed):
+        calls["store"].append((listing_id, len(parsed["media"])))
+
+    monkeypatch.setattr(is24, "fetch_expose", fetch)
+    monkeypatch.setattr(media, "store_is24", store)
+    monkeypatch.setattr(bot, "schedule_post_manual", lambda lid, draft: calls["post"].append((lid, draft)) or True)
+    monkeypatch.setattr(main.app.state, "config", dataclasses.replace(main.app.state.config, disable_bot=False))
+    login(client)
+    return calls
+
+
+def test_add_listing_by_link(client, manual_add):
+    r = client.post("/listings/add", data={"url": " https://www.immobilienscout24.de/expose/171725784?referrer=x ",
+                                           "draft": "1"})
+    assert r.status_code == 303
+    listing_id = int(r.headers["location"].split("/listing/")[1].split("?")[0])
+    assert r.headers["location"].endswith("?neu=tg-draft")
+    listing = db.get_listing(listing_id)
+    assert listing["fredy_id"] == "manual-171725784" and listing["provider"] == "immoscout"
+    assert listing["url"] == "https://www.immobilienscout24.de/expose/171725784" and listing["job_id"] is None
+    assert listing["title"] == "Handwerklich geschickte Mieter gesucht" and listing["price"] == "1.100 €"
+    assert manual_add["fetch"] == ["171725784"] and manual_add["store"][0][0] == listing_id
+    assert manual_add["post"] == [(listing_id, True)]
+    assert "Claude schreibt dort gleich den Entwurf" in client.get(r.headers["location"]).text
+    # the same exposé again (also from Fredy, any URL form): shown, not added
+    again = client.post("/listings/add", data={"url": "https://www.immobilienscout24.de/expose/171725784/"})
+    assert again.headers["location"] == f"/listing/{listing_id}?neu=schon" and len(manual_add["fetch"]) == 1
+    # without the checkbox: no draft
+    client.post("/listings/add", data={"url": "https://www.immobilienscout24.de/expose/99"})
+    assert manual_add["post"][-1][1] is False
+
+
+def test_add_listing_rejects_other_links_and_shows_fetch_errors(client, manual_add, monkeypatch):
+    from app import is24
+
+    r = client.post("/listings/add", data={"url": "https://www.immowelt.de/expose/abc"})
+    page = client.get(r.headers["location"]).text
+    assert "Bitte einen ImmoScout24-Exposé-Link einfügen" in page and 'value="https://www.immowelt.de/expose/abc"' in page
+    assert client.get(r.headers["location"]).text.count("Bitte einen ImmoScout24") == 0  # shown once
+
+    async def gone(expose_id):
+        raise is24.Is24Error("Exposé nicht abrufbar (HTTP 404).")
+
+    monkeypatch.setattr(is24, "fetch_expose", gone)
+    r = client.post("/listings/add", data={"url": "https://www.immobilienscout24.de/expose/5"})
+    assert "Exposé nicht abrufbar (HTTP 404)." in client.get(r.headers["location"]).text
+    assert db.list_listings() == [] and manual_add["post"] == []
+
+
+def test_add_listing_needs_login_and_same_origin(client, manual_add):
+    r = client.post("/listings/add", data={"url": "https://www.immobilienscout24.de/expose/7"},
+                    headers={"Origin": "https://evil.example"})
+    assert r.status_code == 403
+    client.post("/logout")
+    assert client.post("/listings/add", data={"url": "https://www.immobilienscout24.de/expose/7"}).status_code == 303
+    assert db.list_listings() == []

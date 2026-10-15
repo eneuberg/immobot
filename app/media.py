@@ -54,6 +54,9 @@ _media_root: Path | None = None
 _locks: dict[int, asyncio.Lock] = {}  # one per listing, so concurrent triggers fetch only once
 
 
+MANUAL_PREFIX = "manual-"  # fredy_id of listings added by hand ("Inserat per Link hinzufügen")
+
+
 class DownloadError(Exception):
     """str(exc) is a short German message, safe to show."""
 
@@ -80,6 +83,8 @@ def source_of(listing: dict) -> str | None:
     """"fredy" (pictures from the webhook), "is24" (own fetch allowed), or None (Fredy's single image only)."""
     if listing.get("media_source") == "fredy":
         return "fredy"
+    if listing.get("media_source") == "is24" and str(listing.get("fredy_id") or "").startswith(MANUAL_PREFIX):
+        return "is24"  # added by hand: its exposé was fetched on purpose, whatever the setting says
     if is24.is_supported(listing) and is24_fetch_enabled():
         return "is24"
     return None
@@ -237,14 +242,21 @@ async def _fetch_is24(listing: dict) -> None:
         log.warning("IS24 exposé for listing %s could not be read: %s", listing_id, type(exc).__name__)
         error = "Exposé konnte nicht gelesen werden."
     else:
-        db.set_listing_details(listing_id, parsed["details_text"], parsed["contact_name"])
-        _delete_files(listing_id)  # a retry starts from scratch
-        db.replace_media(listing_id, [])
-        db.set_media_source(listing_id, "is24")
-        stored, error = await download_pictures(listing_id, parsed["media"], is24.allowed_image_url, is24.APP_USER_AGENT)
-        db.replace_media(listing_id, [{"position": p["position"], "caption": p["caption"], "source_url": p["url"],
-                                       "file": p["file"], "floor_plan": p["is_floorplan"]} for p in stored])
-        log.info("IS24 listing %s: %d of %d pictures stored", listing_id, len(stored), len(parsed["media"]))
+        await store_is24(listing_id, parsed)
+        return
+    _record(listing_id, "is24", error)
+
+
+async def store_is24(listing_id: int, parsed: dict) -> None:
+    """Store a parsed exposé (is24.parse_expose): details text, contact name and its pictures (downloaded now)."""
+    db.set_listing_details(listing_id, parsed["details_text"], parsed["contact_name"])
+    _delete_files(listing_id)  # a retry starts from scratch
+    db.replace_media(listing_id, [])
+    db.set_media_source(listing_id, "is24")
+    stored, error = await download_pictures(listing_id, parsed["media"], is24.allowed_image_url, is24.APP_USER_AGENT)
+    db.replace_media(listing_id, [{"position": p["position"], "caption": p["caption"], "source_url": p["url"],
+                                   "file": p["file"], "floor_plan": p["is_floorplan"]} for p in stored])
+    log.info("IS24 listing %s: %d of %d pictures stored", listing_id, len(stored), len(parsed["media"]))
     _record(listing_id, "is24", error)
 
 

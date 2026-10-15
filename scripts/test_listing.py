@@ -33,29 +33,9 @@ def token_from(env_file: str | None) -> str:
     return os.environ.get("FREDY_WEBHOOK_TOKEN", "")
 
 
-def _clean(value) -> str:
-    return " ".join(str(value or "").split())
-
-
 def listing_from_expose(url: str, data: dict) -> dict:
-    """The fields Fredy would send, read from the exposé sections."""
-    fields = {"title": "", "price": "", "size": "", "address": "", "description": ""}
-    for section in data.get("sections") or []:
-        kind = section.get("type")
-        if kind == "TITLE":
-            fields["title"] = _clean(section.get("title"))
-        elif kind == "TOP_ATTRIBUTES":
-            for item in section.get("attributes") or []:
-                label = _clean(item.get("label"))
-                if label.startswith("Kaltmiete") and not fields["price"]:
-                    fields["price"] = _clean(item.get("text"))
-                elif label.startswith("Wohnfläche"):
-                    fields["size"] = _clean(item.get("text"))
-        elif kind == "MAP":
-            fields["address"] = ", ".join(filter(None, [_clean(section.get("addressLine1")),
-                                                        _clean(section.get("addressLine2"))]))
-        elif kind == "TEXT_AREA" and not fields["description"]:
-            fields["description"] = str(section.get("text") or "").replace("\xa0", " ").strip()[:500]
+    """The fields Fredy would send (is24.listing_fields), "TEST" in the title, a new id per run."""
+    fields = is24.listing_fields(data)
     fields["title"] = f"TEST {time.strftime('%d.%m. %H:%M')}: {fields['title'] or 'Inserat'}"
     return {"id": f"test-{is24.expose_id(url)}-{int(time.time())}", "url": url, **fields}
 

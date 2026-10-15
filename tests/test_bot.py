@@ -1408,3 +1408,44 @@ def test_current_view_shows_the_endversion_until_a_newer_draft(fresh_db):
     fresh_db.add_draft(lid, "shorter", "Neuer kürzerer Text", "claude-opus-5-5")  # e.g. "Kürzer" in Telegram
     text, _ = bot.current_view(fresh_db.get_listing(lid))
     assert "Neuer kürzerer Text" in text and bot.FINAL_LABEL not in text
+
+
+def test_post_manual_sends_album_then_buttons_then_draft(tg, monkeypatch):
+    db = bot.db
+    listing_id = add_listing(db, fredy_id="manual-123456789", tg_message_id=None, url=IS24_URL, title="Altbau & Balkon")
+    db.set_media_source(listing_id, "is24")
+    store_pictures(db, listing_id, ["Grundriss"] + [f"Raum {i}" for i in range(11)])
+    calls = fake_llm(monkeypatch, db)
+    album_bot = AlbumBot()
+    asyncio.run(bot.post_manual(album_bot, CHAT, listing_id, write_draft=True))
+    (album,) = album_bot.albums
+    caption = album["media"][0].caption
+    assert len(album["media"]) == 10 and caption.startswith("🏠 Altbau & Balkon\n900 € · 60 m² · Hauptstr. 1\n")
+    assert "📷 12 Fotos · Grundriss" in caption and len(caption) <= bot.CAPTION_MAX
+    listing = db.get_listing(listing_id)
+    assert listing["album_message_id"] == 700 and listing["tg_message_id"] == 101
+    (message,) = album_bot.sent
+    assert "Altbau &amp; Balkon" in message["text"]  # the usual message with the buttons, after the album
+    assert calls == [(listing_id, "initial", None)]  # then Claude writes the first draft into that message
+    assert "<pre>" in album_bot.edits[-1]["text"]
+    asyncio.run(bot.post_manual(album_bot, CHAT, listing_id, write_draft=True))  # posted already: nothing again
+    assert len(album_bot.albums) == 1 and len(album_bot.sent) == 1 and len(calls) == 1
+
+
+def test_post_manual_without_pictures_or_draft(tg, monkeypatch):
+    db = bot.db
+    listing_id = add_listing(db, fredy_id="manual-1", tg_message_id=None, url=IS24_URL)
+    calls = fake_llm(monkeypatch, db)
+    album_bot = AlbumBot()
+    asyncio.run(bot.post_manual(album_bot, CHAT, listing_id, write_draft=False))
+    assert album_bot.albums == [] and album_bot.photos == [] and len(album_bot.sent) == 1 and calls == []
+    assert db.get_listing(listing_id)["tg_message_id"] == 101
+
+
+def test_post_manual_album_failure_still_sends_the_message(tg, monkeypatch):
+    db = bot.db
+    listing_id = add_listing(db, fredy_id="manual-2", tg_message_id=None, url=IS24_URL)
+    store_pictures(db, listing_id, ["A", "B"])
+    album_bot = AlbumBot(fail=BadRequest("too big"))
+    asyncio.run(bot.post_manual(album_bot, CHAT, listing_id, write_draft=False))
+    assert len(album_bot.sent) == 1 and db.get_listing(listing_id)["album_message_id"] is None

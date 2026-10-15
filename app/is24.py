@@ -43,6 +43,10 @@ def expose_id(url) -> str | None:
     return match.group(1) if match else None
 
 
+def canonical_url(expose_id: str) -> str:
+    return f"https://www.immobilienscout24.de/expose/{expose_id}"
+
+
 def is_supported(listing: dict) -> bool:
     """ImmoScout24 Germany only (Fredy's "immoscout"; the Austrian site is a different API)."""
     return listing.get("provider") == "immoscout" and expose_id(listing.get("url")) is not None
@@ -154,3 +158,28 @@ def parse_expose(data: dict) -> dict:
     if name or company:
         blocks.append("Anbieter: " + ", ".join(filter(None, [name, company])))
     return {"details_text": "\n\n".join(blocks)[:DETAILS_MAX_CHARS] or None, "contact_name": name or None, "media": media}
+
+
+def listing_fields(data: dict) -> dict:
+    """{title, price, size, address, description} as Fredy would send them, from the exposé JSON (a listing added
+    by hand, scripts/test_listing.py). Missing values are ""; the description is the first text, cut to 500."""
+    fields = {"title": "", "price": "", "size": "", "address": "", "description": ""}
+    for section in data.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        kind = section.get("type")
+        if kind == "TITLE":
+            fields["title"] = _clean(section.get("title"))[:300]
+        elif kind == "TOP_ATTRIBUTES":
+            for item in section.get("attributes") if isinstance(section.get("attributes"), list) else []:
+                label = _clean(item.get("label")) if isinstance(item, dict) else ""
+                if label.startswith("Kaltmiete") and not fields["price"]:
+                    fields["price"] = _clean(item.get("text"))[:60]
+                elif label.startswith("Wohnfläche") and not fields["size"]:
+                    fields["size"] = _clean(item.get("text"))[:60]
+        elif kind == "MAP":
+            fields["address"] = ", ".join(filter(None, [_clean(section.get("addressLine1")),
+                                                        _clean(section.get("addressLine2"))]))[:200]
+        elif kind == "TEXT_AREA" and not fields["description"]:
+            fields["description"] = str(section.get("text") or "").replace("\xa0", " ").strip()[:500]
+    return fields

@@ -331,3 +331,17 @@ def test_cleanup_old_media(fresh_db, is24_server):
     assert "Penthouse" in fresh_db.get_listing(old)["details"]  # the text stays
     assert len(fresh_db.list_media(new)) == 11 and (media.media_root() / str(new) / "1.jpg").exists()
     assert media.cleanup_old_media() == 0
+
+
+def test_listing_fields_like_fredy():
+    assert is24.listing_fields(EXPOSE) == {
+        "title": "Handwerklich geschickte Mieter gesucht", "price": "1.100 €", "size": "85 m²",
+        "address": "Musterstraße 1, 12345 Musterstadt",
+        "description": EXPOSE_DESCRIPTION}
+    junk = {"sections": [None, {"type": "TOP_ATTRIBUTES", "attributes": "x"}, {"type": "TITLE"}, {"type": "MAP"}]}
+    assert is24.listing_fields(junk) == {"title": "", "price": "", "size": "", "address": "", "description": ""}
+    assert is24.canonical_url("123") == "https://www.immobilienscout24.de/expose/123"
+
+
+EXPOSE_DESCRIPTION = ("Helle Dachgeschosswohnung in einem gepflegten Mehrfamilienhaus.\n\nDrei Balkone, offene Küche, "
+                      "zwei Schlafzimmer. Das Bad hat eine Wanne, dazu ein Gäste-WC. Ein Stellplatz kann angemietet werden.")

@@ -7,6 +7,7 @@
 {% block content %}
 <p class="backlink"><a href="/">← Inserate</a></p>
 {% if error %}<div class="flash err" role="alert">{{ error }}</div>{% endif %}
+{% if added %}<div class="flash ok" role="status">{{ added }}</div>{% endif %}
 
 <article class="listing-head">
   <div class="lh-grid{% if hero or image_url %} has-image{% endif %}">

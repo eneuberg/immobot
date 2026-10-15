@@ -551,9 +551,13 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
 
 
 @router.get("/", dependencies=PAGE)
-def listings_page(request: Request, status: str | None = None):
+def listings_page(request: Request, status: str | None = None, add: str | None = None):
     if status not in settings.STATUSES:
         status = None
+    try:  # "Inserat per Link" failed: its message and the URL typed, once (see _add_failed)
+        add_failed = json.loads(_take_once(add) or "null") if add else None
+    except ValueError:
+        add_failed = None
     thumbs = db.thumb_positions()  # listings with stored ImmoScout24 pictures
     listings = [{
         **row,
@@ -567,12 +571,61 @@ def listings_page(request: Request, status: str | None = None):
         "stats": db.stats(),
         "costs": cost_overview(),
         "status_filter": status,
+        "add_failed": add_failed,
     })
 
 
+ADDED_MESSAGES = {  # /listing/{id}?neu=… after "Inserat per Link"
+    "tg": "Inserat hinzugefügt. Bilder und Nachricht gehen gerade an Telegram.",
+    "tg-draft": "Inserat hinzugefügt. Bilder und Nachricht gehen an Telegram, Claude schreibt dort gleich den Entwurf "
+                "(hier nach dem Neuladen zu sehen).",
+    "ohne": "Inserat hinzugefügt. Der Telegram-Bot läuft nicht oder kein Chat ist verbunden – keine Nachricht.",
+    "schon": "Dieses Inserat ist schon da – nichts neu angelegt.",
+}
+
+
 @router.get("/listing/{listing_id}", dependencies=PAGE)
-def listing_page(request: Request, listing_id: int):
-    return render(request, "listing.html", _listing_context(_listing_or_404(listing_id)))
+def listing_page(request: Request, listing_id: int, neu: str | None = None):
+    context = _listing_context(_listing_or_404(listing_id))
+    context["added"] = ADDED_MESSAGES.get(neu or "")
+    return render(request, "listing.html", context)
+
+
+def _add_failed(url: str, error: str) -> RedirectResponse:
+    ref = _stash_once(json.dumps({"error": error, "url": url[:500]}))
+    return RedirectResponse(f"/?add={ref}#hinzufuegen", status_code=303)
+
+
+@router.post("/listings/add", dependencies=ACTION)
+async def listing_add(request: Request, url: str = Form(""), draft: str = Form("")):
+    """"Inserat per Link": an ImmoScout24 exposé added by hand. One exposé request (like Fredy's), its pictures
+    downloaded now, then - in the background - the pictures as an album and the usual message in Telegram, with
+    the first draft if asked. A listing already known (same exposé) is only shown."""
+    expose = is24.expose_id(url.strip())
+    if expose is None:
+        return _add_failed(url, "Bitte einen ImmoScout24-Exposé-Link einfügen, z. B. "
+                                "https://www.immobilienscout24.de/expose/123456789")
+    existing = db.find_listing_by_expose(expose)
+    if existing:
+        return RedirectResponse(f"/listing/{existing['id']}?neu=schon", status_code=303)
+    try:
+        data = await is24.fetch_expose(expose)
+        parsed = is24.parse_expose(data)
+        fields = is24.listing_fields(data)
+    except is24.Is24Error as exc:
+        return _add_failed(url, str(exc))
+    except Exception as exc:  # unexpected payload: type only in the log
+        log.warning("Exposé %s could not be read: %s", expose, type(exc).__name__)
+        return _add_failed(url, "Exposé konnte nicht gelesen werden.")
+    listing_id, created = db.insert_listing({"fredy_id": media.MANUAL_PREFIX + expose, "provider": "immoscout",
+                                             "url": is24.canonical_url(expose), **fields})
+    if not created:
+        return RedirectResponse(f"/listing/{listing_id}?neu=schon", status_code=303)
+    await media.store_is24(listing_id, parsed)
+    write_draft = draft == "1"
+    posted = not request.app.state.config.disable_bot and bot.schedule_post_manual(listing_id, write_draft)
+    added = ("tg-draft" if write_draft else "tg") if posted else "ohne"
+    return RedirectResponse(f"/listing/{listing_id}?neu={added}", status_code=303)
 
 
 @router.get("/listing/{listing_id}/media/{position}", dependencies=PAGE)

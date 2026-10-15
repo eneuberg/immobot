@@ -388,3 +388,13 @@ def test_status_shows_whether_fredy_sends_images(client):
     hook(client, [{"id": "s3", "title": "T"}])
     page = client.get("/status").text
     assert "nein" in page.split("Fredy schickt Bilder mit:")[1][:200] and "(letztes Inserat mit Bildern am" in page
+
+
+def test_hand_added_listing_keeps_its_pictures_with_the_switch_off(fresh_db):
+    manual = add_listing(fredy_id="manual-123456789")
+    other = add_listing(fredy_id="f2")
+    for listing_id in (manual, other):
+        db.set_media_source(listing_id, "is24")
+    switch_off()
+    assert media.source_of(db.get_listing(manual)) == "is24" and media.has_gallery(db.get_listing(manual))
+    assert media.source_of(db.get_listing(other)) is None

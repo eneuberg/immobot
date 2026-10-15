@@ -12,6 +12,19 @@
   </div>
 </div>
 
+{# An ImmoScout24 exposé added by hand: fetched now, then posted to Telegram with its pictures (web.listing_add). #}
+<form method="post" action="/listings/add" class="add-listing" id="hinzufuegen">
+  <label for="add-url">Inserat per Link hinzufügen</label>
+  {% if add_failed %}<div class="flash err bare" role="alert">{{ add_failed.error }}</div>{% endif %}
+  <div class="add-row">
+    <input type="url" id="add-url" name="url" required inputmode="url" autocomplete="off"
+      placeholder="https://www.immobilienscout24.de/expose/…" value="{{ add_failed.url if add_failed else '' }}">
+    <button type="submit">Hinzufügen</button>
+  </div>
+  <label class="add-draft"><input type="checkbox" name="draft" value="1" checked> gleich Anschreiben schreiben lassen</label>
+  <small class="muted">Nur ImmoScout24. Holt Exposé und Bilder (einige Sekunden) und schickt sie mit den Buttons an Telegram.</small>
+</form>
+
 <section class="stats" aria-label="Überblick">
   <div class="stat stat-cost{% if costs.over %} is-over{% endif %}"><span class="label">Kosten {{ months[month_no - 1] if 1 <= month_no <= 12 else stats.month }}</span><span class="value">{{ stats.cost_month|eur }}</span>
     {%- if costs.budget %}{{ cost_track(costs, slim=True) }}{% endif %}

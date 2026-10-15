@@ -33,6 +33,7 @@ Editor access from Telegram (see editor_access.py):
 
 import json
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -321,6 +322,20 @@ def insert_listing(data: dict) -> tuple[int, bool]:
             [values[k] for k in LISTING_FIELDS] + [ts, ts],
         )
         return cur.lastrowid, True
+
+
+def find_listing_by_expose(expose_id: str) -> dict | None:
+    """The newest listing whose URL is this ImmoScout24 exposé (from Fredy or added by hand)."""
+    if not expose_id.isdigit():
+        return None
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM listings WHERE url LIKE ? ORDER BY id DESC",
+                            (f"%immobilienscout24.de/expose/{expose_id}%",)).fetchall()
+    for row in rows:
+        match = re.search(r"/expose/([0-9]+)", row["url"] or "")
+        if match and match.group(1) == expose_id:
+            return dict(row)
+    return None
 
 
 def get_listing(listing_id: int) -> dict | None:
