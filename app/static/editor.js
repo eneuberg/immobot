@@ -142,10 +142,48 @@
     clearTimeout(saveTimer);
     var btn = e.submitter;
     if (btn && btn.dataset.busyLabel) {
+      btn.dataset.idleLabel = btn.textContent;
       btn.textContent = btn.dataset.busyLabel;
       e.target.querySelectorAll("textarea").forEach(function (field) { field.readOnly = true; });
     }
+    submitInPlace(e);
   });
+
+  // Editor forms are sent with fetch and the page is *replaced* by the result (location.replace), so every action
+  // keeps one entry in the browser history: one "back" returns to Telegram. The server answers a redirect as
+  // {"location": …} (header X-Editor-Nav: replace, see editor.editor_headers); any other answer (an error page) is
+  // shown as it is. Without fetch/FormData the form is sent normally.
+  function submitInPlace(e) {
+    var form = e.target, btn = e.submitter;
+    var method = btn && btn.hasAttribute("formmethod") ? btn.formMethod : form.method;
+    if (!window.fetch || !window.FormData || (method || "").toLowerCase() !== "post") return;
+    // the pressed button's formaction ("Fertig", "Überarbeiten lassen", …) wins over the form's action
+    var action = new URL(btn && btn.hasAttribute("formaction") ? btn.formAction : form.action, location.href);
+    if (action.origin !== location.origin || action.pathname.indexOf("/editor/") !== 0) return;
+    e.preventDefault();
+    var data;
+    try { data = new FormData(form, e.submitter || undefined); } catch (err) { data = new FormData(form); }
+    if (e.submitter && e.submitter.name && !data.has(e.submitter.name)) data.append(e.submitter.name, e.submitter.value);
+    fetch(action.href, { method: "POST", body: data, credentials: "same-origin", headers: { "X-Editor-Nav": "replace" } })
+      .then(function (res) {
+        var type = res.headers.get("content-type") || "";
+        if (type.indexOf("application/json") === 0) {
+          return res.json().then(function (body) {
+            if (body && typeof body.location === "string" && body.location.charAt(0) === "/") location.replace(body.location);
+            else location.reload();
+          });
+        }
+        return res.text().then(function (html) { document.open(); document.write(html); document.close(); });
+      })
+      .catch(function () {
+        leaving = false;
+        delete form.dataset.sent;
+        form.querySelectorAll("[aria-busy=true]").forEach(function (b) { b.removeAttribute("aria-busy"); b.removeAttribute("aria-disabled"); });
+        form.querySelectorAll("textarea").forEach(function (field) { field.readOnly = false; });
+        form.querySelectorAll("[data-idle-label]").forEach(function (b) { b.textContent = b.dataset.idleLabel; });
+        window.alert("Keine Verbindung – bitte noch einmal versuchen.");
+      });
+  }
   window.addEventListener("pageshow", function (e) {
     if (!e.persisted) return;
     leaving = false;

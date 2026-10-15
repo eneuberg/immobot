@@ -37,6 +37,7 @@ router = APIRouter()
 
 EDITOR_HEADERS = {"Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex", "Cache-Control": "no-store"}
 EDITOR_COOKIE = editor_access.EDITOR_COOKIE
+NAV_HEADER = "x-editor-nav"  # "replace": editor.js submits a form and wants the redirect as JSON (editor_headers)
 GENERIC_ERROR = "Unerwarteter Fehler – Details im Log."
 STALE_PAGE = "Diese Seite war nicht mehr aktuell – nichts gespeichert. Bitte den Text unten prüfen."
 
@@ -109,8 +110,17 @@ async def editor_headers(request: Request, call_next):
     """HTTP middleware (main.py, registered after web.security_headers so it runs outside it and wins):
     the editor's responses go nowhere via Referer, aren't indexed and aren't cached."""
     response = await call_next(request)
-    if request.url.path.startswith(("/e/", "/editor/")):
-        response.headers.update(EDITOR_HEADERS)
+    if not request.url.path.startswith(("/e/", "/editor/")):
+        return response
+    if response.status_code == 303 and request.headers.get(NAV_HEADER) == "replace":
+        # editor.js sent the form: it gets the redirect target as JSON and replaces the page with it, so the
+        # browser history keeps one entry (one "back" returns to Telegram). Cookies set on the way are kept.
+        replaced = JSONResponse({"location": response.headers.get("location", "")})
+        for name, value in response.raw_headers:
+            if name.lower() == b"set-cookie":
+                replaced.raw_headers.append((name, value))
+        response = replaced
+    response.headers.update(EDITOR_HEADERS)
     return response
 
 

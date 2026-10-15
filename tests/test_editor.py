@@ -852,3 +852,17 @@ def test_button_without_login_data_reopens_an_existing_session(client, lid):
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}"
     assert client.get(editor_access.make_editor_path(other)).status_code == 400  # the session is for one listing
     assert client.get(path[:-3] + "AAA").status_code == 400  # a forged link never counts
+
+
+def test_editor_redirects_become_json_for_editor_js(client, lid):
+    """editor.js sends forms with X-Editor-Nav: replace and replaces the page, so the history keeps one entry."""
+    db.add_draft(lid, "initial", "Entwurf", "claude-opus-5-5")
+    editor_cookie(client, lid)
+    _, fields = open_editor(client, lid)
+    r = client.post(f"/editor/{lid}/save", data={**fields, "text": "Neu"}, headers={"X-Editor-Nav": "replace"})
+    assert r.status_code == 200 and r.json() == {"location": f"/editor/{lid}?m=saved#text"}
+    assert r.headers["cache-control"] == "no-store"
+    r = client.post(f"/editor/{lid}/save", data={**fields, "text": "Neuer"})  # without the header: a normal redirect
+    assert r.status_code == 303
+    r = client.post(f"/editor/{lid}/save", data={"text": "x"}, headers={"X-Editor-Nav": "replace"})
+    assert r.status_code != 200 or "location" not in r.text  # error pages stay pages
