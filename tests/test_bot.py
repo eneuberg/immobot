@@ -1449,3 +1449,29 @@ def test_post_manual_album_failure_still_sends_the_message(tg, monkeypatch):
     album_bot = AlbumBot(fail=BadRequest("too big"))
     asyncio.run(bot.post_manual(album_bot, CHAT, listing_id, write_draft=False))
     assert len(album_bot.sent) == 1 and db.get_listing(listing_id)["album_message_id"] is None
+
+
+def test_post_manual_retries_a_timeout_and_never_sends_the_album_twice(tg, monkeypatch):
+    from telegram.error import TimedOut
+
+    db = bot.db
+    monkeypatch.setattr(bot, "MANUAL_RETRY_S", 0)
+    listing_id = add_listing(db, fredy_id="manual-3", tg_message_id=None, url=IS24_URL)
+    store_pictures(db, listing_id, ["A", "B"])
+
+    class SlowBot(AlbumBot):
+        fails = 1
+
+        async def send_message(self, **kwargs):
+            if self.fails:
+                self.fails -= 1
+                raise TimedOut()
+            return await super().send_message(**kwargs)
+
+    slow = SlowBot()
+    asyncio.run(bot.post_manual(slow, CHAT, listing_id, write_draft=False))
+    assert len(slow.albums) == 1 and len(slow.sent) == 1 and db.get_listing(listing_id)["tg_message_id"] == 101
+    with db.connect() as conn:  # the message got lost anyway: a later retry sends only the message
+        conn.execute("UPDATE listings SET tg_message_id = NULL WHERE id = ?", (listing_id,))
+    asyncio.run(bot.post_manual(slow, CHAT, listing_id, write_draft=False))
+    assert len(slow.albums) == 1 and len(slow.sent) == 2

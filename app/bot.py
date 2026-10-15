@@ -48,7 +48,7 @@ from telegram import (
     ReplyParameters, Update,
 )
 from telegram.constants import ParseMode
-from telegram.error import BadRequest, Forbidden, InvalidToken, RetryAfter, TelegramError
+from telegram.error import BadRequest, Forbidden, InvalidToken, NetworkError, RetryAfter, TelegramError, TimedOut
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -90,6 +90,7 @@ LOADING_PICTURES = "⏳ lade Bilder …"
 PICTURES_ALREADY_SENT = "Bilder sind schon oben ↑"
 NO_PICTURES_HERE = "Für dieses Inserat gibt es keine Bildergalerie."
 ALBUM_MAX = 10  # Telegram's limit per album
+MANUAL_RETRY_S = 3.0  # pause before sending a hand-added listing's message again after a timeout
 CAPTION_MAX = 1024  # Telegram's limit per caption
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 EDITOR_BUTTON_ERROR_META = "editor_login_url_error"  # "<ISO time> <German reason>" while Telegram rejects the button
@@ -815,7 +816,8 @@ async def post_manual(tg_bot, chat_id: int, listing_id: int, write_draft: bool) 
         return
     _announcing.add(listing_id)
     try:
-        pictures = media.read_pictures(listing_id, media.stored_pictures(listing_id))
+        # a retry (bot restart: unannounced listings) doesn't send the album twice
+        pictures = [] if listing.get("album_message_id") else media.read_pictures(listing_id, media.stored_pictures(listing_id))
         if pictures:
             caption = manual_album_caption(listing, [row for row, _ in pictures[:ALBUM_MAX]], len(pictures))
             try:
@@ -826,7 +828,12 @@ async def post_manual(tg_bot, chat_id: int, listing_id: int, write_draft: bool) 
                 db.set_album_sent(listing_id, album.message_id)
             except TelegramError as exc:  # the message with the buttons still matters more
                 _record_error(exc)
-        message = await _send(tg_bot, chat_id, *current_view(db.get_listing(listing_id) or listing))
+        view = current_view(db.get_listing(listing_id) or listing)
+        try:
+            message = await _send(tg_bot, chat_id, *view)
+        except (TimedOut, NetworkError):  # seen right after a big album upload: once more after a pause
+            await asyncio.sleep(MANUAL_RETRY_S)
+            message = await _send(tg_bot, chat_id, *view)
         db.set_listing_tg_message(listing_id, message.message_id)
     except TelegramError as exc:
         _record_error(exc)
