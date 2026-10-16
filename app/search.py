@@ -10,7 +10,7 @@
 import re
 import unicodedata
 
-from . import db, learning, settings
+from . import db, learning, rent, settings
 
 CATALOGUE_MAX = 400  # listings sent to Claude, newest first
 ENTRY_TEXT_MAX = 600  # characters of description / exposé text per listing
@@ -95,7 +95,8 @@ SHAPE = '{"matches": [{"id": 12, "why": "Montanusstraße, 3 Zimmer, Balkon"}]}'
 
 
 def catalogue_entry(listing: dict) -> str:
-    facts = " · ".join(str(listing[k]) for k in ("price", "size", "address") if str(listing.get(k) or "").strip())
+    facts = " · ".join(str(fact) for fact in [rent.price_text(listing), listing.get("size"), listing.get("address")]
+                       if str(fact or "").strip())
     text = " ".join(str(listing.get("details") or listing.get("description") or "").split())[:ENTRY_TEXT_MAX]
     status = settings.STATUSES.get(listing.get("status"), listing.get("status") or "")
     return f"[{listing['id']}] {listing.get('title') or '(ohne Titel)'} | {facts} | Status: {status}\n{text}".rstrip()

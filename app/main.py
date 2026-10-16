@@ -28,6 +28,8 @@ async def lifespan(app: FastAPI):
     bot.init_public_url(config.public_url)
     if not config.disable_bot:
         await bot.start()
+    # older ImmoScout24 listings without exposé text (warm rent): fetched slowly, their messages updated
+    media.schedule_backfill(on_done=None if config.disable_bot else bot.schedule_refresh)
     yield
     if not config.disable_bot:
         await bot.stop()

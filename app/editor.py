@@ -29,7 +29,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
-from . import bot, db, editor_access, learning, llm, media, portals, settings, textdiff, web
+from . import bot, db, editor_access, learning, llm, media, portals, rent, settings, textdiff, web
 
 log = logging.getLogger(__name__)
 
@@ -238,7 +238,8 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
         "logged_in": mode == "dashboard",
         "listing": listing,
         "portal": portals.provider_label(listing["provider"]),
-        "facts": [listing[key] for key in ("price", "size", "address") if str(listing.get(key) or "").strip()],
+        "facts": [fact for fact in [rent.price_text(listing), listing.get("size"), listing.get("address")]
+                  if str(fact or "").strip()],
         "contact_url": portals.safe_url(portals.contact_url(listing["provider"], listing["url"])),
         "token": _form_token(request, listing_id, mode),
         "session": session,

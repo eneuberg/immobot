@@ -896,6 +896,13 @@ details.rule-add button { width: auto; margin: 0; }
 .add-listing .add-row, .search-listings .add-row { display: flex; gap: .5rem; }
 .add-listing .add-row input, .search-listings .add-row input { margin: 0; flex: 1 1 auto; min-width: 0; }
 .add-listing .add-row button, .search-listings .add-row button { margin: 0; flex: 0 0 auto; width: auto; }
+.add-listing textarea { margin: 0; resize: vertical; min-height: 4.5rem; font-size: .92rem; }
+.add-listing .add-preview { margin: .45rem 0 0; font-size: .86rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+.add-listing .add-preview .label { color: var(--pico-muted-color); }
+.add-listing .add-preview .kept { font-weight: 650; color: var(--pico-h1-color); }
+.add-listing .add-preview .gone { color: var(--pico-muted-color); opacity: .6; text-decoration: line-through; }
+.add-listing .add-preview.is-missing { color: var(--pico-del-color, #c62828); }
+.add-listing .add-submit { margin: .6rem 0 0; width: auto; }
 .add-listing .add-draft { display: flex; align-items: center; gap: .45rem; margin: .6rem 0 .25rem; font-size: .92rem; }
 .add-listing .add-draft input { margin: 0; }
 .add-listing small { display: block; }

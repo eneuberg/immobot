@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import bot, db, is24, learning, llm, media, portals, search, settings, textdiff, textfmt, vault
+from . import bot, db, is24, learning, llm, media, portals, rent, search, settings, textdiff, textfmt, vault
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +124,8 @@ def _short_price(value: float) -> str:
 
 
 templates.env.filters["eur"] = settings.fmt_eur
+templates.env.filters["rent"] = rent.info  # {{ (listing|rent).warm }}
+templates.env.filters["rent_parts"] = rent.parts
 templates.env.filters["local_time"] = local_time
 templates.env.filters["as_bool"] = settings.as_bool
 templates.env.filters["safe_url"] = portals.safe_url  # untrusted listing URLs -> http(s) or None
@@ -378,6 +380,7 @@ async def fredy_webhook(request: Request):
         if with_images:
             db.set_meta("fredy_images_last_at", db.now_iso())
     log.info("Fredy webhook: %d listings, %d new, %d with pictures", received, len(new_ids), with_images)
+    media.schedule_details(new_ids)  # warm rent etc. for the Telegram message and the dashboard
     if new_ids and not config.disable_bot:
         bot.schedule_announce(new_ids)
     return {"received": received, "new": len(new_ids)}
@@ -642,9 +645,9 @@ async def listing_add(request: Request, url: str = Form(""), draft: str = Form("
     """"Inserat per Link": an ImmoScout24 exposé added by hand. One exposé request (like Fredy's), its pictures
     downloaded now, then - in the background - the pictures as an album and the usual message in Telegram, with
     the first draft if asked. A listing already known (same exposé) is only shown."""
-    expose = is24.expose_id(url.strip())
+    expose = is24.expose_in_text(url)  # also from the share text around the link
     if expose is None:
-        return _add_failed(url, "Bitte einen ImmoScout24-Exposé-Link einfügen, z. B. "
+        return _add_failed(url, "Kein ImmoScout24-Exposé-Link gefunden. Er sieht so aus: "
                                 "https://www.immobilienscout24.de/expose/123456789")
     existing = db.find_listing_by_expose(expose)
     if existing:

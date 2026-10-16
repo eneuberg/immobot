@@ -394,6 +394,14 @@ def set_listing_tg_message(listing_id: int, message_id: int) -> None:
 
 # --- details & pictures (see media.py) -------------------------------------
 
+def listing_ids_without_details(since: str) -> list[int]:
+    """Listings received since `since` whose exposé was never fetched, newest first."""
+    with connect() as conn:
+        rows = conn.execute("SELECT id FROM listings WHERE details IS NULL AND media_fetched_at IS NULL "
+                            "AND received_at >= ? ORDER BY id DESC", (since,)).fetchall()
+    return [row[0] for row in rows]
+
+
 def set_listing_details(listing_id: int, details: str | None, contact_name: str | None) -> None:
     with connect() as conn:
         conn.execute("UPDATE listings SET details = ?, contact_name = ? WHERE id = ?", (details, contact_name, listing_id))

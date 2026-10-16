@@ -34,6 +34,8 @@ IMAGE_TIMEOUT_S = 15.0
 DOWNLOAD_GAP_S = 0.25  # pause between two pictures
 MAX_PICTURES = 30  # stored per listing
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+DETAILS_GAP_S = 1.0  # between two exposé requests for a batch of new listings
+BACKFILL_GAP_S = 5.0  # between two exposé requests when filling in older listings
 RETRY_AFTER_S = 60  # a failed download can be retried by the user after this long
 KEEP_DAYS = 60  # pictures of listings received longer ago are deleted at startup
 LONG_DESCRIPTION = 500  # Fredy's text is long enough (portal details enabled): no exposé fetch just for text
@@ -51,6 +53,7 @@ _TLD = re.compile(r"[a-z]{2,63}|xn--[a-z0-9-]{1,59}")
 
 _transport: httpx.AsyncBaseTransport | None = None  # tests inject an httpx.MockTransport here
 _media_root: Path | None = None
+_tasks: set[asyncio.Task] = set()  # background exposé fetches (kept referenced)
 _locks: dict[int, asyncio.Lock] = {}  # one per listing, so concurrent triggers fetch only once
 
 
@@ -219,20 +222,28 @@ def _record(listing_id: int, source: str, error: str | None) -> None:
         db.set_meta("media_last_error", f"{db.now_iso()} Inserat {listing_id} ({label}): {error}")
 
 
-async def _download_fredy(listing: dict) -> None:
-    """Download Fredy's pictures that aren't stored yet (a retry continues where the last run stopped)."""
+def _pending(listing_id: int) -> list[dict]:
+    return [{"position": r["position"], "caption": r["caption"], "url": r["source_url"]}
+            for r in db.list_media(listing_id) if r["file"] == NOT_DOWNLOADED]
+
+
+async def _download_pending(listing: dict, source: str) -> None:
+    """Download the pictures known by URL but not stored yet (Fredy's, or IS24's after a text-only exposé fetch;
+    a retry continues where the last run stopped)."""
     listing_id = listing["id"]
-    pending = [{"position": r["position"], "caption": r["caption"], "url": r["source_url"]}
-               for r in db.list_media(listing_id) if r["file"] == NOT_DOWNLOADED]
-    stored, error = await download_pictures(listing_id, pending, fredy_image_url_ok, BROWSER_USER_AGENT)
+    pending = _pending(listing_id)
+    if source == "fredy":
+        stored, error = await download_pictures(listing_id, pending, fredy_image_url_ok, BROWSER_USER_AGENT)
+    else:
+        stored, error = await download_pictures(listing_id, pending, is24.allowed_image_url, is24.APP_USER_AGENT)
     for picture in stored:
         db.set_media_file(listing_id, picture["position"], picture["file"])
-    log.info("Fredy pictures for listing %s: %d of %d stored", listing_id, len(stored), len(pending))
-    _record(listing_id, "fredy", error)
+    log.info("%s pictures for listing %s: %d of %d stored", source, listing_id, len(stored), len(pending))
+    _record(listing_id, source, error)
 
 
-async def _fetch_is24(listing: dict) -> None:
-    """Own ImmoScout24 fetch: exposé (details text) and its pictures."""
+async def _fetch_is24(listing: dict, download: bool = True) -> None:
+    """Own ImmoScout24 fetch: exposé (details text) and its pictures (download=False: only their URLs)."""
     listing_id, error = listing["id"], None
     try:
         parsed = is24.parse_expose(await is24.fetch_expose(is24.expose_id(listing["url"])))
@@ -242,17 +253,24 @@ async def _fetch_is24(listing: dict) -> None:
         log.warning("IS24 exposé for listing %s could not be read: %s", listing_id, type(exc).__name__)
         error = "Exposé konnte nicht gelesen werden."
     else:
-        await store_is24(listing_id, parsed)
+        await store_is24(listing_id, parsed, download)
         return
     _record(listing_id, "is24", error)
 
 
-async def store_is24(listing_id: int, parsed: dict) -> None:
-    """Store a parsed exposé (is24.parse_expose): details text, contact name and its pictures (downloaded now)."""
+async def store_is24(listing_id: int, parsed: dict, download: bool = True) -> None:
+    """Store a parsed exposé (is24.parse_expose): details text, contact name and its pictures (downloaded now, or
+    with download=False only their URLs - downloaded on first use)."""
     db.set_listing_details(listing_id, parsed["details_text"], parsed["contact_name"])
     _delete_files(listing_id)  # a retry starts from scratch
     db.replace_media(listing_id, [])
     db.set_media_source(listing_id, "is24")
+    if not download:
+        db.replace_media(listing_id, [{"position": p["position"], "caption": p["caption"], "source_url": p["url"],
+                                       "file": NOT_DOWNLOADED, "floor_plan": p["is_floorplan"]} for p in parsed["media"]])
+        log.info("IS24 listing %s: exposé text stored, %d pictures for later", listing_id, len(parsed["media"]))
+        _record(listing_id, "is24", None)
+        return
     stored, error = await download_pictures(listing_id, parsed["media"], is24.allowed_image_url, is24.APP_USER_AGENT)
     db.replace_media(listing_id, [{"position": p["position"], "caption": p["caption"], "source_url": p["url"],
                                    "file": p["file"], "floor_plan": p["is_floorplan"]} for p in stored])
@@ -285,10 +303,69 @@ async def ensure_media(listing_id: int, retry: bool = False, want_images: bool =
         listing = db.get_listing(listing_id)  # another task may have fetched meanwhile
         source = source_of(listing)
         if source == "fredy" and want_images and _needs_fetch(listing, retry):
-            await _download_fredy(listing)
+            await _download_pending(listing, "fredy")
         elif source == "is24" and (want_images or not has_long_description(listing)) and _needs_fetch(listing, retry):
             await _fetch_is24(listing)
+        elif source == "is24" and want_images and listing.get("details") and _pending(listing_id) \
+                and (not listing.get("media_error") or _needs_fetch(listing, retry)):
+            await _download_pending(listing, "is24")  # the exposé text came first (ensure_details)
     return stored_pictures(listing_id)
+
+
+async def ensure_details(listing_id: int) -> bool:
+    """ImmoScout24 listings without exposé text: fetch it (one request; rent, details, picture URLs - the pictures
+    themselves only on first use). Used before a new listing is posted, so its message shows the warm rent, and by
+    backfill_details. Never raises; True if a request was made."""
+    listing = db.get_listing(listing_id)
+    if listing is None or listing.get("details") or listing.get("media_fetched_at") or source_of(listing) != "is24":
+        return False
+    async with _locks.setdefault(listing_id, asyncio.Lock()):
+        listing = db.get_listing(listing_id)
+        if listing.get("details") or listing.get("media_fetched_at"):
+            return False
+        await _fetch_is24(listing, download=False)
+    return True
+
+
+async def fetch_details(listing_ids: list[int], gap_s: float = DETAILS_GAP_S) -> None:
+    """New listings from Fredy: their exposé text, one after the other (bot.announce waits for each one it posts)."""
+    for index, listing_id in enumerate(listing_ids):
+        if await ensure_details(listing_id) and index < len(listing_ids) - 1:
+            await asyncio.sleep(gap_s)
+
+
+def schedule_details(listing_ids: list[int]) -> None:
+    """fetch_details in the background. Call from the event loop."""
+    if listing_ids:
+        task = asyncio.create_task(fetch_details(list(listing_ids)))
+        _tasks.add(task)
+        task.add_done_callback(_tasks.discard)
+
+
+def schedule_backfill(on_done=None) -> None:
+    task = asyncio.create_task(backfill_details(on_done=on_done))
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+
+
+async def backfill_details(gap_s: float = BACKFILL_GAP_S, on_done=None) -> int:
+    """Once after start: the exposé text of older ImmoScout24 listings that never had it fetched (newest first,
+    one request every gap_s seconds, last KEEP_DAYS days). on_done(listing_id) after each success. Returns the
+    number of requests."""
+    if not is24_fetch_enabled():
+        return 0
+    since = (datetime.now(timezone.utc) - timedelta(days=KEEP_DAYS)).isoformat(timespec="seconds")
+    count = 0
+    for listing_id in db.listing_ids_without_details(since):
+        if not await ensure_details(listing_id):
+            continue
+        count += 1
+        if on_done is not None and db.get_listing(listing_id).get("details"):
+            on_done(listing_id)
+        await asyncio.sleep(gap_s)
+    if count:
+        log.info("Exposé text fetched for %d older listing(s)", count)
+    return count
 
 
 # --- local copies --------------------------------------------------------------

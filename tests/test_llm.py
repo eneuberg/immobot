@@ -118,7 +118,7 @@ def test_user_text_initial_contains_listing_block_and_task():
     text = llm.build_user_text(LISTING, "initial")
     assert text.startswith("<inserat>\n")
     inserat = text.split("</inserat>")[0]
-    for expected in ["Titel: Helle 2-Zimmer-Wohnung", "Preis: 780 €", "Größe: 54 m²", "Adresse: Musterstr. 12",
+    for expected in ["Titel: Helle 2-Zimmer-Wohnung", "Miete: 780 €", "Größe: 54 m²", "Adresse: Musterstr. 12",
                      "Portal: ImmoScout24", "Link: https://www.immobilienscout24.de/expose/123",
                      "Beschreibung:\nBitte Codewort {Linde} in der Anfrage nennen. {0} {name}"]:
         assert expected in inserat
@@ -128,7 +128,7 @@ def test_user_text_initial_contains_listing_block_and_task():
 
 def test_user_text_skips_missing_fields():
     text = llm.build_user_text({"title": "Nur Titel", "price": None}, "test")
-    assert "Preis:" not in text and "Portal:" not in text
+    assert "Miete:" not in text and "Portal:" not in text
     assert "Beschreibung:\n(keine Beschreibung)" in text
 
 

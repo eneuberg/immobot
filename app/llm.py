@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 import anthropic
 import httpx
 
-from . import db, images, media, vault
+from . import db, images, media, rent, vault
 from .portals import provider_label, safe_url
 from .settings import (
     DEFAULT_SYSTEM_PROMPT, DRAFT_KINDS, EFFORTS, FEEDBACK_SOURCES, PRICES, PROVIDERS, QUICK_FEEDBACK_KINDS, as_bool,
@@ -279,7 +279,7 @@ def learned_context(settings: dict) -> tuple[list[str], list[dict]]:
 def build_user_text(listing: dict, kind: str, previous_text: str | None = None, instruction: str | None = None) -> str:
     fields = [
         ("Titel", listing.get("title")),
-        ("Preis", listing.get("price")),
+        ("Miete", rent.price_text(listing)),
         ("Größe", listing.get("size")),
         ("Adresse", listing.get("address")),
         ("Portal", provider_label(listing.get("provider")) if listing.get("provider") else None),

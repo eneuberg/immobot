@@ -1846,6 +1846,12 @@ def test_add_listing_by_link(client, manual_add):
     # without the checkbox: no draft
     client.post("/listings/add", data={"url": "https://www.immobilienscout24.de/expose/99"})
     assert manual_add["post"][-1][1] is False
+    # the app's share text around the link: only the exposé id counts
+    shared = client.post("/listings/add", data={
+        "url": "Schau dir dieses Angebot auf ImmoScout24 an:\nTraumwohnung\nhttps://www.immobilienscout24.de/expose/77?referrer=APP_SHARE"})
+    assert manual_add["fetch"][-1] == "77"
+    assert db.get_listing(int(shared.headers["location"].split("/listing/")[1].split("?")[0]))["url"] == \
+        "https://www.immobilienscout24.de/expose/77"
 
 
 def test_add_listing_rejects_other_links_and_shows_fetch_errors(client, manual_add, monkeypatch):
@@ -1853,8 +1859,8 @@ def test_add_listing_rejects_other_links_and_shows_fetch_errors(client, manual_a
 
     r = client.post("/listings/add", data={"url": "https://www.immowelt.de/expose/abc"})
     page = client.get(r.headers["location"]).text
-    assert "Bitte einen ImmoScout24-Exposé-Link einfügen" in page and 'value="https://www.immowelt.de/expose/abc"' in page
-    assert client.get(r.headers["location"]).text.count("Bitte einen ImmoScout24") == 0  # shown once
+    assert "Kein ImmoScout24-Exposé-Link gefunden" in page and ">https://www.immowelt.de/expose/abc</textarea>" in page
+    assert client.get(r.headers["location"]).text.count("Kein ImmoScout24-Exposé-Link gefunden") == 0  # shown once
 
     async def gone(expose_id):
         raise is24.Is24Error("Exposé nicht abrufbar (HTTP 404).")

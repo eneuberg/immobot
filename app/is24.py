@@ -43,6 +43,19 @@ def expose_id(url) -> str | None:
     return match.group(1) if match else None
 
 
+# An exposé link inside pasted text (the app's share text: "Schau dir das an: Titel https://…/expose/123?referrer=…").
+# Same pattern as the preview in static/app.js.
+_EXPOSE_IN_TEXT = re.compile(r"(?<![a-z0-9.-])(?:https?://)?(?:[a-z0-9-]+\.)*immobilienscout24\.de/expose/([0-9]{1,15})(?![0-9])",
+                             re.IGNORECASE)
+
+
+def expose_in_text(text) -> str | None:
+    """The exposé id of the first ImmoScout24 exposé link in `text` (a bare link or shared text around one;
+    query string, tracking parameters and the rest are ignored), else None."""
+    match = _EXPOSE_IN_TEXT.search(str(text or "")[:5000])
+    return match.group(1) if match else None
+
+
 def canonical_url(expose_id: str) -> str:
     return f"https://www.immobilienscout24.de/expose/{expose_id}"
 

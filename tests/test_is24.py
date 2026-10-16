@@ -345,3 +345,46 @@ def test_listing_fields_like_fredy():
 
 EXPOSE_DESCRIPTION = ("Helle Dachgeschosswohnung in einem gepflegten Mehrfamilienhaus.\n\nDrei Balkone, offene Küche, "
                       "zwei Schlafzimmer. Das Bad hat eine Wanne, dazu ein Gäste-WC. Ein Stellplatz kann angemietet werden.")
+
+
+# --- exposé link in shared text, text-only fetch (warm rent) -------------------------------------
+
+@pytest.mark.parametrize("text,expected", [
+    ("https://www.immobilienscout24.de/expose/171725784", "171725784"),
+    ("Schau dir dieses Angebot an: Helle 2-Zimmer-Wohnung\nhttps://www.immobilienscout24.de/expose/171725784?referrer=APP_SHARE&utm_x=1",
+     "171725784"),
+    ("www.immobilienscout24.de/expose/42#/gallery", "42"),
+    ("https://evilimmobilienscout24.de/expose/42", None),
+    ("https://www.immowelt.de/expose/abc", None),
+    ("", None),
+])
+def test_expose_in_text(text, expected):
+    assert is24.expose_in_text(text) == expected
+
+
+def test_ensure_details_fetches_text_only_then_pictures_on_first_use(fresh_db, is24_server):
+    listing_id = add_is24_listing(fresh_db, price="1.100 €")
+    assert asyncio.run(media.ensure_details(listing_id)) is True
+    assert len(is24_server.requests) == 1  # the exposé, no pictures yet
+    listing = fresh_db.get_listing(listing_id)
+    assert "Warmmiete: 1.400 €" in listing["details"] and listing["media_error"] is None
+    assert media.stored_pictures(listing_id) == [] and len(fresh_db.list_media(listing_id)) == 11
+    assert asyncio.run(media.ensure_details(listing_id)) is False  # once
+
+    rows = asyncio.run(media.ensure_media(listing_id))
+    assert len(rows) == 11 and len(is24_server.requests) == 12  # pictures now, no second exposé request
+    assert asyncio.run(media.ensure_media(listing_id)) == rows and len(is24_server.requests) == 12
+
+
+def test_ensure_details_skips_other_sources(fresh_db, is24_server):
+    other = add_is24_listing(fresh_db, fredy_id="iw", url="https://www.immowelt.de/expose/abc", provider="immowelt")
+    assert asyncio.run(media.ensure_details(other)) is False and is24_server.requests == []
+
+
+def test_backfill_details_newest_first_once(fresh_db, is24_server):
+    first = add_is24_listing(fresh_db, fredy_id="a")
+    second = add_is24_listing(fresh_db, fredy_id="b")
+    done = []
+    assert asyncio.run(media.backfill_details(gap_s=0, on_done=done.append)) == 2
+    assert done == [second, first] and len(is24_server.requests) == 2
+    assert asyncio.run(media.backfill_details(gap_s=0)) == 0 and len(is24_server.requests) == 2

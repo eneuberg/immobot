@@ -147,6 +147,11 @@ def test_header_layout_skips_missing_parts():
     assert len(text.split("\n")) == 2
 
 
+def test_header_shows_warm_and_total_rent():
+    text = bot.header(listing_dict(price="570 €", size="50 m²", details="Warmmiete: 690 €\nGesamtmiete: 740 €"))
+    assert text.split("\n")[1] == "570 € kalt · 690 € warm · 740 € gesamt · 50 m² · Musterstr. 12, Berlin"
+
+
 def test_header_truncates_long_title():
     text = bot.header(listing_dict(title="Wohnung " * 40))
     title_line = text.split("\n")[0]

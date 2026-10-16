@@ -27,7 +27,10 @@
       <h1>{{ listing.title or "(ohne Titel)" }}</h1>
       {% if listing.address %}<p class="lh-addr">{{ icon("pin") }}<span>{{ listing.address }}</span></p>{% endif %}
       <dl class="facts">
-        <div><dt>Preis</dt><dd>{{ listing.price or "–" }}</dd></div>
+        {% set r = listing|rent %}
+        <div><dt>{{ "Kaltmiete" if r.warm or r.total else "Preis" }}</dt><dd>{{ listing.price or "–" }}</dd></div>
+        {% if r.warm %}<div><dt>Warmmiete</dt><dd>{{ r.warm }}</dd></div>{% endif %}
+        {% if r.total %}<div><dt>Gesamtmiete</dt><dd>{{ r.total }}</dd></div>{% endif %}
         <div><dt>Größe</dt><dd>{{ listing.size or "–" }}</dd></div>
         <div><dt>Portal</dt><dd>{{ portal }}</dd></div>
         <div><dt>Entwürfe</dt><dd><a href="#entwuerfe">{{ drafts|length }} ↓</a></dd></div>

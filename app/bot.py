@@ -60,7 +60,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import db, editor_access, llm, media, portals, settings, textfmt, vault
+from . import db, editor_access, llm, media, portals, rent, settings, textfmt, vault
 
 log = logging.getLogger(__name__)
 
@@ -152,9 +152,15 @@ def _button(label: str, action: str, listing_id: int) -> InlineKeyboardButton:
     return InlineKeyboardButton(label, callback_data=f"{action}:{listing_id}")
 
 
+def facts_of(listing: dict) -> list[str]:
+    """['570 € kalt · 690 € warm', '50 m²', 'Address'] - the non-empty ones."""
+    facts = [rent.price_text(listing)] + [str(listing.get(k) or "") for k in ("size", "address")]
+    return [fact for fact in facts if fact.strip()]
+
+
 def header(listing: dict) -> str:
     """'🏠 <b>Title</b>' / 'price · size · address' / provider label. Escaped HTML."""
-    facts = [_shorten(listing[k], FACT_MAX) for k in ("price", "size", "address") if str(listing.get(k) or "").strip()]
+    facts = [_shorten(fact, FACT_MAX) for fact in facts_of(listing)]
     lines = [f"🏠 <b>{_esc(_title(listing))}</b>"]
     if facts:
         lines.append(" · ".join(_esc(fact) for fact in facts))
@@ -788,6 +794,8 @@ async def announce(tg_bot, chat_id: int, listing_ids: list[int]) -> None:
             continue  # unknown, already announced, or another task is on it
         _announcing.add(listing_id)
         try:
+            await media.ensure_details(listing_id)  # usually fetched meanwhile (web.fredy_webhook)
+            listing = db.get_listing(listing_id) or listing
             message = await _send(tg_bot, chat_id, *followup_view(listing))
             db.set_listing_tg_message(listing_id, message.message_id)
         except TelegramError as exc:
@@ -798,7 +806,7 @@ async def announce(tg_bot, chat_id: int, listing_ids: list[int]) -> None:
 
 def manual_album_caption(listing: dict, rows: list[dict], total: int) -> str:
     """Plain-text caption of a hand-added listing's album: title, facts and portal, then the picture list."""
-    facts = " · ".join(_shorten(listing[k], FACT_MAX) for k in ("price", "size", "address") if str(listing.get(k) or "").strip())
+    facts = " · ".join(_shorten(fact, FACT_MAX) for fact in facts_of(listing))
     head = "\n".join(filter(None, [f"🏠 {_shorten(_title(listing), 200)}", facts, "ImmoScout24 · per Link hinzugefügt"]))
     pictures = album_caption(rows, total, None)
     caption = f"{head}\n{pictures}"

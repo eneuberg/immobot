@@ -44,13 +44,13 @@
 <form method="post" action="/listings/add" class="add-listing" id="hinzufuegen">
   <label for="add-url">Inserat per Link hinzufügen</label>
   {% if add_failed %}<div class="flash err bare" role="alert">{{ add_failed.error }}</div>{% endif %}
-  <div class="add-row">
-    <input type="url" id="add-url" name="url" required inputmode="url" autocomplete="off"
-      placeholder="https://www.immobilienscout24.de/expose/…" value="{{ add_failed.url if add_failed else '' }}">
-    <button type="submit">Hinzufügen</button>
-  </div>
+  <textarea id="add-url" name="url" rows="3" required maxlength="2000" autocomplete="off" spellcheck="false"
+    data-expose-preview="add-preview"
+    placeholder="Link oder geteilten Text einfügen, z. B. https://www.immobilienscout24.de/expose/…">{{ add_failed.url if add_failed else '' }}</textarea>
+  <p class="add-preview" id="add-preview" aria-live="polite" hidden></p>
+  <button type="submit" class="add-submit">Hinzufügen</button>
   <label class="add-draft"><input type="checkbox" name="draft" value="1" checked> gleich Anschreiben schreiben lassen</label>
-  <small class="muted">Nur ImmoScout24. Holt Exposé und Bilder (einige Sekunden) und schickt sie mit den Buttons an Telegram.</small>
+  <small class="muted">Nur ImmoScout24. Text vom Teilen-Button geht auch, nur der Exposé-Link wird verwendet. Holt Exposé und Bilder (einige Sekunden) und schickt sie mit den Buttons an Telegram.</small>
 </form>
 {% endif %}
 
@@ -89,7 +89,7 @@
         <span class="lc-title">{{ l.title or "(ohne Titel)" }}</span>
         {% if l.address %}<span class="lc-addr">{{ l.address }}</span>{% endif %}
         <div class="lc-facts">
-          <span class="price">{{ l.price or "–" }}</span>
+          {% for part in l|rent_parts %}<span class="price">{{ part }}</span>{% else %}<span class="price">–</span>{% endfor %}
           {% if l.size %}<span>{{ l.size }}</span>{% endif %}
           <span class="portal">{{ l.portal }}</span>
         </div>

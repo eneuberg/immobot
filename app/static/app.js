@@ -196,4 +196,43 @@
     show(i);
     box.showModal();
   }
+
+  // "Inserat per Link hinzufügen": which part of the pasted text is used. The exposé link stays, everything else
+  // (share text around it, "?referrer=…" and the like) is shown greyed out. Same pattern as is24.expose_in_text.
+  var EXPOSE = /(^|[^a-z0-9.-])((?:https?:\/\/)?(?:[a-z0-9-]+\.)*immobilienscout24\.de\/expose\/[0-9]{1,15})(?![0-9])/i;
+
+  function exposePreview(field) {
+    var out = document.getElementById(field.dataset.exposePreview);
+    if (!out) return;
+    var text = field.value;
+    out.textContent = "";
+    if (!text.trim()) { out.hidden = true; return; }
+    out.hidden = false;
+    var m = EXPOSE.exec(text);
+    if (!m) {
+      out.classList.add("is-missing");
+      out.textContent = "Kein ImmoScout24-Exposé-Link erkannt.";
+      return;
+    }
+    out.classList.remove("is-missing");
+    var start = m.index + m[1].length, end = start + m[2].length;
+    var part = function (cls, value) {
+      if (!value) return;
+      var span = document.createElement("span");
+      span.className = cls;
+      span.textContent = value;
+      out.appendChild(span);
+    };
+    part("label", "Verwendet wird nur der Link: ");
+    part("gone", text.slice(0, start).trim() ? text.slice(0, start) : "");
+    part("kept", text.slice(start, end));
+    part("gone", text.slice(end).trim() ? text.slice(end) : "");
+  }
+
+  document.addEventListener("input", function (e) {
+    if (e.target.matches && e.target.matches("[data-expose-preview]")) exposePreview(e.target);
+  });
+  document.addEventListener("DOMContentLoaded", function () {
+    Array.prototype.forEach.call(document.querySelectorAll("[data-expose-preview]"), exposePreview);
+  });
 })();
