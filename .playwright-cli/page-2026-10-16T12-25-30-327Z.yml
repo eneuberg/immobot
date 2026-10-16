@@ -1,0 +1,10 @@
+- main [ref=e2]:
+  - article [ref=e4]:
+    - generic [ref=e5]: immobot
+    - heading "Anmelden" [level=1] [ref=e10]
+    - paragraph [ref=e11]: Wohnungsinserate und Anschreiben-Entwürfe. Danach geht es weiter zum Entwurfs-Editor.
+    - generic [ref=e12]:
+      - generic [ref=e13]:
+        - text: Passwort
+        - textbox "Passwort" [active] [ref=e14]
+      - button "Anmelden" [ref=e15] [cursor=pointer]

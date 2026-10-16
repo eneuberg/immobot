@@ -431,3 +431,15 @@ def test_big_batch_fetches_only_the_first_ones_right_away(fresh_db, is24_server,
     asyncio.run(media.fetch_details(ids, gap_s=0))
     assert len(is24_server.requests) == 2 and started == [True]
     assert [bool(fresh_db.get_listing(i)["details"]) for i in ids] == [True, True, False, False]
+
+
+def test_reload_fetches_the_exposé_again_at_most_once_a_minute(fresh_db, is24_server):
+    listing_id = add_is24_listing(fresh_db)
+    assert media.pictures_missing(fresh_db.get_listing(listing_id))
+    assert asyncio.run(media.ensure_details(listing_id)) is True
+    assert media.pictures_missing(fresh_db.get_listing(listing_id))  # only known by URL
+    assert asyncio.run(media.reload(listing_id)) is False  # just fetched
+    old = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(timespec="seconds")
+    fresh_db.set_media_state(listing_id, old, None)
+    assert asyncio.run(media.reload(listing_id)) is True
+    assert len(is24_server.requests) == 2 + 11 and not media.pictures_missing(fresh_db.get_listing(listing_id))

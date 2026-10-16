@@ -843,6 +843,58 @@ def test_first_editor_visit_fetches_pictures(client, lid, monkeypatch):
     assert calls == [lid]  # once; later visits read what's stored
 
 
+def test_first_editor_visit_downloads_pictures_known_by_url(client, lid, monkeypatch):
+    """The exposé text came first (media.ensure_details): the pictures are still to download."""
+    calls = []
+
+    async def fetch(listing_id, retry=False, want_images=True):
+        calls.append(listing_id)
+        return []
+
+    monkeypatch.setattr(media, "ensure_media", fetch)
+    monkeypatch.setattr(media, "has_gallery", lambda listing: True)
+    db.set_media_state(lid, db.now_iso(), None)
+    db.replace_media(lid, [{"position": 1, "caption": "Balkon", "source_url": "https://x.example/1", "file": ""}])
+    login(client)
+    page = client.get(f"/editor/{lid}").text
+    assert calls == [lid] and "🖼 Bilder laden" in page  # still missing (fake fetch): the button stays
+
+
+def test_editor_load_and_reload_pictures(client, lid, monkeypatch):
+    loads, reloads = [], []
+
+    async def fetch(listing_id, retry=False, want_images=True):
+        loads.append((listing_id, retry))
+        return []
+
+    async def reload(listing_id):
+        reloads.append(listing_id)
+        return len(reloads) == 1  # the second one is "too soon"
+
+    monkeypatch.setattr(media, "ensure_media", fetch)
+    monkeypatch.setattr(media, "reload", reload)
+    monkeypatch.setattr(media, "has_gallery", lambda listing: True)
+    db.add_draft(lid, "initial", "Entwurf", "claude-opus-5-5")
+    db.set_media_state(lid, db.now_iso(), "Exposé nicht abrufbar (HTTP 429).")
+    editor_cookie(client, lid)
+    r, fields = open_editor(client, lid)
+    assert "🔄 Erneut versuchen" in r.text and "HTTP 429" in r.text
+    r = post(client, lid, "media", fields)  # still failing (fake fetch): no "geladen", the reason stays visible
+    assert r.headers["location"] == f"/editor/{lid}?m=media_failed#bilder" and loads[-1] == (lid, True)
+    page = client.get(r.headers["location"]).text
+    assert 'id="bilder" open' in page and "HTTP 429" in page and "Bilder geladen" not in page
+    assert client.refreshed[-1] == lid
+
+    db.set_media_state(lid, db.now_iso(), None)  # all there now: "Inserat neu laden"
+    page = client.get(f"/editor/{lid}?m=media_loaded").text
+    assert "Bilder geladen." in page and 'id="bilder" open' in page and "🔄 Inserat neu laden" in page
+    assert post(client, lid, "media", fields, reload="1").headers["location"] == f"/editor/{lid}?m=media#bilder"
+    assert post(client, lid, "media", fields, reload="1").headers["location"] == f"/editor/{lid}?m=media_soon#bilder"
+    assert reloads == [lid, lid]
+    assert post(client, lid, "media", {"token": "0" * 32}).status_code in (303, 400, 403)  # bad token: nothing loaded
+    assert len(loads) == 1
+
+
 def test_button_without_login_data_reopens_an_existing_session(client, lid):
     other = db.insert_listing({"fredy_id": "e3", "provider": "immoscout", "title": "Andere"})[0]
     path = editor_access.make_editor_path(lid)

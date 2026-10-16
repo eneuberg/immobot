@@ -537,7 +537,7 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
         "media_source": source or listing.get("media_source"),
         "media_source_label": MEDIA_SOURCE_LABELS.get(source or listing.get("media_source")),
         # Load/retry only where it can do something: a source, and nothing fetched yet or a failure.
-        "can_load_media": source is not None and (not listing.get("media_fetched_at") or bool(listing.get("media_error"))),
+        "can_load_media": media.pictures_missing(listing),
         "media": pictures,
         # Big picture at the top: the first stored photo that isn't a floor plan (those come first).
         "hero": next((m for m in pictures if not _is_floorplan(m)), pictures[0] if pictures else None),

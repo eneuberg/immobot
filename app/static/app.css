@@ -771,6 +771,8 @@ details.notes-box .notes { margin: 0; font-size: .9rem; }
 .ed-head { margin: 0 0 1rem; }
 .ed-info { margin: 0 0 1rem; }
 .ed-info > details { margin: 0 0 .5rem; }
+.ed-media-load { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .75rem; margin: .75rem 0 0; }
+.ed-media-load button { margin: 0; width: auto; }
 .ed-info article.details { margin: 0; padding: 0; border: 0; box-shadow: none; background: none; }
 .ed-top { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .5rem; margin-bottom: .4rem; }
 .ed-head h1 { --pico-font-size: 1.3rem; margin: 0 0 .2rem; overflow-wrap: anywhere; }

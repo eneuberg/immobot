@@ -320,6 +320,39 @@ async def ensure_media(listing_id: int, retry: bool = False, want_images: bool =
     return stored_pictures(listing_id)
 
 
+def pictures_missing(listing: dict) -> bool:
+    """A listing with a picture source whose pictures aren't (all) there: never fetched, failed, or only known by
+    URL (exposé text fetched first). Then "Bilder laden" makes sense."""
+    if not has_gallery(listing):
+        return False
+    return not listing.get("media_fetched_at") or bool(listing.get("media_error")) or bool(_pending(listing["id"]))
+
+
+async def reload(listing_id: int) -> bool:
+    """"Inserat neu laden" (editor): ImmoScout24 - the exposé again with all its pictures (text, rent and pictures
+    may have changed), at most once per RETRY_AFTER_S; Fredy's pictures - the missing ones. Never raises; False if
+    it was too soon or there is no source."""
+    listing = db.get_listing(listing_id)
+    if listing is None:
+        return False
+    async with _locks.setdefault(listing_id, asyncio.Lock()):
+        listing = db.get_listing(listing_id)
+        source = source_of(listing)
+        if source == "fredy":
+            await _download_pending(listing, "fredy")
+            return True
+        if source != "is24":
+            return False
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(listing["media_fetched_at"])).total_seconds()
+        except (TypeError, ValueError):
+            age = RETRY_AFTER_S
+        if age < RETRY_AFTER_S:
+            return False
+        await _fetch_is24(listing)
+    return True
+
+
 def details_missing(listing: dict) -> bool:
     """An ImmoScout24 listing whose exposé text was never fetched (or only refused as too many requests)."""
     if listing.get("details") or source_of(listing) != "is24":

@@ -1,0 +1,76 @@
+- generic [active] [ref=f2e1]:
+  - banner [ref=f2e2]:
+    - generic [ref=f2e3]:
+      - link "immobot" [ref=f2e4] [cursor=pointer]:
+        - /url: /
+      - navigation "Hauptmenü" [ref=f2e9]:
+        - link "Inserate" [ref=f2e10] [cursor=pointer]:
+          - /url: /
+        - link "Einstellungen" [ref=f2e11] [cursor=pointer]:
+          - /url: /settings
+        - link "Status" [ref=f2e12] [cursor=pointer]:
+          - /url: /status
+      - button "Abmelden" [ref=f2e14] [cursor=pointer]
+  - main [ref=f2e15]:
+    - generic [ref=f2e16]:
+      - generic [ref=f2e17]:
+        - generic [ref=f2e18]:
+          - generic [ref=f2e19]: neu
+          - generic [ref=f2e20]: ImmoScout24
+        - heading "Helle 2-Zimmer-Wohnung in der Montanusstraße" [level=1] [ref=f2e21]
+        - paragraph [ref=f2e22]: 1.050 € kalt · 1.250 € gesamt zzgl. Heizkosten · 58 m² · Montanusstr. 5, 50737 Köln
+        - generic [ref=f2e23]:
+          - button "📨 Inserat öffnen ↗" [ref=f2e24] [cursor=pointer]
+          - button "🔗 Dashboard" [ref=f2e25] [cursor=pointer]
+      - generic [ref=f2e26]:
+        - group [ref=f2e27]:
+          - generic "🖼 Bilder 0" [ref=f2e28] [cursor=pointer]:
+            - text: 🖼 Bilder
+            - generic [ref=f2e29]: "0"
+          - generic [ref=f2e30]:
+            - alert [ref=f2e31]: ⚠ Exposé nicht abrufbar (HTTP 404).
+            - button "🔄 Erneut versuchen" [ref=f2e33] [cursor=pointer]
+        - group [ref=f2e34]:
+          - generic "📄 Beschreibung & Details" [ref=f2e35] [cursor=pointer]
+      - status [ref=f2e36]: ✓ Bilder geladen.
+      - generic [ref=f2e37]:
+        - generic [ref=f2e38]:
+          - article [ref=f2e39]:
+            - generic [ref=f2e40]:
+              - heading "Endversion" [level=2] [ref=f2e41]
+              - generic [ref=f2e42]: fertig
+            - generic [ref=f2e43]: Endversion Test
+            - generic [ref=f2e44]:
+              - button "Kopieren" [ref=f2e45] [cursor=pointer]
+              - button "📨 Inserat öffnen ↗" [ref=f2e46] [cursor=pointer]
+              - button "✅ Als gesendet markieren" [ref=f2e48] [cursor=pointer]
+              - button "Weiter bearbeiten" [ref=f2e50] [cursor=pointer]
+          - group [ref=f2e51]:
+            - generic "Änderungen zum Original geändert" [ref=f2e52] [cursor=pointer]:
+              - text: Änderungen zum Original
+              - generic [ref=f2e53]: geändert
+            - text: "[gelöscht: ] [eingefügt: ]"
+        - article [ref=f2e55]:
+          - heading "Regeln für künftige Entwürfe" [level=2] [ref=f2e56]
+          - paragraph [ref=f2e57]:
+            - text: Claude vergleicht seinen Entwurf mit deiner Endversion (inkl. geänderter Sätze) und deiner Kritik und schlägt allgemeine Regeln vor – du entscheidest. Übernommene Regeln gelten für jeden neuen Entwurf.
+            - link "Alle Regeln" [ref=f2e58] [cursor=pointer]:
+              - /url: /settings/verhalten#regeln
+          - generic [ref=f2e59]:
+            - paragraph [ref=f2e60]:
+              - generic [ref=f2e61]: Neue Regel
+            - generic [ref=f2e62]: Text der Regel
+            - textbox "Text der Regel" [ref=f2e63]: Keine Floskeln am Ende.
+            - paragraph [ref=f2e65]: Test
+            - generic [ref=f2e66]:
+              - button "✅ Übernehmen" [ref=f2e67] [cursor=pointer]
+              - button "❌ Verwerfen" [ref=f2e68] [cursor=pointer]
+          - list [ref=f2e69]:
+            - listitem [ref=f2e70]:
+              - generic [ref=f2e71]: aktiv
+              - text: Immer Homeoffice erwähnen.
+            - listitem [ref=f2e72]:
+              - generic [ref=f2e73]: aktiv
+              - text: Kurze Sätze verwenden.
+          - group [ref=f2e74]:
+            - generic "Regel selbst eintragen" [ref=f2e75] [cursor=pointer]

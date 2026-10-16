@@ -47,9 +47,10 @@
   {# The rest of the listing, collapsed so the text stays on top. Pictures load only when opened (lazy). #}
   <div class="ed-info">
     {% if media or has_gallery %}
-    <details class="disclosure">
+    <details class="disclosure" id="bilder"{% if open_media %} open{% endif %}>
       <summary>🖼 Bilder <span class="count">{{ media|length }}</span></summary>
       <div class="disclosure-body">
+        {% if listing.media_error %}<div class="flash err bare" role="alert">⚠ {{ listing.media_error }}</div>{% endif %}
         {% if media %}
         <div class="gallery">
           {% for m in media %}
@@ -60,8 +61,20 @@
           </a>
           {% endfor %}
         </div>
-        {% else %}
-        <p class="help">Noch keine Bilder geladen – das passiert beim ersten Entwurf{% if logged_in %} oder im Dashboard mit „Bilder laden“{% endif %}.</p>
+        {% elif not listing.media_error %}
+        <p class="help">{{ "Noch keine Bilder geladen." if pictures_missing else "Keine Bilder im Inserat." }}</p>
+        {% endif %}
+        {% if has_gallery %}
+        <form method="post" action="/editor/{{ listing.id }}/media" class="ed-media-load">
+          {{ hidden() }}
+          {% if pictures_missing %}
+          <button type="submit" data-busy-label="Lädt …">{% if listing.media_error %}🔄 Erneut versuchen{% else %}🖼 Bilder laden{% endif %}</button>
+          {% else %}
+          <input type="hidden" name="reload" value="1">
+          <button type="submit" class="secondary outline" data-busy-label="Lädt …">🔄 Inserat neu laden</button>
+          <small class="muted">Holt Exposé, Miete und alle Bilder noch einmal.</small>
+          {% endif %}
+        </form>
         {% endif %}
       </div>
     </details>

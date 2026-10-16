@@ -61,6 +61,9 @@ MESSAGES = {
     "rejected": "Vorschlag verworfen.",
     "sent": "Als gesendet markiert.",
     "draft": "Entwurf erzeugt.",
+    "media": "Inserat neu geladen.",
+    "media_loaded": "Bilder geladen.",
+    "media_soon": "Gerade erst geladen – in einer Minute geht es wieder.",
     "shorter": "Claude hat den Text gekürzt.",
     "formal": "Claude hat den Text förmlicher formuliert.",
     "regenerate": "Claude hat den Text ganz neu geschrieben. Das ist jetzt Fassung 1 einer neuen Runde.",
@@ -229,7 +232,7 @@ def _proposals(session: dict) -> tuple[list[dict], list[dict]]:
 
 def _render(request: Request, listing: dict, mode: str, *, message: str | None = None, error: str | None = None,
             critique: str | None = None, lost_text: str | None = None, manual_rule: str | None = None,
-            status_code: int = 200):
+            open_media: bool = False, status_code: int = 200):
     listing_id = listing["id"]
     session = learning.open_or_create_session(listing_id)
     current = db.get_settings()
@@ -253,6 +256,8 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
         # "Inserat-Infos" (collapsed): pictures via /editor/{id}/media/{position}, the exposé text or Fredy's text
         "media": media.stored_pictures(listing_id),
         "has_gallery": media.has_gallery(listing),
+        "pictures_missing": media.pictures_missing(listing),
+        "open_media": open_media,
         "details": web.details_sections(listing.get("details")),
     }
     if session is not None:
@@ -296,10 +301,11 @@ async def editor_page(request: Request, listing_id: str, m: str | None = None, k
     listing, mode, denied = _gate(request, listing_id)
     if denied is not None:
         return denied
-    if media.has_gallery(listing) and not listing.get("media_fetched_at"):
+    if media.pictures_missing(listing) and not listing.get("media_error"):
         await media.ensure_media(listing["id"])
         listing = db.get_listing(listing["id"]) or listing
-    return _render(request, listing, mode, message=MESSAGES.get(m or ""), critique=web._take_once(k) if k else None)
+    return _render(request, listing, mode, message=MESSAGES.get(m or ""), critique=web._take_once(k) if k else None,
+                   open_media=m in ("media", "media_loaded", "media_failed", "media_soon"))
 
 
 @router.get("/editor/{listing_id}/media/{position}")
@@ -378,6 +384,24 @@ def _autosave_answer(status_code: int, error: str | None = None, stale: bool = F
     if error is None:
         return JSONResponse({"ok": True})
     return JSONResponse({"ok": False, "error": error, "stale": stale}, status_code=status_code)
+
+
+@router.post("/editor/{listing_id}/media", dependencies=ACTION)
+async def editor_load_media(request: Request, listing_id: str, token: str = Form(""), reload: str = Form("")):
+    """"Bilder laden" (missing pictures, also after a failure) or "Inserat neu laden" (reload=1: exposé text and all
+    pictures again, at most once a minute). Takes a few seconds."""
+    listing, mode, denied = _gate(request, listing_id, token)
+    if denied is not None:
+        return denied
+    if reload == "1":
+        message = "media" if await media.reload(listing["id"]) else "media_soon"
+    else:
+        await media.ensure_media(listing["id"], retry=True)
+        message = "media_loaded"
+    if message != "media_soon" and (db.get_listing(listing["id"]) or {}).get("media_error"):
+        message = "media_failed"  # no flash: the opened gallery shows the reason
+    bot.schedule_refresh(listing["id"])  # "🖼 Bilder" / rent in the Telegram message
+    return _back(listing["id"], message, "bilder")
 
 
 @router.post("/editor/{listing_id}/save", dependencies=ACTION)
