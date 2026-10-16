@@ -794,8 +794,9 @@ async def announce(tg_bot, chat_id: int, listing_ids: list[int]) -> None:
             continue  # unknown, already announced, or another task is on it
         _announcing.add(listing_id)
         try:
-            await media.ensure_details(listing_id)  # usually fetched meanwhile (web.fredy_webhook)
-            listing = db.get_listing(listing_id) or listing
+            if index < media.NEW_DETAILS_MAX:  # warm rent; usually fetched meanwhile (web.fredy_webhook)
+                await media.ensure_details(listing_id)
+                listing = db.get_listing(listing_id) or listing
             message = await _send(tg_bot, chat_id, *followup_view(listing))
             db.set_listing_tg_message(listing_id, message.message_id)
         except TelegramError as exc:

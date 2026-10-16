@@ -37,6 +37,9 @@ def no_picture_network(tmp_path, monkeypatch):
     monkeypatch.setattr(media, "_transport", httpx.MockTransport(refuse))  # picture downloads
     monkeypatch.setattr(media, "_media_root", tmp_path / "media")
     monkeypatch.setattr(media, "_locks", {})
+    monkeypatch.setattr(media, "_paused_until", 0.0)  # automatic exposé requests not paused
+    monkeypatch.setattr(media, "_backfill_task", None)
+    monkeypatch.setattr(media, "_on_details", None)
 
 
 @pytest.fixture(autouse=True)

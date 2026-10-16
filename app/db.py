@@ -395,10 +395,12 @@ def set_listing_tg_message(listing_id: int, message_id: int) -> None:
 # --- details & pictures (see media.py) -------------------------------------
 
 def listing_ids_without_details(since: str) -> list[int]:
-    """Listings received since `since` whose exposé was never fetched, newest first."""
+    """Listings received since `since` without exposé text that was never fetched or refused as too many
+    requests (HTTP 429), newest first."""
     with connect() as conn:
-        rows = conn.execute("SELECT id FROM listings WHERE details IS NULL AND media_fetched_at IS NULL "
-                            "AND received_at >= ? ORDER BY id DESC", (since,)).fetchall()
+        rows = conn.execute("SELECT id FROM listings WHERE details IS NULL AND (media_fetched_at IS NULL "
+                            "OR media_error LIKE '%(HTTP 429)%') AND received_at >= ? ORDER BY id DESC",
+                            (since,)).fetchall()
     return [row[0] for row in rows]
 
 

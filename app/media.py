@@ -19,6 +19,7 @@ import ipaddress
 import logging
 import re
 import shutil
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -34,8 +35,12 @@ IMAGE_TIMEOUT_S = 15.0
 DOWNLOAD_GAP_S = 0.25  # pause between two pictures
 MAX_PICTURES = 30  # stored per listing
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
-DETAILS_GAP_S = 1.0  # between two exposé requests for a batch of new listings
-BACKFILL_GAP_S = 5.0  # between two exposé requests when filling in older listings
+DETAILS_GAP_S = 2.0  # between two exposé requests for a batch of new listings
+NEW_DETAILS_MAX = 10  # of one Fredy batch fetched right away; the rest by the slow backfill
+BACKFILL_GAP_S = 30.0  # between two exposé requests in the background (older listings, rest of a big batch)
+IS24_PAUSE_S = 3600  # no automatic exposé requests for this long after ImmoScout24 refused one
+REFUSALS = ("(HTTP 429)", "(HTTP 403)")
+RATE_LIMITED = "(HTTP 429)"
 RETRY_AFTER_S = 60  # a failed download can be retried by the user after this long
 KEEP_DAYS = 60  # pictures of listings received longer ago are deleted at startup
 LONG_DESCRIPTION = 500  # Fredy's text is long enough (portal details enabled): no exposé fetch just for text
@@ -54,6 +59,9 @@ _TLD = re.compile(r"[a-z]{2,63}|xn--[a-z0-9-]{1,59}")
 _transport: httpx.AsyncBaseTransport | None = None  # tests inject an httpx.MockTransport here
 _media_root: Path | None = None
 _tasks: set[asyncio.Task] = set()  # background exposé fetches (kept referenced)
+_backfill_task: asyncio.Task | None = None
+_on_details = None  # see schedule_backfill
+_paused_until = 0.0  # time.monotonic(); see is24_paused
 _locks: dict[int, asyncio.Lock] = {}  # one per listing, so concurrent triggers fetch only once
 
 
@@ -242,8 +250,8 @@ async def _download_pending(listing: dict, source: str) -> None:
     _record(listing_id, source, error)
 
 
-async def _fetch_is24(listing: dict, download: bool = True) -> None:
-    """Own ImmoScout24 fetch: exposé (details text) and its pictures (download=False: only their URLs)."""
+async def _fetch_is24(listing: dict) -> None:
+    """Own ImmoScout24 fetch: exposé (details text) and its pictures."""
     listing_id, error = listing["id"], None
     try:
         parsed = is24.parse_expose(await is24.fetch_expose(is24.expose_id(listing["url"])))
@@ -253,7 +261,7 @@ async def _fetch_is24(listing: dict, download: bool = True) -> None:
         log.warning("IS24 exposé for listing %s could not be read: %s", listing_id, type(exc).__name__)
         error = "Exposé konnte nicht gelesen werden."
     else:
-        await store_is24(listing_id, parsed, download)
+        await store_is24(listing_id, parsed)
         return
     _record(listing_id, "is24", error)
 
@@ -312,26 +320,62 @@ async def ensure_media(listing_id: int, retry: bool = False, want_images: bool =
     return stored_pictures(listing_id)
 
 
+def details_missing(listing: dict) -> bool:
+    """An ImmoScout24 listing whose exposé text was never fetched (or only refused as too many requests)."""
+    if listing.get("details") or source_of(listing) != "is24":
+        return False
+    return not listing.get("media_fetched_at") or RATE_LIMITED in (listing.get("media_error") or "")
+
+
+def is24_paused() -> bool:
+    """After ImmoScout24 refused an automatic exposé request: no further automatic ones for a while."""
+    return time.monotonic() < _paused_until
+
+
+def _pause_is24(error: str) -> None:
+    global _paused_until
+    _paused_until = time.monotonic() + IS24_PAUSE_S
+    log.warning("ImmoScout24 refuses exposé requests (%s) - no automatic ones for %d min", error, IS24_PAUSE_S // 60)
+    db.set_meta("media_last_error", f"{db.now_iso()} ImmoScout24: {error} - automatische Abrufe pausiert")
+
+
 async def ensure_details(listing_id: int) -> bool:
     """ImmoScout24 listings without exposé text: fetch it (one request; rent, details, picture URLs - the pictures
     themselves only on first use). Used before a new listing is posted, so its message shows the warm rent, and by
-    backfill_details. Never raises; True if a request was made."""
+    backfill_details. A refusal (429/403) is not recorded on the listing but pauses all automatic requests
+    (IS24_PAUSE_S). Never raises; True if the text was stored."""
     listing = db.get_listing(listing_id)
-    if listing is None or listing.get("details") or listing.get("media_fetched_at") or source_of(listing) != "is24":
+    if listing is None or is24_paused() or not details_missing(listing):
         return False
     async with _locks.setdefault(listing_id, asyncio.Lock()):
         listing = db.get_listing(listing_id)
-        if listing.get("details") or listing.get("media_fetched_at"):
+        if is24_paused() or not details_missing(listing):
             return False
-        await _fetch_is24(listing, download=False)
+        try:
+            parsed = is24.parse_expose(await is24.fetch_expose(is24.expose_id(listing["url"])))
+        except is24.Is24Error as exc:
+            if any(code in str(exc) for code in REFUSALS):
+                _pause_is24(str(exc))
+            else:  # gone (404) and the like: recorded, not asked again
+                _record(listing_id, "is24", str(exc))
+            return False
+        except Exception as exc:  # unexpected payload: type only in the log
+            log.warning("IS24 exposé for listing %s could not be read: %s", listing_id, type(exc).__name__)
+            _record(listing_id, "is24", "Exposé konnte nicht gelesen werden.")
+            return False
+        await store_is24(listing_id, parsed, download=False)
     return True
 
 
 async def fetch_details(listing_ids: list[int], gap_s: float = DETAILS_GAP_S) -> None:
-    """New listings from Fredy: their exposé text, one after the other (bot.announce waits for each one it posts)."""
-    for index, listing_id in enumerate(listing_ids):
-        if await ensure_details(listing_id) and index < len(listing_ids) - 1:
+    """New listings from Fredy: the exposé text of the first NEW_DETAILS_MAX right away, one after the other
+    (bot.announce waits for each one it posts); a bigger batch's rest is left to the slow backfill."""
+    for index, listing_id in enumerate(listing_ids[:NEW_DETAILS_MAX]):
+        if index:
             await asyncio.sleep(gap_s)
+        await ensure_details(listing_id)
+    if len(listing_ids) > NEW_DETAILS_MAX:
+        schedule_backfill()
 
 
 def schedule_details(listing_ids: list[int]) -> None:
@@ -343,28 +387,40 @@ def schedule_details(listing_ids: list[int]) -> None:
 
 
 def schedule_backfill(on_done=None) -> None:
-    task = asyncio.create_task(backfill_details(on_done=on_done))
-    _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
+    """Start backfill_details unless it is running. on_done (kept for later runs): called with a listing id after
+    its exposé text was stored (bot.schedule_refresh: the Telegram message then shows the warm rent)."""
+    global _backfill_task, _on_details
+    if on_done is not None:
+        _on_details = on_done
+    if _backfill_task is None or _backfill_task.done():
+        _backfill_task = asyncio.create_task(backfill_details())
 
 
-async def backfill_details(gap_s: float = BACKFILL_GAP_S, on_done=None) -> int:
-    """Once after start: the exposé text of older ImmoScout24 listings that never had it fetched (newest first,
-    one request every gap_s seconds, last KEEP_DAYS days). on_done(listing_id) after each success. Returns the
-    number of requests."""
-    if not is24_fetch_enabled():
-        return 0
-    since = (datetime.now(timezone.utc) - timedelta(days=KEEP_DAYS)).isoformat(timespec="seconds")
+async def backfill_details(gap_s: float = BACKFILL_GAP_S) -> int:
+    """The exposé text of ImmoScout24 listings that don't have it yet (older ones, the rest of a big Fredy batch,
+    ones refused before), newest first, one request every gap_s seconds, last KEEP_DAYS days. After a refusal it
+    waits until the pause is over and goes on. Returns the number stored."""
     count = 0
-    for listing_id in db.listing_ids_without_details(since):
-        if not await ensure_details(listing_id):
-            continue
-        count += 1
-        if on_done is not None and db.get_listing(listing_id).get("details"):
-            on_done(listing_id)
-        await asyncio.sleep(gap_s)
+    while is24_fetch_enabled():
+        since = (datetime.now(timezone.utc) - timedelta(days=KEEP_DAYS)).isoformat(timespec="seconds")
+        paused = False
+        for listing_id in db.listing_ids_without_details(since):
+            if is24_paused():
+                paused = True
+                break
+            listing = db.get_listing(listing_id)
+            if listing is None or not details_missing(listing):
+                continue
+            if await ensure_details(listing_id):
+                count += 1
+                if _on_details is not None:
+                    _on_details(listing_id)
+            await asyncio.sleep(gap_s)
+        if not paused and not is24_paused():
+            break
+        await asyncio.sleep(max(_paused_until - time.monotonic(), 0) + 1)
     if count:
-        log.info("Exposé text fetched for %d older listing(s)", count)
+        log.info("Exposé text fetched for %d listing(s) in the background", count)
     return count
 
 

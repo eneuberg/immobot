@@ -381,10 +381,53 @@ def test_ensure_details_skips_other_sources(fresh_db, is24_server):
     assert asyncio.run(media.ensure_details(other)) is False and is24_server.requests == []
 
 
-def test_backfill_details_newest_first_once(fresh_db, is24_server):
+def test_backfill_details_newest_first_once(fresh_db, is24_server, monkeypatch):
     first = add_is24_listing(fresh_db, fredy_id="a")
     second = add_is24_listing(fresh_db, fredy_id="b")
     done = []
-    assert asyncio.run(media.backfill_details(gap_s=0, on_done=done.append)) == 2
+    monkeypatch.setattr(media, "_on_details", done.append)
+    assert asyncio.run(media.backfill_details(gap_s=0)) == 2
     assert done == [second, first] and len(is24_server.requests) == 2
     assert asyncio.run(media.backfill_details(gap_s=0)) == 0 and len(is24_server.requests) == 2
+
+
+def test_refusal_pauses_automatic_requests_and_is_retried_later(fresh_db, monkeypatch):
+    status = {"code": 429}
+
+    def server(request):
+        if status["code"] != 200:
+            return httpx.Response(status["code"])
+        return httpx.Response(200, json=EXPOSE)
+
+    serve(monkeypatch, server)
+    first = add_is24_listing(fresh_db, fredy_id="a")
+    second = add_is24_listing(fresh_db, fredy_id="b")
+    assert asyncio.run(media.ensure_details(second)) is False and media.is24_paused()
+    assert fresh_db.get_listing(second)["media_fetched_at"] is None  # not recorded: tried again later
+    assert asyncio.run(media.ensure_details(first)) is False  # paused: no request at all
+
+    # a listing refused by the earlier version (recorded as 429) counts as missing too
+    fresh_db.set_media_state(first, fresh_db.now_iso(), "Exposé nicht abrufbar (HTTP 429).")
+    status["code"] = 200
+    monkeypatch.setattr(media, "_paused_until", 0.0)  # the pause is over
+    assert asyncio.run(media.backfill_details(gap_s=0)) == 2
+    assert "Warmmiete" in fresh_db.get_listing(first)["details"] and fresh_db.get_listing(first)["media_error"] is None
+
+
+def test_gone_listing_is_recorded_and_not_asked_again(fresh_db, monkeypatch):
+    requests = []
+    serve(monkeypatch, lambda request: requests.append(request) or httpx.Response(404))
+    listing_id = add_is24_listing(fresh_db)
+    assert asyncio.run(media.ensure_details(listing_id)) is False and not media.is24_paused()
+    assert "HTTP 404" in fresh_db.get_listing(listing_id)["media_error"]
+    assert asyncio.run(media.backfill_details(gap_s=0)) == 0 and len(requests) == 1
+
+
+def test_big_batch_fetches_only_the_first_ones_right_away(fresh_db, is24_server, monkeypatch):
+    monkeypatch.setattr(media, "NEW_DETAILS_MAX", 2)
+    started = []
+    monkeypatch.setattr(media, "schedule_backfill", lambda: started.append(True))
+    ids = [add_is24_listing(fresh_db, fredy_id=f"x{i}") for i in range(4)]
+    asyncio.run(media.fetch_details(ids, gap_s=0))
+    assert len(is24_server.requests) == 2 and started == [True]
+    assert [bool(fresh_db.get_listing(i)["details"]) for i in ids] == [True, True, False, False]
