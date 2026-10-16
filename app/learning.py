@@ -339,11 +339,12 @@ def _parse_json(text: str) -> dict | None:
 
 
 async def _ask_json(settings: dict, *, purpose: str, listing_id: int | None, system: str, user: str, schema: dict,
-                    shape: str, max_tokens: int, effort: str, timeout: float | None = None) -> dict:
+                    shape: str, max_tokens: int, effort: str, timeout: float | None = None,
+                    model: str | None = None) -> dict:
     """One Claude call that answers with a JSON object. Budget check first; tokens and cost go to llm_usage before
     the answer is read (a refusal or bad answer is paid for too). Raises BudgetExceeded / LLMError."""
     llm.check_budget(settings)
-    provider, model = provider_of(settings), model_of(settings)
+    provider, model = provider_of(settings), model or model_of(settings)
     client = llm._get_client(provider)
     if timeout:
         client = client.with_options(timeout=timeout)

@@ -12,6 +12,34 @@
   </div>
 </div>
 
+{# Search (text only): "Suchen" = every word must appear (free), "Mit Claude suchen" = by meaning (search.py). #}
+<form method="get" action="/" class="search-listings" aria-label="Inserate durchsuchen">
+  <label for="search-q">Inserate durchsuchen</label>
+  <div class="add-row">
+    <input type="search" id="search-q" name="q" value="{{ search.query if search else '' }}" maxlength="300"
+      placeholder="z. B. Montanusstraße, Balkon, ruhig mit Garten …" autocomplete="off" enterkeyhint="search">
+    <button type="submit">Suchen</button>
+  </div>
+  <div class="search-more">
+    <button type="submit" formmethod="post" formaction="/search" class="secondary outline btn-sm">🔎 Mit Claude suchen</button>
+    <small class="muted">„Suchen“ findet Wörter (kostenlos). Claude versteht auch Umschreibungen wie „ruhig, nah am Grünen“ – ein paar Cent pro Suche.</small>
+  </div>
+</form>
+
+{% if search %}
+<div class="search-result" role="status">
+  {% if search.error %}<div class="flash err bare" role="alert">{{ search.error }}</div>{% endif %}
+  <p><strong>{{ listings|length }} {{ "Treffer" }}</strong> für „{{ search.query }}“
+    {%- if search.mode == "claude" %} · mit Claude{% if search.cost is not none %} · {{ search.cost|eur }}{% endif %}{% else %} · Wortsuche{% endif %}
+    · <a href="/">Suche zurücksetzen</a></p>
+  {% if search.mode == "words" and not listings %}
+  <p class="help">{% if search.no_terms %}Die Anfrage enthält kein Suchwort (Wörter wie „Wohnung“ oder „mit“ zählen nicht).{% else %}Kein Inserat enthält alle Wörter.{% endif %}
+    „🔎 Mit Claude suchen“ findet auch Inserate, die es anders formulieren.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if not search %}
 {# An ImmoScout24 exposé added by hand: fetched now, then posted to Telegram with its pictures (web.listing_add). #}
 <form method="post" action="/listings/add" class="add-listing" id="hinzufuegen">
   <label for="add-url">Inserat per Link hinzufügen</label>
@@ -24,7 +52,9 @@
   <label class="add-draft"><input type="checkbox" name="draft" value="1" checked> gleich Anschreiben schreiben lassen</label>
   <small class="muted">Nur ImmoScout24. Holt Exposé und Bilder (einige Sekunden) und schickt sie mit den Buttons an Telegram.</small>
 </form>
+{% endif %}
 
+{% if not search %}
 <section class="stats" aria-label="Überblick">
   <div class="stat stat-cost{% if costs.over %} is-over{% endif %}"><span class="label">Kosten {{ months[month_no - 1] if 1 <= month_no <= 12 else stats.month }}</span><span class="value">{{ stats.cost_month|eur }}</span>
     {%- if costs.budget %}{{ cost_track(costs, slim=True) }}{% endif %}
@@ -40,6 +70,7 @@
   <a href="/?status={{ key }}" {% if status_filter == key %}aria-current="page"{% endif %}><span class="dot st-{{ key }}" aria-hidden="true"></span>{{ label }} <span class="n">{{ stats.by_status.get(key, 0) }}</span></a>
   {% endfor %}
 </nav>
+{% endif %}
 
 {% if listings %}
 <ul class="listing-list">
@@ -62,6 +93,7 @@
           {% if l.size %}<span>{{ l.size }}</span>{% endif %}
           <span class="portal">{{ l.portal }}</span>
         </div>
+        {% if l.why %}<span class="lc-why">🔎 {{ l.why }}</span>{% endif %}
         {% if l.draft_count %}
         <span class="lc-meta">{{ l.draft_count }} {{ "Entwurf" if l.draft_count == 1 else "Entwürfe" }} · {{ l.cost_eur|eur }}</span>
         {% endif %}

@@ -169,8 +169,16 @@
         var type = res.headers.get("content-type") || "";
         if (type.indexOf("application/json") === 0) {
           return res.json().then(function (body) {
-            if (body && typeof body.location === "string" && body.location.charAt(0) === "/") location.replace(body.location);
-            else location.reload();
+            if (!body || typeof body.location !== "string" || body.location.charAt(0) !== "/") { location.reload(); return; }
+            var target = new URL(body.location, location.href);
+            // Same path and query (only "#…" differs): replace() would just jump to the anchor without loading
+            // the page, and the buttons would keep spinning. So set the address, then reload.
+            if (target.pathname + target.search === location.pathname + location.search) {
+              history.replaceState(history.state, "", target.href);
+              location.reload();
+            } else {
+              location.replace(target.href);
+            }
           });
         }
         return res.text().then(function (html) { document.open(); document.write(html); document.close(); });

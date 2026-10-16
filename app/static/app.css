@@ -891,11 +891,16 @@ details.rule-add button { width: auto; margin: 0; }
 .ed-quick button { flex: 1 1 auto; width: auto; margin: 0; padding: .45rem .7rem; font-size: .88rem; white-space: nowrap; }
 
 /* Listings: "Inserat per Link hinzufügen" */
-.add-listing { margin: 0 0 1.25rem; padding: .85rem 1rem; border: 1px solid var(--pico-card-border-color); border-radius: var(--radius-sm); background: var(--pico-card-background-color); }
-.add-listing > label[for] { font-weight: 600; margin-bottom: .4rem; }
-.add-listing .add-row { display: flex; gap: .5rem; }
-.add-listing .add-row input { margin: 0; flex: 1 1 auto; min-width: 0; }
-.add-listing .add-row button { margin: 0; flex: 0 0 auto; width: auto; }
+.add-listing, .search-listings { margin: 0 0 1.25rem; padding: .85rem 1rem; border: 1px solid var(--pico-card-border-color); border-radius: var(--radius-sm); background: var(--pico-card-background-color); }
+.add-listing > label[for], .search-listings > label[for] { font-weight: 600; margin-bottom: .4rem; }
+.add-listing .add-row, .search-listings .add-row { display: flex; gap: .5rem; }
+.add-listing .add-row input, .search-listings .add-row input { margin: 0; flex: 1 1 auto; min-width: 0; }
+.add-listing .add-row button, .search-listings .add-row button { margin: 0; flex: 0 0 auto; width: auto; }
 .add-listing .add-draft { display: flex; align-items: center; gap: .45rem; margin: .6rem 0 .25rem; font-size: .92rem; }
 .add-listing .add-draft input { margin: 0; }
 .add-listing small { display: block; }
+.search-listings .search-more { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .75rem; margin-top: .6rem; }
+.search-listings .search-more button { margin: 0; width: auto; }
+.search-result { margin: 0 0 1rem; }
+.search-result p { margin: 0 0 .35rem; }
+.lc-why { display: block; margin-top: .25rem; font-size: .88rem; color: var(--accent); }

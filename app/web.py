@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import bot, db, is24, learning, llm, media, portals, settings, textdiff, textfmt, vault
+from . import bot, db, is24, learning, llm, media, portals, search, settings, textdiff, textfmt, vault
 
 log = logging.getLogger(__name__)
 
@@ -550,21 +550,18 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
     }
 
 
-@router.get("/", dependencies=PAGE)
-def listings_page(request: Request, status: str | None = None, add: str | None = None):
-    if status not in settings.STATUSES:
-        status = None
-    try:  # "Inserat per Link" failed: its message and the URL typed, once (see _add_failed)
-        add_failed = json.loads(_take_once(add) or "null") if add else None
-    except ValueError:
-        add_failed = None
+def _listing_cards(rows: list[dict]) -> list[dict]:
     thumbs = db.thumb_positions()  # listings with stored ImmoScout24 pictures
-    listings = [{
+    return [{
         **row,
         "portal": portals.provider_label(row["provider"]),
         # Server-built link to a stored picture; otherwise the template falls back to Fredy's image_url (safe_url).
         "thumb_url": f"/listing/{row['id']}/media/{thumbs[row['id']]}" if row["id"] in thumbs else None,
-    } for row in db.list_listings(status)]
+    } for row in rows]
+
+
+def _render_listings(request: Request, listings: list[dict], *, status: str | None = None, add_failed=None,
+                     search_info: dict | None = None):
     return render(request, "listings.html", {
         "active": "listings",
         "listings": listings,
@@ -572,7 +569,51 @@ def listings_page(request: Request, status: str | None = None, add: str | None =
         "costs": cost_overview(),
         "status_filter": status,
         "add_failed": add_failed,
+        "search": search_info,  # {"query", "mode": "words"/"claude", "error", "cost"} while searching
     })
+
+
+@router.get("/", dependencies=PAGE)
+def listings_page(request: Request, status: str | None = None, add: str | None = None, q: str | None = None):
+    if status not in settings.STATUSES:
+        status = None
+    try:  # "Inserat per Link" failed: its message and the URL typed, once (see _add_failed)
+        add_failed = json.loads(_take_once(add) or "null") if add else None
+    except ValueError:
+        add_failed = None
+    query = " ".join((q or "").split())[:search.QUERY_MAX]
+    if query:  # word search: free, every meaningful word must appear (search.keyword_search)
+        rows = search.keyword_search(query, db.list_listings(status, limit=2000))
+        return _render_listings(request, _listing_cards(rows), status=status, add_failed=add_failed,
+                                search_info={"query": query, "mode": "words",
+                                             "no_terms": not search.query_terms(query)})
+    return _render_listings(request, _listing_cards(db.list_listings(status)), status=status, add_failed=add_failed)
+
+
+@router.post("/search", dependencies=ACTION)
+async def listings_claude_search(request: Request, q: str = Form("")):
+    """"Mit Claude suchen": matches by meaning, each with a short reason (search.claude_search, a few cents)."""
+    query = " ".join(q.split())[:search.QUERY_MAX]
+    if not query:
+        return RedirectResponse("/", status_code=303)
+    info = {"query": query, "mode": "claude", "error": None, "cost": None}
+    try:
+        results = await search.claude_search(query)
+    except llm.LLMError as exc:
+        info["error"] = redact(request, str(exc))
+        results = []
+    except Exception:
+        log.exception("Claude search failed")
+        info["error"] = "Unerwarteter Fehler bei der Suche – Details im Log."
+        results = []
+    else:
+        last = db.list_llm_usage(limit=1)
+        if last and last[0]["purpose"] == "search":
+            info["cost"] = last[0]["cost_eur"]
+    cards = _listing_cards([r["listing"] for r in results])
+    for card, result in zip(cards, results):
+        card["why"] = result["why"]
+    return _render_listings(request, cards, search_info=info)
 
 
 ADDED_MESSAGES = {  # /listing/{id}?neu=… after "Inserat per Link"
@@ -1642,7 +1683,7 @@ COST_PARTS = (
     ("rules", "Regel-Vorschläge", "nach „Fertig“ im Editor"),
     ("rewrite", "Profil-Verbesserung", "„Aus Rückmeldungen verbessern“"),
     ("test", "Test-Entwürfe", "Einstellungen"),
-    ("other", "Sonstiges", None),
+    ("other", "Sonstiges", "z. B. Suche mit Claude"),
 )
 
 
