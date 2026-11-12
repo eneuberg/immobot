@@ -381,6 +381,7 @@ async def fredy_webhook(request: Request):
             db.set_meta("fredy_images_last_at", db.now_iso())
     log.info("Fredy webhook: %d listings, %d new, %d with pictures", received, len(new_ids), with_images)
     media.schedule_details(new_ids)  # warm rent etc. for the Telegram message and the dashboard
+    media.schedule_pictures(new_ids)  # Fredy's pictures now; ImmoScout24's once the exposé text is there
     if new_ids and not config.disable_bot:
         bot.schedule_announce(new_ids)
     return {"received": received, "new": len(new_ids)}

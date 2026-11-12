@@ -11,7 +11,10 @@ Local copies: DATA_DIR/media/<listing id>/<position>.jpg (JPEG, max 1024 px), ro
 (`file` is "" until a picture is downloaded). Downloads are polite: one keep-alive connection, one picture
 after the other with a short pause, size and type limits, and the first refusal (403/429/not an image)
 ends the run. Nothing is fetched again automatically - after a failure only on a user action, at most once a
-minute. Used by drafts (llm.py), the "🖼 Bilder" album (bot.py) and the dashboard gallery (web.py).
+minute. New listings get their pictures in the background right after they arrive (schedule_pictures: Fredy's
+right away, ImmoScout24's once the exposé text is there), one listing after the other; listings from before that
+are caught up at startup. Used by drafts (llm.py), the "🖼 Bilder" album (bot.py), the dashboard gallery (web.py)
+and the editor.
 """
 
 import asyncio
@@ -42,6 +45,7 @@ IS24_PAUSE_S = 3600  # no automatic exposé requests for this long after ImmoSco
 REFUSALS = ("(HTTP 429)", "(HTTP 403)")
 RATE_LIMITED = "(HTTP 429)"
 RETRY_AFTER_S = 60  # a failed download can be retried by the user after this long
+PICTURES_GAP_S = 3.0  # between the pictures of two listings downloaded in the background
 KEEP_DAYS = 60  # pictures of listings received longer ago are deleted at startup
 LONG_DESCRIPTION = 500  # Fredy's text is long enough (portal details enabled): no exposé fetch just for text
 NOT_DOWNLOADED = ""  # listing_media.file of a picture known by URL but not downloaded yet
@@ -61,6 +65,8 @@ _media_root: Path | None = None
 _tasks: set[asyncio.Task] = set()  # background exposé fetches (kept referenced)
 _backfill_task: asyncio.Task | None = None
 _on_details = None  # see schedule_backfill
+_picture_queue: list[int] = []  # listings whose pictures the background downloader gets next (schedule_pictures)
+_picture_task: asyncio.Task | None = None
 _paused_until = 0.0  # time.monotonic(); see is24_paused
 _locks: dict[int, asyncio.Lock] = {}  # one per listing, so concurrent triggers fetch only once
 
@@ -397,6 +403,7 @@ async def ensure_details(listing_id: int) -> bool:
             _record(listing_id, "is24", "Exposé konnte nicht gelesen werden.")
             return False
         await store_is24(listing_id, parsed, download=False)
+    schedule_pictures([listing_id])
     return True
 
 
@@ -455,6 +462,45 @@ async def backfill_details(gap_s: float = BACKFILL_GAP_S) -> int:
     if count:
         log.info("Exposé text fetched for %d listing(s) in the background", count)
     return count
+
+
+def _auto_pictures(listing: dict) -> bool:
+    """Whether the background downloader should get this listing's pictures: some are only known by URL, nothing
+    failed, and no ImmoScout24 exposé request is needed for it (the exposé text came first)."""
+    if listing.get("media_error") or not _pending(listing["id"]):
+        return False
+    source = source_of(listing)
+    return source == "fredy" or (source == "is24" and bool(listing.get("details")))
+
+
+async def download_queued(gap_s: float = PICTURES_GAP_S) -> int:
+    """Work through _picture_queue: the pictures of one listing after the other (ensure_media, so a user action on
+    the same listing waits instead of downloading twice). Returns the number of listings handled."""
+    count = 0
+    while _picture_queue:
+        listing = db.get_listing(_picture_queue.pop(0))
+        if listing is None or not _auto_pictures(listing):
+            continue
+        if count:
+            await asyncio.sleep(gap_s)
+        await ensure_media(listing["id"])
+        count += 1
+    return count
+
+
+def schedule_pictures(listing_ids: list[int]) -> None:
+    """Download these listings' pictures in the background (in this order, after those already queued). Call from
+    the event loop."""
+    global _picture_task
+    _picture_queue.extend(i for i in listing_ids if i not in _picture_queue)
+    if _picture_queue and (_picture_task is None or _picture_task.done()):
+        _picture_task = asyncio.create_task(download_queued())
+
+
+def schedule_pending_pictures() -> None:
+    """At startup: the pictures that were never downloaded (listings of the last KEEP_DAYS days, newest first)."""
+    since = (datetime.now(timezone.utc) - timedelta(days=KEEP_DAYS)).isoformat(timespec="seconds")
+    schedule_pictures(db.listing_ids_with_pending_pictures(since))
 
 
 # --- local copies --------------------------------------------------------------

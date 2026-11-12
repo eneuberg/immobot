@@ -362,10 +362,11 @@ def test_expose_in_text(text, expected):
     assert is24.expose_in_text(text) == expected
 
 
-def test_ensure_details_fetches_text_only_then_pictures_on_first_use(fresh_db, is24_server):
+def test_ensure_details_fetches_text_only_then_pictures_on_first_use(fresh_db, is24_server, scheduled_pictures):
     listing_id = add_is24_listing(fresh_db, price="1.100 €")
     assert asyncio.run(media.ensure_details(listing_id)) is True
     assert len(is24_server.requests) == 1  # the exposé, no pictures yet
+    assert scheduled_pictures == [listing_id]  # they follow in the background
     listing = fresh_db.get_listing(listing_id)
     assert "Warmmiete: 1.400 €" in listing["details"] and listing["media_error"] is None
     assert media.stored_pictures(listing_id) == [] and len(fresh_db.list_media(listing_id)) == 11

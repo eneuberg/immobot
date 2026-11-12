@@ -404,6 +404,16 @@ def listing_ids_without_details(since: str) -> list[int]:
     return [row[0] for row in rows]
 
 
+def listing_ids_with_pending_pictures(since: str) -> list[int]:
+    """Listings received since `since` with pictures known by URL but not downloaded, no failed download, newest
+    first."""
+    with connect() as conn:
+        rows = conn.execute("SELECT l.id FROM listings l WHERE l.received_at >= ? AND l.media_error IS NULL "
+                            "AND EXISTS (SELECT 1 FROM listing_media m WHERE m.listing_id = l.id AND m.file = '') "
+                            "ORDER BY l.id DESC", (since,)).fetchall()
+    return [row[0] for row in rows]
+
+
 def set_listing_details(listing_id: int, details: str | None, contact_name: str | None) -> None:
     with connect() as conn:
         conn.execute("UPDATE listings SET details = ?, contact_name = ? WHERE id = ?", (details, contact_name, listing_id))

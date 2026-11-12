@@ -40,6 +40,19 @@ def no_picture_network(tmp_path, monkeypatch):
     monkeypatch.setattr(media, "_paused_until", 0.0)  # automatic exposé requests not paused
     monkeypatch.setattr(media, "_backfill_task", None)
     monkeypatch.setattr(media, "_on_details", None)
+    monkeypatch.setattr(media, "_picture_queue", [])
+    monkeypatch.setattr(media, "_picture_task", None)
+
+
+@pytest.fixture(autouse=True)
+def scheduled_pictures(monkeypatch):
+    """The background picture downloader only records what it was asked for (media.schedule_pictures); tests of
+    the downloader itself call media.download_queued or the saved REAL_SCHEDULE_PICTURES."""
+    from app import media
+
+    calls: list[int] = []
+    monkeypatch.setattr(media, "schedule_pictures", lambda listing_ids: calls.extend(listing_ids))
+    return calls
 
 
 @pytest.fixture(autouse=True)

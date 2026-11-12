@@ -196,6 +196,54 @@ def test_fredy_download_failure_and_retry_continues(fresh_db, monkeypatch):
     assert [str(r.url) for r in server.pictures[3:]] == ["https://pictures.immowelt.de/c.jpg"]  # only the missing one
 
 
+REAL_SCHEDULE_PICTURES = media.schedule_pictures  # saved before conftest replaces it in each test
+
+
+def test_background_pictures_one_listing_after_the_other(fresh_db, hosts):
+    fredy = add_listing(fredy_id="fr", provider="immowelt", url="https://www.immowelt.de/expose/1")
+    media.store_fredy_images(fredy, media.parse_fredy_images(FREDY_IMAGES))
+    is24_text_first = add_listing(fredy_id="is")
+    asyncio.run(media.store_is24(is24_text_first, is24.parse_expose(EXPOSE), download=False))
+    no_text_yet = add_listing(fredy_id="nt", url="https://www.immobilienscout24.de/expose/2")
+    failed = add_listing(fredy_id="fa", provider="immowelt", url="https://www.immowelt.de/expose/3")
+    media.store_fredy_images(failed, media.parse_fredy_images(FREDY_IMAGES))
+    fresh_db.set_media_state(failed, "2000-01-01T00:00:00+00:00", "Bild nicht abrufbar (HTTP 404) – abgebrochen.")
+
+    media._picture_queue.extend([fredy, is24_text_first, no_text_yet, failed, fredy])
+    assert asyncio.run(media.download_queued(gap_s=0)) == 2
+    assert len(media.stored_pictures(fredy)) == 3 and len(media.stored_pictures(is24_text_first)) == 11
+    assert hosts.is24_api_calls == []  # pictures only: never an exposé request from the background
+    assert media.stored_pictures(no_text_yet) == [] and media.stored_pictures(failed) == []  # failed: user retries
+    assert media._picture_queue == []
+
+
+def test_schedule_pictures_starts_one_worker(fresh_db, hosts):
+    first = add_listing(fredy_id="a", provider="immowelt", url="https://www.immowelt.de/expose/1")
+    second = add_listing(fredy_id="b", provider="immowelt", url="https://www.immowelt.de/expose/2")
+    for listing_id in (first, second):
+        media.store_fredy_images(listing_id, media.parse_fredy_images(FREDY_IMAGES))
+
+    async def run():
+        REAL_SCHEDULE_PICTURES([first])
+        REAL_SCHEDULE_PICTURES([first, second])  # first only once, same worker
+        assert media._picture_queue == [first, second]
+        await media._picture_task
+
+    asyncio.run(run())
+    assert len(media.stored_pictures(first)) == 3 and len(media.stored_pictures(second)) == 3
+    assert len(hosts.pictures) == 6
+
+
+def test_pending_pictures_caught_up_at_startup(fresh_db, scheduled_pictures):
+    old = add_listing(fredy_id="o", provider="immowelt", url="https://www.immowelt.de/expose/1")
+    new = add_listing(fredy_id="n", provider="immowelt", url="https://www.immowelt.de/expose/2")
+    done = add_listing(fredy_id="d", provider="immowelt", url="https://www.immowelt.de/expose/3")
+    for listing_id in (old, new):
+        media.store_fredy_images(listing_id, media.parse_fredy_images(FREDY_IMAGES))
+    media.schedule_pending_pictures()
+    assert scheduled_pictures == [new, old] and done not in scheduled_pictures
+
+
 def test_stored_url_that_breaks_the_policy_is_not_fetched(fresh_db, hosts):
     listing_id = add_listing(provider="immowelt", url="https://www.immowelt.de/expose/1")
     fresh_db.replace_media(listing_id, [{"position": 1, "caption": "", "source_url": "https://10.0.0.1/x.jpg", "file": ""}])
@@ -353,7 +401,7 @@ def hook(client, listings):
                        headers={"Authorization": f"Bearer {TEST_SECRETS['FREDY_WEBHOOK_TOKEN']}"})
 
 
-def test_webhook_stores_images_without_duplicates(client):
+def test_webhook_stores_images_without_duplicates(client, scheduled_pictures):
     listing = {"id": "w1", "title": "T", "url": "https://www.immowelt.de/expose/1", "imageUrl": "https://img.example/1.jpg",
                "images": FREDY_IMAGES + [{"url": "http://insecure.example.de/x.jpg"}, {"url": "https://127.0.0.1/x"}, 5]}
     r = hook(client, [listing, {"id": "w2", "title": "ohne Bilder"}])
@@ -363,6 +411,7 @@ def test_webhook_stores_images_without_duplicates(client):
     assert [r["source_url"].rsplit("/", 1)[1] for r in stored] == ["grundriss.png", "a.jpg", "c.jpg"]
     assert db.get_listing(rows["w1"])["media_source"] == "fredy" and db.list_media(rows["w2"]) == []
     assert db.get_listing(rows["w1"])["image_url"] == "https://img.example/1.jpg"  # imageUrl unchanged
+    assert sorted(scheduled_pictures) == sorted(rows.values())  # downloaded in the background
     hook(client, [listing])  # sent again
     assert len(db.list_media(rows["w1"])) == 3
     hook(client, [{"id": "w2", "title": "jetzt mit Bildern", "images": FREDY_IMAGES[:1]}])  # later webhook with images
