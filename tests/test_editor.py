@@ -568,6 +568,22 @@ def test_mark_sent(client, lid):
     assert "als gesendet markiert" in page and "Hast du die Nachricht abgeschickt?" not in page
 
 
+def test_mark_dismissed_after_finish(client, lid):
+    """Not sent after all: "Doch uninteressant" in the card and the overlay sets the listing to "dismissed"."""
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    editor_cookie(client, lid)
+    _, fields = open_editor(client, lid)
+    post(client, lid, "finish", fields, text="Ende")
+    page = client.get(f"/editor/{lid}").text
+    assert page.count(f'action="/editor/{lid}/dismiss"') == 2 and "❌ Doch uninteressant" in page
+    r = post(client, lid, "dismiss", {"token": fields["token"]})
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=dismissed#ende"
+    listing = db.get_listing(lid)
+    assert listing["status"] == "dismissed" and listing["auto_status"] is None and client.refreshed[-1] == lid
+    page = client.get(f"/editor/{lid}").text
+    assert "als uninteressant markiert" in page and "Hast du die Nachricht abgeschickt?" not in page
+
+
 def test_new_round_from_a_newer_draft(client, lid):
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     editor_cookie(client, lid)

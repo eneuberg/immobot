@@ -63,6 +63,7 @@ MESSAGES = {
     "revision_kept": "Überarbeitung übernommen.",
     "revision_undone": "Zurück zu deinem Text von vor der Überarbeitung.",
     "sent": "Als gesendet markiert.",
+    "dismissed": "Als uninteressant markiert.",
     "draft": "Entwurf erzeugt.",
     "media": "Inserat neu geladen.",
     "media_loaded": "Bilder geladen.",
@@ -649,6 +650,18 @@ async def editor_mark_sent(request: Request, listing_id: str, token: str = Form(
     db.set_listing_status(listing["id"], "sent")
     bot.schedule_refresh(listing["id"])
     return _back(listing["id"], "sent", "ende")
+
+
+@router.post("/editor/{listing_id}/dismiss", dependencies=ACTION)
+async def editor_mark_dismissed(request: Request, listing_id: str, token: str = Form("")):
+    """"Uninteressant" after "Fertig" (not sent after all): status "dismissed", the Telegram message collapses like
+    after "❌ Uninteressant"; the person's own choice, so the automatic sorting-out leaves it alone."""
+    listing, mode, denied = _gate(request, listing_id, token)
+    if denied is not None:
+        return denied
+    db.set_listing_status(listing["id"], "dismissed")
+    bot.schedule_refresh(listing["id"])
+    return _back(listing["id"], "dismissed", "ende")
 
 
 @router.post("/editor/{listing_id}/draft", dependencies=ACTION)

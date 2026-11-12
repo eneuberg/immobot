@@ -212,11 +212,12 @@
         <div class="ed-actions">
           <button type="button" class="copy-btn" data-copy="ed-final">Kopieren</button>
           {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary" data-opens-listing="{{ listing.id }}">📨 Inserat öffnen ↗</a>{% endif %}
-          {% if listing.status == "sent" %}<span class="badge ok ed-sent">✓ als gesendet markiert</span>{% endif %}
+          {% if listing.status == "sent" %}<span class="badge ok ed-sent">✓ als gesendet markiert</span>
+          {% elif listing.status == "dismissed" %}<span class="badge ed-sent">✕ als uninteressant markiert</span>{% endif %}
           <form method="post" action="/editor/{{ listing.id }}/reopen">{{ hidden() }}<button type="submit" class="secondary outline">Weiter bearbeiten</button></form>
         </div>
       </article>
-      {% if listing.status != "sent" %}
+      {% if listing.status not in ("sent", "dismissed") %}
       {# The same question twice: as a card here, and as an overlay that editor.js opens every time the person comes
          back to this page (other tab, other app); it closes with ✕, "Noch nicht", Esc or a click beside it. #}
       <article class="ed-card ed-ask-sent" id="abgeschickt">
@@ -224,6 +225,7 @@
         <p class="help">Kopieren, im Inserat einfügen und absenden – dann hier bestätigen. Das Inserat steht danach auf „gesendet“, auch in Telegram.</p>
         <div class="ed-actions">
           <form method="post" action="/editor/{{ listing.id }}/sent">{{ hidden() }}<button type="submit">✅ Ja, abgeschickt</button></form>
+          <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit" class="secondary outline">❌ Doch uninteressant</button></form>
         </div>
       </article>
       <dialog class="ed-ask-dialog" data-ask-sent="{{ listing.id }}" aria-labelledby="ask-sent-title">
@@ -233,10 +235,12 @@
             <h2 id="ask-sent-title">Hast du die Nachricht abgeschickt?</h2>
           </header>
           <p class="ed-ask-listing">{{ listing.title or "Dieses Inserat" }}</p>
-          <p class="help">Dann steht das Inserat auf „gesendet“, auch in Telegram. Willst du noch etwas ändern, schließ das Fenster einfach.</p>
+          <p class="help">„Ja“ setzt das Inserat auf „gesendet“, „Doch uninteressant“ auf „uninteressant“ – beides auch in
+            Telegram. Willst du noch etwas ändern, schließ das Fenster einfach.</p>
           <footer class="ed-actions">
-            <button type="button" class="secondary outline" data-ask-close>Noch nicht</button>
             <form method="post" action="/editor/{{ listing.id }}/sent">{{ hidden() }}<button type="submit" autofocus>✅ Ja, abgeschickt</button></form>
+            <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit" class="secondary outline">❌ Doch uninteressant</button></form>
+            <button type="button" class="secondary outline" data-ask-close>Noch nicht</button>
           </footer>
         </article>
       </dialog>
