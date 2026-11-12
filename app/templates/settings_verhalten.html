@@ -94,11 +94,15 @@
       <a href="/settings#verbessern">ins Profil einarbeiten</a>.</p>
     <label class="check">
       <input type="checkbox" role="switch" name="use_examples" value="1" {% if values.use_examples|as_bool %}checked{% endif %}>
-      <span>Endversionen als Stil-Beispiele nutzen <small>Deine {{ example_count }} neuesten fertigen Texte aus dem Editor zeigen Claude Ton, Aufbau und Länge.</small></span>
+      <span>Endversionen als Stil-Beispiele nutzen <small>Bis zu {{ example_count }} deiner fertigen Texte aus dem Editor zeigen Claude deine Stimme: die neuesten und ein paar ältere, bei den neuesten auch, was du an Claudes Entwurf geändert hast. Claude soll sie nicht kopieren, sondern so schreiben wie du.</small></span>
     </label>
     <label class="check">
       <input type="checkbox" role="switch" name="use_rules" value="1" {% if values.use_rules|as_bool %}checked{% endif %}>
-      <span>Gelernte Regeln nutzen <small>Aktive Regeln gelten für jeden Entwurf. Nach „Fertig“ im Editor schlägt Claude neue vor.</small></span>
+      <span>Gelernte Regeln nutzen <small>Aktive Regeln gelten als deine Tendenzen für jeden Entwurf (mit „immer“ markierte ausnahmslos). Nach „Fertig“ im Editor schlägt Claude neue vor.</small></span>
+    </label>
+    <label class="check">
+      <input type="checkbox" role="switch" name="use_voice_guide" value="1" {% if values.use_voice_guide|as_bool %}checked{% endif %}>
+      <span>Hinweise gegen KI-Ton <small>Feste Schreibhinweise im Prompt: ein Gesamturteil statt Lob für jedes Merkmal, keine Werbewörter aus dem Inserat, nichts aufbauschen oder erfinden, schlichte Sätze.</small></span>
     </label>
     <p class="learn-links"><a href="#regeln">{{ plural(rules_active, "aktive Regel", "aktive Regeln") }}</a>
       {%- if rules_proposed %} · <a href="#regeln">{{ rules_proposed|length }} {{ "wartet" if rules_proposed|length == 1 else "warten" }} auf dich</a>{% endif %}
@@ -230,7 +234,7 @@
     <span class="badge">{{ examples|length }} von {{ example_count }}</span>
   </div>
   {{ card_flash("beispiele") }}
-  <p class="help">Die {{ example_count }} neuesten Endversionen aus dem 📝 Editor stehen als Stil-Beispiele in Claudes Anweisungen.</p>
+  <p class="help">Bis zu {{ example_count }} Endversionen aus dem 📝 Editor stehen als Stil-Beispiele in Claudes Anweisungen: die neuesten und, über die Zeit verteilt, ein paar ältere – damit Claude deine Stimme sieht und nicht einen einzelnen Text nachbaut.</p>
   {% if not values.use_examples|as_bool %}
   <div class="callout info"><span>Beispiele werden gerade nicht genutzt („Endversionen als Stil-Beispiele nutzen“ ist aus).</span></div>
   {% endif %}
@@ -250,7 +254,7 @@
     </li>
     {% endfor %}
   </ul>
-  {% if examples_waiting %}<p class="help">{{ plural(examples_waiting, "weitere Endversion rückt", "weitere Endversionen rücken") }} nach, wenn du ein Beispiel entfernst.</p>{% endif %}
+  {% if examples_waiting %}<p class="help">{{ plural(examples_waiting, "weitere Endversion ist", "weitere Endversionen sind") }} gerade nicht dabei – mit jeder neuen Endversion verschiebt sich die Auswahl.</p>{% endif %}
   {% elif examples_off %}
   <p class="empty-line">Gerade wird keine Endversion als Beispiel genutzt.</p>
   {% else %}

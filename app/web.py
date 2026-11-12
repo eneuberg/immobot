@@ -69,7 +69,8 @@ SETTINGS_SECTIONS = {
 SECTION_FIELDS = {
     "profil": [*TEXT_SETTINGS, "target_words"],
     "verhalten": ["effort", "monthly_budget_eur", "eur_usd_rate", "send_image", "llm_max_images", "is24_fetch",
-                  "followup_delay_s", "paused", "auto_dismiss_hours", "use_examples", "use_rules"],
+                  "followup_delay_s", "paused", "auto_dismiss_hours", "use_examples", "use_rules",
+                  "use_voice_guide"],
     "zugaenge": ["provider", "model", "fredy_base_url"],  # the model list depends on the provider and its key
 }
 FIELD_SECTION = {field: section for section, fields in SECTION_FIELDS.items() for field in fields}
@@ -1042,7 +1043,7 @@ def _learning_context() -> dict:
     by_id = {rule["id"]: rule for rule in rules}
     history = [rule for rule in rules if rule["status"] in ("merged", "rejected", "replaced")]
     history.sort(key=lambda rule: (rule["decided_at"] or rule["created_at"] or "", rule["id"]), reverse=True)
-    examples = db.example_sessions(llm.EXAMPLE_COUNT)
+    examples = llm.pick_examples(db.example_sessions(None))
     return {
         "rules_proposed": [{**rule, "target": by_id.get(rule["replaces_rule_id"])}
                            for rule in rules if rule["status"] == "proposed"],

@@ -74,8 +74,8 @@ def fake_generate(monkeypatch):
 
     async def generate(listing, settings, kind, previous_text=None, instruction=None, pictures=None, rules=None,
                        examples=None):
-        calls.append({"kind": kind, "previous_text": previous_text, "instruction": instruction, "rules": rules,
-                      "examples": examples})
+        calls.append({"kind": kind, "previous_text": previous_text, "instruction": instruction,
+                      "rules": [rule["text"] for rule in rules or []], "examples": examples})
         return llm.DraftResult(text=f"Fassung {len(calls)}", hint=None, model="claude-opus-5-5", input_tokens=100,
                                output_tokens=50, cache_read_tokens=0, cache_write_tokens=0, cost_usd=0.011)
 
@@ -266,7 +266,7 @@ def test_learned_context_reads_rules_and_examples(lid):
     other = db.insert_listing({**LISTING, "fredy_id": "L2", "title": "Zweite"})[0]
     second = done_session(other, final="Zweite Endfassung")
     rules, examples = llm.learned_context(db.get_settings())
-    assert rules == ["Regel A"]
+    assert [rule["text"] for rule in rules] == ["Regel A"]
     assert [e["final_text"] for e in examples] == ["Zweite Endfassung", "Erste Endfassung"]
     assert examples[0]["listing_title"] == "Zweite"
     learning.set_session_example(second["id"], False)
@@ -698,7 +698,7 @@ def test_add_manual_rule(lid, monkeypatch):
     assert rule["proposed_text"] is None and rule["reason"] is None and rule["decided_at"]  # written by the user
     loose = learning.add_manual_rule("Nenne kein Einzugsdatum.")  # Verhalten → Lernen: without a session
     assert db.get_rule(loose["id"])["session_id"] is None
-    assert llm.learned_context(db.get_settings())[0] == [rule["text"], "Nenne kein Einzugsdatum."]  # in use at once
+    assert [r["text"] for r in llm.learned_context(db.get_settings())[0]] == [rule["text"], "Nenne kein Einzugsdatum."]
     with pytest.raises(learning.LearningError, match="leer"):
         learning.add_manual_rule("   ")
     with pytest.raises(learning.LearningError, match="Höchstens 300"):

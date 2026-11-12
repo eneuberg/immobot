@@ -116,7 +116,7 @@ def test_system_prompt_blank_system_prompt_falls_back_to_default():
 
 def test_user_text_initial_contains_listing_block_and_task():
     text = llm.build_user_text(LISTING, "initial")
-    assert text.startswith("<inserat>\n")
+    assert text.startswith("Heute ist ") and "vorbei" in text.split("\n")[0] and "\n\n<inserat>\n" in text
     inserat = text.split("</inserat>")[0]
     for expected in ["Titel: Helle 2-Zimmer-Wohnung", "Miete: 780 €", "Größe: 54 m²", "Adresse: Musterstr. 12",
                      "Portal: ImmoScout24", "Link: https://www.immobilienscout24.de/expose/123",
@@ -842,7 +842,7 @@ def test_generate_draft_sends_stored_pictures_up_to_the_limit(fake_client, monke
     (call,) = fake_client.beta.messages.calls
     content = call["messages"][0]["content"]
     assert sum(b["type"] == "image" for b in content) == expected
-    assert content[-1]["type"] == "text" and content[-1]["text"].startswith("<inserat>")
+    assert content[-1]["type"] == "text" and content[-1]["text"].startswith("Heute ist ")
     if expected:
         assert content[0] == {"type": "text", "text": "Bild 1: Grundriss"}
 
@@ -895,3 +895,45 @@ def test_create_and_store_draft_without_media_passes_none(fresh_db, listing_id, 
     monkeypatch.setattr(llm, "generate_draft", generate)
     asyncio.run(llm.create_and_store_draft(listing_id, "initial"))
     assert seen == [None]  # no IS24 pictures -> Fredy's single image will be used
+
+
+# --- learned context: date, examples, rules, voice --------------------------------
+
+def test_today_line_in_berlin_time():
+    from datetime import datetime, timezone
+    assert llm.today_line(datetime(2026, 11, 12, 23, 30, tzinfo=timezone.utc)) == "Heute ist Freitag, der 13.11.2026."
+
+
+def test_pick_examples_newest_half_and_spread_older():
+    sessions = [{"id": i, "original_text": "Claude", "final_text": "Claude" if i % 2 else f"Person {i}"}
+                for i in range(20, 0, -1)]  # newest first
+    picked = llm.pick_examples(sessions, 6)
+    assert [s["id"] for s in picked] == [20, 19, 18, 17, 12, 6]
+    assert [s["id"] for s in picked if s["contrast"]] == [20, 18]  # the two newest the person changed
+    assert llm.pick_examples(sessions[:2], 6) == [{**s, "contrast": not s["id"] % 2} for s in sessions[:2]]
+
+
+def test_example_block_shows_the_changes_of_contrast_examples():
+    example = {"final_text": "Hallo, das ist eine schöne Wohnung!", "original_text": "Guten Tag, Ihre Wohnung gefällt mir.",
+               "listing_title": "Altbau", "contrast": True}
+    block = llm._example_block(example)
+    assert "Geändert an Claudes Entwurf (- Claude, + die Person):" in block and "- Guten Tag" in block
+    assert "Geändert" not in llm._example_block({**example, "contrast": False})
+
+
+def test_rules_as_tendencies_with_scope_and_strength():
+    prompt = llm.build_system_prompt(settings_with(use_rules="1"), rules=[
+        {"text": "Weniger Lob, ein Gesamturteil.", "scope": None, "strength": "soft"},
+        {"text": "Gruß mit „Viele Grüße“.", "scope": "", "strength": "hard"},
+        {"text": "Gern ein „:)“ am Ende.", "scope": "private Vermieter, lockerer Ton", "strength": "soft"},
+        "Alte Regel als Text.",
+    ])
+    section = prompt.split("## Gelernte Vorlieben\n")[1]
+    assert section.splitlines()[:4] == ["- Weniger Lob, ein Gesamturteil.", "- immer: Gruß mit „Viele Grüße“.",
+                                        "- Gern ein „:)“ am Ende. (wenn: private Vermieter, lockerer Ton)",
+                                        "- Alte Regel als Text."]
+
+
+def test_voice_guide_switch():
+    assert "## Wie die Nachricht klingen soll" in llm.build_system_prompt(settings_with(use_voice_guide="1"))
+    assert "## Wie die Nachricht klingen soll" not in llm.build_system_prompt(settings_with(use_voice_guide="0"))

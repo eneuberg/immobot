@@ -145,6 +145,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "fredy_base_url": "",  # portals.fredy_url: own "In Fredy öffnen" links; empty = the fredyUrl Fredy sent
     "use_examples": "1",  # learning.py: the newest finished editor texts go into the system prompt as examples
     "use_rules": "1",  # learning.py: active learned rules go into the system prompt; rules are proposed on "Fertig"
+    "use_voice_guide": "1",  # llm.VOICE_GUIDE in the system prompt: how to sound like the person, not like an AI
 }
 
 # The settings that make up the writing profile. Every change of one of them is versioned (db.snapshot_profile).

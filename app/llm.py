@@ -18,16 +18,17 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 import anthropic
 import httpx
 
-from . import db, images, media, rent, vault
+from . import db, images, media, rent, textdiff, vault
 from .portals import provider_label, safe_url
 from .settings import (
-    DEFAULT_SYSTEM_PROMPT, DRAFT_KINDS, EFFORTS, FEEDBACK_SOURCES, PRICES, PROVIDERS, QUICK_FEEDBACK_KINDS, as_bool,
-    as_float, as_int, cost, fmt_eur, fmt_money, model_of, provider_of, to_usd,
+    DEFAULT_SYSTEM_PROMPT, DRAFT_KINDS, EFFORTS, FEEDBACK_SOURCES, LOCAL_TZ, PRICES, PROVIDERS, QUICK_FEEDBACK_KINDS,
+    as_bool, as_float, as_int, cost, fmt_eur, fmt_money, model_of, provider_of, to_usd,
 )
 
 log = logging.getLogger(__name__)
@@ -45,10 +46,27 @@ MAX_IMAGES_LIMIT = 20  # upper bound of the llm_max_images setting
 VARIANT_KINDS = ("regenerate", "shorter", "formal", "custom")
 INSTRUCTION_MAX_CHARS = 500
 DESCRIPTION_MAX_CHARS = 12000
-EXAMPLE_COUNT = 3  # finished editor texts in "## Beispiele"
+EXAMPLE_COUNT = 6  # finished editor texts in "## Beispiele": the newest half, the rest spread over older ones
 EXAMPLE_MAX_CHARS = 1500
-EXAMPLES_INTRO = ("So hat die suchende Person ihre letzten Nachrichten selbst abgeschickt. Übernimm Ton, Aufbau und "
-                  "Länge, aber keine Inhalte, die nur zu jenem Inserat passen.")
+CONTRAST_COUNT = 2  # of those, the newest changed ones also show what the person changed in Claude's draft
+CONTRAST_DIFF_CHARS = 900
+EXAMPLES_INTRO = (
+    "So hat die suchende Person frühere Nachrichten abgeschickt. Sie zeigen ihre Stimme: Ton, Länge, wie direkt sie "
+    "schreibt, was sie weglässt. Sie sind keine Schablone. Übernimm keine Sätze, Einstiege oder Inhalte daraus, "
+    "sondern schreib so, wie die Person zu diesem Inserat schreiben würde, und variiere Einstieg und Satzbau. Wo bei "
+    "einem Beispiel steht, was sie an Claudes Entwurf geändert hat, zeigt das, was ihr wichtig ist."
+)
+# Always part of the system prompt (setting use_voice_guide): how to sound like a person, not like an AI. Positive
+# targets with the reason, as the prompting guides advise; the patterns are the ones the user kept deleting.
+VOICE_GUIDE = """## Wie die Nachricht klingen soll
+Die Nachricht soll klingen, als hätte die Person sie selbst am Handy geschrieben: direkt, freundlich, ohne Werbesprache. Vermieter bekommen viele Anfragen, und glatte, überschwängliche Texte wirken austauschbar.
+- Ein ehrliches Gesamturteil reicht. Merkmale, die wirklich passen, kurz in eigenen Worten nennen, gern in einem Satz, statt jedes einzeln zu loben.
+- Begriffe aus dem Inserat nicht wiederholen (Straße, Ausstattungs- und Werbewörter). Schreib, was die Person daran gut findet, in ihren Worten.
+- Nichts aufbauschen („findet man selten“, „auf Anhieb verliebt“) und keine Erlebnisse erfinden („als ich die Bilder sah …“). Nur was im Profil oder im Inserat steht.
+- Selbstbewusst statt entschuldigend: Was nicht ganz passt, sachlich nennen oder weglassen.
+- Einfache Sätze mittlerer Länge, Kommas statt Gedankenstriche. Kein Satzmuster mehrmals hintereinander.
+- Die gelernten Vorlieben sind Tendenzen der Person, keine starren Regeln: Wende sie an, wo sie zum Inserat und zum Vermieter passen (privat und locker oder Hausverwaltung und seriös). Steht „immer“ davor, gilt sie immer."""
+WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
 
 IMAGE_MAX_BYTES = 10 * 1024 * 1024
 IMAGE_USER_AGENT = (
@@ -231,11 +249,13 @@ def cached_models(provider: str) -> dict | None:
 # Settings and listing texts are user-editable or foreign data and may contain braces,
 # so everything is joined with plain string concatenation (never str.format).
 
-def build_system_prompt(settings: dict, rules: list[str] | None = None, examples: list[dict] | None = None) -> str:
+def build_system_prompt(settings: dict, rules: list | None = None, examples: list[dict] | None = None) -> str:
     """The system prompt from the profile settings. Pure: the learned parts are passed in (learned_context()).
-    `rules`: texts of the active learned rules -> "## Gelernte Vorlieben" if use_rules is on.
-    `examples`: finished editor sessions (db.example_sessions rows: final_text, listing_title, listing_address)
-    -> "## Beispiele" if use_examples is on. Both stay in the system prompt so it changes rarely (caching)."""
+    `rules`: the active learned rules (texts, or rows with text / scope / strength) -> "## Gelernte Vorlieben" if
+    use_rules is on. `examples`: finished editor sessions (db.example_sessions rows: final_text, original_text,
+    listing_title, listing_address; "contrast": also show what the person changed) -> "## Beispiele" if
+    use_examples is on. VOICE_GUIDE if use_voice_guide is on. All of it stays in the system prompt so it changes
+    rarely (caching); today's date is in the user text."""
     style = (settings.get("style") or "").strip()
     target_words = as_int(settings.get("target_words"), 150)
     if target_words > 0:
@@ -246,9 +266,12 @@ def build_system_prompt(settings: dict, rules: list[str] | None = None, examples
         "## Wünsche\n" + ((settings.get("wishes") or "").strip() or "(keine Angaben)"),
         "## Schreibstil\n" + (style or "(keine Angaben)"),
     ]
-    rules = [rule.strip() for rule in rules or [] if rule and rule.strip()] if as_bool(settings.get("use_rules")) else []
-    if rules:
-        sections.append("## Gelernte Vorlieben\n" + "\n".join("- " + " ".join(rule.split()) for rule in rules))
+    if as_bool(settings.get("use_voice_guide")):
+        sections.append(VOICE_GUIDE)
+    lines = [_rule_line(rule) for rule in rules or []] if as_bool(settings.get("use_rules")) else []
+    lines = [line for line in lines if line]
+    if lines:
+        sections.append("## Gelernte Vorlieben\n" + "\n".join(lines))
     blocks = [_example_block(e) for e in examples or []] if as_bool(settings.get("use_examples")) else []
     blocks = [block for block in blocks if block]
     if blocks:
@@ -256,8 +279,21 @@ def build_system_prompt(settings: dict, rules: list[str] | None = None, examples
     return "\n\n".join(sections)
 
 
+def _rule_line(rule) -> str | None:
+    """'- text', '- immer: text' or '- text (wenn: scope)' for "## Gelernte Vorlieben"."""
+    if isinstance(rule, str):
+        rule = {"text": rule}
+    text = " ".join(str(rule.get("text") or "").split())
+    if not text:
+        return None
+    scope = " ".join(str(rule.get("scope") or "").split())
+    line = ("immer: " if rule.get("strength") == "hard" else "") + text
+    return "- " + line + (f" (wenn: {scope})" if scope else "")
+
+
 def _example_block(example: dict) -> str | None:
-    """'<beispiel>\nTitel · Adresse\n\nText (max. EXAMPLE_MAX_CHARS)\n</beispiel>', or None without text."""
+    """'<beispiel>\nTitel · Adresse\n\nText (max. EXAMPLE_MAX_CHARS)\n</beispiel>', or None without text. With
+    example["contrast"]: the sentences the person changed in Claude's draft come after the text."""
     text = (example.get("final_text") or "").strip()
     if not text:
         return None
@@ -265,15 +301,49 @@ def _example_block(example: dict) -> str | None:
         text = text[:EXAMPLE_MAX_CHARS].rstrip() + " …"
     head = [" ".join(str(example[key]).split())[:120] for key in ("listing_title", "listing_address")
             if example.get(key) and str(example[key]).strip()]
-    return "<beispiel>\n" + (" · ".join(head) or "Inserat") + "\n\n" + text + "\n</beispiel>"
+    block = "<beispiel>\n" + (" · ".join(head) or "Inserat") + "\n\n" + text
+    if example.get("contrast") and (example.get("original_text") or "").strip():
+        changes = textdiff.sentence_diff(example["original_text"], example["final_text"], CONTRAST_DIFF_CHARS)
+        if changes:
+            block += "\n\nGeändert an Claudes Entwurf (- Claude, + die Person):\n" + changes
+    return block + "\n</beispiel>"
 
 
-def learned_context(settings: dict) -> tuple[list[str], list[dict]]:
+def pick_examples(sessions: list[dict], count: int | None = None) -> list[dict]:
+    """From the example sessions (newest first): the newest half, the rest spread evenly over the older ones -
+    different listings and moods rather than the same week's letters (similar examples make clones). The newest
+    CONTRAST_COUNT that differ from Claude's draft are marked "contrast". Newest first."""
+    count = EXAMPLE_COUNT if count is None else count
+    if len(sessions) <= count:
+        picked = list(sessions)
+    else:
+        newest = (count + 1) // 2
+        older, rest = sessions[newest:], count - newest
+        step = len(older) / rest
+        picked = sessions[:newest] + [older[int(i * step)] for i in range(rest)]
+    contrast = 0
+    result = []
+    for session in picked:
+        changed = (session.get("final_text") or "").strip() != (session.get("original_text") or "").strip()
+        mark = changed and contrast < CONTRAST_COUNT
+        contrast += mark
+        result.append({**session, "contrast": mark})
+    return result
+
+
+def learned_context(settings: dict) -> tuple[list[dict], list[dict]]:
     """(rules, examples) for build_system_prompt: the active learned rules (oldest first, so the prompt stays
-    stable) and the EXAMPLE_COUNT newest example sessions - each only when its setting is on."""
-    rules = [rule["text"] for rule in db.list_rules("active")] if as_bool(settings.get("use_rules")) else []
-    examples = db.example_sessions(EXAMPLE_COUNT) if as_bool(settings.get("use_examples")) else []
+    stable) and EXAMPLE_COUNT example sessions (pick_examples) - each only when its setting is on."""
+    rules = db.list_rules("active") if as_bool(settings.get("use_rules")) else []
+    examples = pick_examples(db.example_sessions(None)) if as_bool(settings.get("use_examples")) else []
     return rules, examples
+
+
+def today_line(now: datetime | None = None) -> str:
+    """'Heute ist Donnerstag, der 12.11.2026.' (Europe/Berlin) - drafts know the date, so a move-in date that has
+    passed isn't offered."""
+    now = (now or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
+    return f"Heute ist {WEEKDAYS[now.weekday()]}, der {now:%d.%m.%Y}."
 
 
 def build_user_text(listing: dict, kind: str, previous_text: str | None = None, instruction: str | None = None) -> str:
@@ -291,7 +361,8 @@ def build_user_text(listing: dict, kind: str, previous_text: str | None = None, 
     # The full ImmoScout24 exposé text when we have it (media.py), else Fredy's description.
     description = (listing.get("details") or listing.get("description") or "").strip()[:DESCRIPTION_MAX_CHARS]
     lines.append("Beschreibung:\n" + (description or "(keine Beschreibung)"))
-    parts = ["<inserat>\n" + "\n".join(lines) + "\n</inserat>"]
+    parts = [today_line() + " Termine aus dem Inserat, die davor liegen, sind vorbei (dann z. B. „ab sofort“).",
+             "<inserat>\n" + "\n".join(lines) + "\n</inserat>"]
 
     previous_text = (previous_text or "").strip() or None
     if kind in VARIANT_KINDS and previous_text:
@@ -319,7 +390,10 @@ def _task(kind: str, previous_text: str | None, instruction: str) -> str:
                     "keine lockeren oder umgangssprachlichen Wendungen. Inhalt und Länge bleiben ungefähr gleich. " + keep)
         if kind == "custom":
             return ("Überarbeite den bisherigen Entwurf nach dieser Anweisung der suchenden Person:\n" + anweisung
-                    + "\nÄndere nur, was die Anweisung verlangt; der Rest bleibt möglichst wie er ist.")
+                    + "\nSetz um, was sie meint, nicht nur den Wortlaut: Passagen, die die Anweisung betrifft, darfst "
+                    "du ganz neu formulieren, der Rest bleibt. Ist die Anweisung allgemein (z. B. „natürlicher“, "
+                    "„persönlicher“), richte dich nach ihren Beispielen: schlichtere Sätze, weniger Lob, ihre "
+                    "Wortwahl, und erfinde dabei keine Erlebnisse oder Gefühle.")
 
     # initial, test, or a variant without a stored draft: write a fresh one.
     if kind == "shorter":

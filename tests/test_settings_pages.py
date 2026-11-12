@@ -435,7 +435,8 @@ def test_rule_limit_and_merge_hint(client, monkeypatch):
     assert r.status_code == 409 and "Höchstens 15 aktive Regeln" in r.text
 
 
-def test_examples_listed_and_removed(client):
+def test_examples_listed_and_removed(client, monkeypatch):
+    monkeypatch.setattr(llm, "EXAMPLE_COUNT", 3)  # newest 2, then 1 of the older ones
     login(client)
     assert "Noch keine. Sobald du im 📝 Editor auf „Fertig“ drückst" in client.get("/settings/verhalten").text
     sessions = []
@@ -443,7 +444,7 @@ def test_examples_listed_and_removed(client):
         lid = add_listing(fredy_id=f"e{n}", title=f"Wohnung {n}", address=f"Straße {n}")
         sessions.append(done_session(lid, final=f"Endversion {n}"))
     card = client.get("/settings/verhalten").text.split('<article id="beispiele"')[1]
-    assert "3 von 3" in card and "1 weitere Endversion rückt nach" in card
+    assert "3 von 3" in card and "1 weitere Endversion ist gerade nicht dabei" in card
     assert [int(i) for i in re.findall(r'action="/settings/examples/(\d+)/off"', card)] == [s["id"] for s in sessions[:0:-1]]
     assert f'href="/listing/{sessions[3]["listing_id"]}">Wohnung 3</a>' in card and "Endversion 3" in card
     assert "Wohnung 0" not in card  # the oldest isn't used
