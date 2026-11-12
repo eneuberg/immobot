@@ -271,7 +271,12 @@ def draft_view(listing: dict, draft: dict, note: str | None = None) -> tuple[str
 
 
 def collapsed_view(listing: dict, note: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
-    label = "✅ Gesendet" if listing.get("status") == "sent" else "❌ Uninteressant"
+    if listing.get("status") == "sent":
+        label = "✅ Gesendet"
+    elif listing.get("auto_status") == "dismissed":
+        label = "⏱ Automatisch uninteressant (kein Entwurf)"
+    else:
+        label = "❌ Uninteressant"
     keyboard = InlineKeyboardMarkup([[_button("↩️ Rückgängig", "undo", listing["id"])]])
     return f"{label} · {_esc(_title(listing))}" + _note(note), keyboard
 
@@ -888,6 +893,28 @@ async def _refresh(tg_bot, listing_id: int) -> None:
         listing = db.get_listing(listing_id)
         if listing is not None and listing.get("tg_message_id") and configured_chat_id() is not None:
             await _show(tg_bot, listing)
+
+
+REFRESH_GAP_S = 1.0  # between two message updates of schedule_refresh_many (Telegram's flood limits)
+
+
+async def _refresh_many(tg_bot, listing_ids: list[int]) -> None:
+    for index, listing_id in enumerate(listing_ids):
+        if index:
+            await asyncio.sleep(REFRESH_GAP_S)
+        try:
+            await _refresh(tg_bot, listing_id)
+        except TelegramError as exc:  # one deleted message doesn't stop the rest
+            _record_error(exc)
+
+
+def schedule_refresh_many(listing_ids: list[int]) -> None:
+    """schedule_refresh for many listings, one message after the other."""
+    if _app is None or not listing_ids:
+        return
+    task = asyncio.create_task(_refresh_many(_app.bot, list(listing_ids)))
+    _tasks.add(task)
+    task.add_done_callback(_task_done)
 
 
 def schedule_refresh(listing_id: int) -> None:

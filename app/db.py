@@ -228,6 +228,9 @@ ADDED_COLUMNS = {
         ("album_message_id", "INTEGER"),
         ("album_sent_at", "TEXT"),
         ("media_source", "TEXT"),  # "fredy" | "is24" | NULL
+        # auto_dismiss: NULL, "dismissed" (set to uninteressant after auto_dismiss_hours without a draft) or "kept"
+        # (the user changed the status since, or set it to neu: never automatically again)
+        ("auto_status", "TEXT"),
     ],
     "listing_media": [("floor_plan", "INTEGER NOT NULL DEFAULT 0")],
     "drafts": [
@@ -348,9 +351,9 @@ def latest_listing() -> dict | None:
         return _row(conn.execute("SELECT * FROM listings ORDER BY id DESC LIMIT 1").fetchone())
 
 
-def list_listings(status: str | None = None, limit: int = 300) -> list[dict]:
+def list_listings(status: str | None = None, limit: int = 300, auto: bool = False) -> list[dict]:
     """Listings newest first, each with draft_count and cost_eur (its drafts plus its learning calls in llm_usage,
-    in euros)."""
+    in euros). auto: only those dismissed automatically."""
     sql = """
         SELECT l.*, COUNT(d.id) AS draft_count,
                COALESCE(SUM({cost}), 0)
@@ -365,6 +368,8 @@ def list_listings(status: str | None = None, limit: int = 300) -> list[dict]:
     if status:
         where = "WHERE l.status = ?"
         params.append(status)
+    if auto:
+        where += (" AND" if where else "WHERE") + " l.status = 'dismissed' AND l.auto_status = 'dismissed'"
     params.append(limit)
     sql = sql.format(cost=cost_eur_sql("d"), usage_cost=cost_eur_sql("u"), where=where)
     with connect() as conn:
@@ -383,8 +388,24 @@ def unannounced_listing_ids(hours: int = 24) -> list[int]:
 
 
 def set_listing_status(listing_id: int, status: str) -> None:
+    """A status change by the user or a draft. After it the listing is never dismissed automatically again if it had
+    been, or if it is set back to neu (see auto_dismiss)."""
     with connect() as conn:
-        conn.execute("UPDATE listings SET status = ?, updated_at = ? WHERE id = ?", (status, now_iso(), listing_id))
+        conn.execute("UPDATE listings SET status = ?, updated_at = ?, auto_status = CASE "
+                     "WHEN ? = 'new' OR auto_status IS NOT NULL THEN 'kept' END WHERE id = ?",
+                     (status, now_iso(), status, listing_id))
+
+
+def auto_dismiss(received_before: str) -> list[int]:
+    """Listings still "neu" (no draft, untouched) received before `received_before`: set to uninteressant, marked
+    auto_status "dismissed". Returns their ids, newest first."""
+    with connect() as conn:
+        ids = [row[0] for row in conn.execute(
+            "SELECT id FROM listings WHERE status = 'new' AND auto_status IS NULL AND received_at < ? ORDER BY id DESC",
+            (received_before,))]
+        conn.executemany("UPDATE listings SET status = 'dismissed', auto_status = 'dismissed', updated_at = ? "
+                         "WHERE id = ?", [(now_iso(), listing_id) for listing_id in ids])
+    return ids
 
 
 def set_listing_tg_message(listing_id: int, message_id: int) -> None:
@@ -609,6 +630,8 @@ def stats() -> dict:
         drafts_total = conn.execute("SELECT COUNT(*) FROM drafts").fetchone()[0]
         cost_total = conn.execute(_COST_SUM_SQL.format(cost=cost_eur_sql(), where=""), (rate, rate)).fetchone()[0]
         by_status = {r["status"]: r["n"] for r in conn.execute("SELECT status, COUNT(*) AS n FROM listings GROUP BY status")}
+        auto_dismissed = conn.execute("SELECT COUNT(*) FROM listings WHERE status = 'dismissed' "
+                                      "AND auto_status = 'dismissed'").fetchone()[0]
     return {
         "listings_total": listings_total,
         "drafts_total": drafts_total,
@@ -616,6 +639,7 @@ def stats() -> dict:
         "cost_month": cost_this_month(),
         "month": month_prefix,
         "by_status": by_status,
+        "auto_dismissed": auto_dismissed,
     }
 
 

@@ -62,8 +62,11 @@
 <nav class="filters" aria-label="Nach Status filtern">
   <a href="/" {% if not status_filter %}aria-current="page"{% endif %}>Alle <span class="n">{{ stats.listings_total }}</span></a>
   {% for key, label in STATUSES.items() %}
-  <a href="/?status={{ key }}" {% if status_filter == key %}aria-current="page"{% endif %}><span class="dot st-{{ key }}" aria-hidden="true"></span>{{ label }} <span class="n">{{ stats.by_status.get(key, 0) }}</span></a>
+  <a href="/?status={{ key }}" {% if status_filter == key and not auto_filter %}aria-current="page"{% endif %}><span class="dot st-{{ key }}" aria-hidden="true"></span>{{ label }} <span class="n">{{ stats.by_status.get(key, 0) }}</span></a>
   {% endfor %}
+  {% if stats.auto_dismissed %}
+  <a href="/?status=dismissed&amp;auto=1" {% if auto_filter %}aria-current="page"{% endif %} title="Nach {{ auto_dismiss_hours }} h ohne Entwurf automatisch aussortiert">⏱ davon automatisch <span class="n">{{ stats.auto_dismissed }}</span></a>
+  {% endif %}
 </nav>
 {% endif %}
 
@@ -80,7 +83,7 @@
         {% if thumb %}<img src="{{ thumb }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-fallback>{% endif %}
       </div>
       <div class="lc-body">
-        <div class="lc-top">{{ status_badge(l.status) }}<span>{{ l.received_at|local_time }}</span></div>
+        <div class="lc-top">{{ status_badge(l.status) }}{% if l.status == 'dismissed' and l.auto_status == 'dismissed' %}<span class="lc-auto" title="automatisch, kein Entwurf">⏱ automatisch</span>{% endif %}<span>{{ l.received_at|local_time }}</span></div>
         <span class="lc-title">{{ l.title or "(ohne Titel)" }}</span>
         {% if l.address %}<span class="lc-addr">{{ l.address }}</span>{% endif %}
         <div class="lc-facts">

@@ -80,6 +80,11 @@
       <input type="checkbox" role="switch" name="paused" value="1" {% if values.paused|as_bool %}checked{% endif %}>
       <span>Pause <small>Der Bot meldet sich nicht zu neuen Inseraten.</small></span>
     </label>
+    <label>Automatisch uninteressant nach <small>Stunden ohne Entwurf, 0 = aus. Neue Inserate, zu denen du nichts gemacht hast, gehen danach auf „uninteressant“ (im Dashboard filterbar; in Telegram lässt es sich zurücknehmen).</small>
+      <input type="number" name="auto_dismiss_hours" min="0" max="720" step="1" value="{{ values.auto_dismiss_hours }}"
+        {% if errors.auto_dismiss_hours %}aria-invalid="true"{% endif %}>
+      {{ field_error("auto_dismiss_hours") }}
+    </label>
   </article>
 
   <article id="lernen" class="setting-card">

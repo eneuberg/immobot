@@ -23,7 +23,7 @@
     </a>
     {% endif %}
     <div class="lh-body">
-      <div class="lh-top">{{ status_badge(listing.status) }}<span class="chip">{{ portal }}</span><span>eingegangen {{ listing.received_at|local_time }}</span></div>
+      <div class="lh-top">{{ status_badge(listing.status) }}{% if listing.status == "dismissed" and listing.auto_status == "dismissed" %}<span class="chip" title="kein Entwurf, nach der eingestellten Zeit automatisch aussortiert">⏱ automatisch</span>{% endif %}<span class="chip">{{ portal }}</span><span>eingegangen {{ listing.received_at|local_time }}</span></div>
       <h1>{{ listing.title or "(ohne Titel)" }}</h1>
       {% if listing.address %}<p class="lh-addr">{{ icon("pin") }}<span>{{ listing.address }}</span></p>{% endif %}
       <dl class="facts">

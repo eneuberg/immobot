@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import bot, db, is24, learning, llm, media, portals, rent, search, settings, textdiff, textfmt, vault
+from . import bot, db, housekeeping, is24, learning, llm, media, portals, rent, search, settings, textdiff, textfmt, vault
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ SETTINGS_SECTIONS = {
 SECTION_FIELDS = {
     "profil": [*TEXT_SETTINGS, "target_words"],
     "verhalten": ["effort", "monthly_budget_eur", "eur_usd_rate", "send_image", "llm_max_images", "is24_fetch",
-                  "followup_delay_s", "paused", "use_examples", "use_rules"],
+                  "followup_delay_s", "paused", "auto_dismiss_hours", "use_examples", "use_rules"],
     "zugaenge": ["provider", "model", "fredy_base_url"],  # the model list depends on the provider and its key
 }
 FIELD_SECTION = {field: section for section, fields in SECTION_FIELDS.items() for field in fields}
@@ -565,22 +565,26 @@ def _listing_cards(rows: list[dict]) -> list[dict]:
 
 
 def _render_listings(request: Request, listings: list[dict], *, status: str | None = None, add_failed=None,
-                     search_info: dict | None = None):
+                     search_info: dict | None = None, auto: bool = False):
     return render(request, "listings.html", {
         "active": "listings",
         "listings": listings,
         "stats": db.stats(),
         "costs": cost_overview(),
         "status_filter": status,
+        "auto_filter": auto,
+        "auto_dismiss_hours": housekeeping.auto_dismiss_hours(),
         "add_failed": add_failed,
         "search": search_info,  # {"query", "no_terms"} while searching
     })
 
 
 @router.get("/", dependencies=PAGE)
-def listings_page(request: Request, status: str | None = None, add: str | None = None, q: str | None = None):
+def listings_page(request: Request, status: str | None = None, add: str | None = None, q: str | None = None,
+                  auto: str | None = None):
     if status not in settings.STATUSES:
         status = None
+    only_auto = status == "dismissed" and auto == "1"  # "davon automatisch"
     try:  # "Inserat per Link" failed: its message and the URL typed, once (see _add_failed)
         add_failed = json.loads(_take_once(add) or "null") if add else None
     except ValueError:
@@ -590,7 +594,8 @@ def listings_page(request: Request, status: str | None = None, add: str | None =
         rows = search.keyword_search(query, db.list_listings(status, limit=2000))
         return _render_listings(request, _listing_cards(rows), status=status, add_failed=add_failed,
                                 search_info={"query": query, "no_terms": not search.query_terms(query)})
-    return _render_listings(request, _listing_cards(db.list_listings(status)), status=status, add_failed=add_failed)
+    return _render_listings(request, _listing_cards(db.list_listings(status, auto=only_auto)), status=status,
+                            add_failed=add_failed, auto=only_auto)
 
 
 ADDED_MESSAGES = {  # /listing/{id}?neu=… after "Inserat per Link"
@@ -709,7 +714,8 @@ def validate_settings(form: dict[str, str], current: dict[str, str],
     if "system_prompt" in values and not values["system_prompt"].strip():
         errors["system_prompt"] = "Darf nicht leer sein (oder auf Standard zurücksetzen)."
 
-    for key, low, high in [("target_words", 30, 600), ("followup_delay_s", 0, 60), ("llm_max_images", 0, 20)]:
+    for key, low, high in [("target_words", 30, 600), ("followup_delay_s", 0, 60), ("llm_max_images", 0, 20),
+                           ("auto_dismiss_hours", 0, 720)]:
         if key in form:
             raw = form[key].strip()
             try:

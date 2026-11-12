@@ -1,5 +1,6 @@
 """immobot: Fredy webhook -> Telegram follow-up with Claude-drafted application messages + dashboard."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -7,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import bot, db, editor, media, vault, web
+from . import bot, db, editor, housekeeping, media, vault, web
 from .config import load_config
 from .web import router, security_headers
 
@@ -31,7 +32,9 @@ async def lifespan(app: FastAPI):
     # older ImmoScout24 listings without exposé text (warm rent): fetched slowly, their messages updated
     media.schedule_backfill(on_done=None if config.disable_bot else bot.schedule_refresh)
     media.schedule_pending_pictures()
+    dismissing = asyncio.create_task(housekeeping.loop())  # "neu" for too long -> uninteressant
     yield
+    dismissing.cancel()
     if not config.disable_bot:
         await bot.stop()
 
