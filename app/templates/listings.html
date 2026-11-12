@@ -76,8 +76,8 @@
   {# Thumbnail: a locally cached image (thumb_url, set by the server) wins over Fredy's external title image,
      which is only used if it is a plain http(s) URL. #}
   {% set thumb = l.thumb_url or (l.image_url|safe_url) %}
-  <li>
-    <a class="listing-card{% if l.status == 'dismissed' %} is-dismissed{% endif %}" href="/listing/{{ l.id }}">
+  <li id="l{{ l.id }}">
+    <a class="listing-card{% if l.status == 'dismissed' %} is-dismissed{% endif %}{% if l.status != 'sent' %} has-toggle{% endif %}" href="/listing/{{ l.id }}">
       <div class="thumb">
         <span class="thumb-ph" aria-hidden="true">{{ icon("home") }}<span>{{ l.portal }}</span></span>
         {% if thumb %}<img src="{{ thumb }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-fallback>{% endif %}
@@ -96,6 +96,16 @@
         {% endif %}
       </div>
     </a>
+    {% if l.status != "sent" %}
+    <form method="post" action="/listing/{{ l.id }}/toggle-dismissed" class="lc-toggle">
+      <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+      {% if l.status == "dismissed" %}
+      <button type="submit" class="secondary outline" title="Doch interessant – zurückholen" aria-label="Doch interessant: {{ l.title or 'Inserat' }}">↩️</button>
+      {% else %}
+      <button type="submit" class="secondary outline" title="Uninteressant" aria-label="Uninteressant: {{ l.title or 'Inserat' }}">❌</button>
+      {% endif %}
+    </form>
+    {% endif %}
   </li>
   {% endfor %}
 </ul>

@@ -584,6 +584,27 @@ def test_mark_dismissed_after_finish(client, lid):
     assert "als uninteressant markiert" in page and "Hast du die Nachricht abgeschickt?" not in page
 
 
+def test_asks_after_opening_the_listing_while_writing(client, lid):
+    """Before "Fertig", "Inserat öffnen" brings "Weiter anschreiben?" on return; "Uninteressant" there dismisses."""
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    editor_cookie(client, lid)
+    r, fields = open_editor(client, lid)
+    page = r.text
+    assert "data-asks-after-open" in page and f'data-after-open="editor-{lid}"' in page and "Weiter anschreiben?" in page
+    r = post(client, lid, "dismiss", {"token": fields["token"]})
+    assert r.status_code == 303 and db.get_listing(lid)["status"] == "dismissed"
+    assert "data-after-open" not in client.get(f"/editor/{lid}").text  # nothing left to decide
+
+
+def test_no_after_open_question_once_finished(client, lid):
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    editor_cookie(client, lid)
+    _, fields = open_editor(client, lid)
+    post(client, lid, "finish", fields, text="Ende")
+    page = client.get(f"/editor/{lid}").text
+    assert "data-after-open" not in page and "data-ask-sent" in page  # "Abgeschickt?" instead
+
+
 def test_new_round_from_a_newer_draft(client, lid):
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     editor_cookie(client, lid)

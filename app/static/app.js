@@ -235,4 +235,37 @@
   document.addEventListener("DOMContentLoaded", function () {
     Array.prototype.forEach.call(document.querySelectorAll("[data-expose-preview]"), exposePreview);
   });
+
+  // Overlay after "Inserat öffnen" (<a data-asks-after-open>): when the person comes back to this page from the
+  // listing (other tab or app), <dialog data-after-open> opens - every time the link was used. The click time sits in
+  // sessionStorage, so it also works when the browser reloaded the page meanwhile.
+  document.addEventListener("DOMContentLoaded", function () {
+    var dlg = document.querySelector("dialog[data-after-open]");
+    if (!dlg || typeof dlg.showModal !== "function") return;
+    var key = "immobot-opened-" + dlg.dataset.afterOpen;
+    var openedAt = function (value) {
+      try {
+        if (value === undefined) return Number(sessionStorage.getItem(key)) || 0;
+        if (value) sessionStorage.setItem(key, String(value)); else sessionStorage.removeItem(key);
+      } catch (err) { /* no storage: nothing to remember */ }
+      return 0;
+    };
+    document.querySelectorAll("[data-asks-after-open]").forEach(function (link) {
+      link.addEventListener("click", function () { openedAt(Date.now()); });
+    });
+    var back = function () {
+      var since = openedAt();
+      if (!since || document.visibilityState !== "visible" || Date.now() - since < 800) return;
+      openedAt(null);
+      if (!dlg.open) dlg.showModal();
+    };
+    document.addEventListener("visibilitychange", back);
+    window.addEventListener("focus", back);
+    window.addEventListener("pageshow", back);
+    dlg.querySelectorAll("[data-dialog-close]").forEach(function (btn) {
+      btn.addEventListener("click", function () { dlg.close(); });
+    });
+    dlg.addEventListener("click", function (e) { if (e.target === dlg) dlg.close(); });
+    back();
+  });
 })();

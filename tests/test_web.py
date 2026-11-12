@@ -391,6 +391,44 @@ def test_listing_status_change(client):
     assert client.post("/listing/9999/status", data={"status": "sent"}).status_code == 404
 
 
+def test_listing_page_asks_after_opening_the_listing(client):
+    """"Inserat öffnen" carries the marker; the overlay offers the editor and "Uninteressant" (not once sent)."""
+    login(client)
+    lid = add_listing()
+    page = client.get(f"/listing/{lid}").text
+    assert "data-asks-after-open" in page and f'data-after-open="listing-{lid}"' in page
+    assert "✍️ Interessant – im Editor anschreiben" in page and 'value="dismissed" class="secondary outline">❌ Uninteressant' in page
+    db.set_listing_status(lid, "dismissed")
+    page = client.get(f"/listing/{lid}").text
+    assert "Doch interessant?" in page and "❌ Uninteressant</button>" not in page
+    db.set_listing_status(lid, "sent")
+    page = client.get(f"/listing/{lid}").text
+    assert "data-after-open" not in page and "data-asks-after-open" not in page
+
+
+def test_card_toggle_dismissed(client):
+    """❌ on a main-page card dismisses, ↩️ brings it back ("neu" without drafts, "Entwurf" with); sent: no button."""
+    login(client)
+    lid = add_listing()
+    page = client.get("/?status=new").text
+    assert f'action="/listing/{lid}/toggle-dismissed"' in page and 'value="/?status=new"' in page
+    r = client.post(f"/listing/{lid}/toggle-dismissed", data={"next": "/?status=new"})
+    assert r.status_code == 303 and r.headers["location"] == f"/?status=new#l{lid}"
+    assert db.get_listing(lid)["status"] == "dismissed"
+    assert "↩️</button>" in client.get("/").text
+    client.post(f"/listing/{lid}/toggle-dismissed", data={"next": "https://evil.example/"})
+    assert db.get_listing(lid)["status"] == "new"
+    db.add_draft(lid, "initial", "Text", "claude-opus-5-5")
+    client.post(f"/listing/{lid}/toggle-dismissed")
+    client.post(f"/listing/{lid}/toggle-dismissed")
+    assert db.get_listing(lid)["status"] == "drafted"
+    db.set_listing_status(lid, "sent")
+    r = client.post(f"/listing/{lid}/toggle-dismissed", data={"next": "//evil.example"})
+    assert r.headers["location"] == f"/#l{lid}" and db.get_listing(lid)["status"] == "sent"
+    assert f'action="/listing/{lid}/toggle-dismissed"' not in client.get("/").text
+    assert client.post("/listing/9999/toggle-dismissed").status_code == 404
+
+
 def test_create_draft_initial_then_regenerate(client, fake_llm):
     login(client)
     lid = add_listing()

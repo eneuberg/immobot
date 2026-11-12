@@ -36,7 +36,7 @@
         <div><dt>Entwürfe</dt><dd><a href="#entwuerfe">{{ drafts|length }} ↓</a></dd></div>
       </dl>
       <div class="lh-actions">
-        {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button">Inserat öffnen ↗</a>{% endif %}
+        {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button"{% if listing.status != "sent" %} data-asks-after-open{% endif %}>Inserat öffnen ↗</a>{% endif %}
         <a href="/editor/{{ listing.id }}" role="button" class="secondary">📝 Im Editor bearbeiten</a>
         {% if fredy_url %}<a href="{{ fredy_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline">In Fredy öffnen ↗</a>{% endif %}
       </div>
@@ -51,6 +51,27 @@
     </div>
   </div>
 </article>
+
+{% if contact_url and listing.status != "sent" %}
+{# Opened after "Inserat öffnen" when the person comes back (app.js), every time; closes with ✕, Später, Esc or a
+   click beside it. #}
+<dialog class="ed-ask-dialog" data-after-open="listing-{{ listing.id }}" aria-labelledby="after-open-title">
+  <article>
+    <header>
+      <button type="button" aria-label="Schließen" rel="prev" data-dialog-close></button>
+      <h2 id="after-open-title">{{ "Doch interessant?" if listing.status == "dismissed" else "Interessant?" }}</h2>
+    </header>
+    <p class="ed-ask-listing">{{ listing.title or "Dieses Inserat" }}</p>
+    <footer class="ed-actions">
+      <a href="/editor/{{ listing.id }}" role="button" autofocus>✍️ {{ "Doch interessant" if listing.status == "dismissed" else "Interessant" }} – im Editor anschreiben</a>
+      {% if listing.status != "dismissed" %}
+      <form method="post" action="/listing/{{ listing.id }}/status"><button type="submit" name="status" value="dismissed" class="secondary outline">❌ Uninteressant</button></form>
+      {% endif %}
+      <button type="button" class="secondary outline" data-dialog-close>Später</button>
+    </footer>
+  </article>
+</dialog>
+{% endif %}
 
 {% if gallery %}
 {# Pictures from Fredy or ImmoScout24 (media.py): stored under DATA_DIR/media, served by

@@ -682,6 +682,20 @@ async def listing_set_status(listing_id: int, status: str = Form("")):
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)
 
 
+@router.post("/listing/{listing_id}/toggle-dismissed", dependencies=ACTION)
+async def listing_toggle_dismissed(listing_id: int, next: str = Form("")):
+    """The ❌ / ↩️ on a card of the main page: "uninteressant", or back again (to "Entwurf" when it has drafts, else
+    "neu"). A sent listing stays as it is. Back to the same list (`next`), at the card."""
+    listing = _listing_or_404(listing_id)
+    if listing["status"] == "dismissed":
+        db.set_listing_status(listing_id, "drafted" if db.latest_draft(listing_id) else "new")
+    elif listing["status"] != "sent":
+        db.set_listing_status(listing_id, "dismissed")
+    bot.schedule_refresh(listing_id)
+    back = safe_next(next) or "/"
+    return RedirectResponse(f"{back.split('#')[0]}#l{listing_id}", status_code=303)
+
+
 @router.post("/listing/{listing_id}/draft", dependencies=ACTION)
 async def listing_create_draft(request: Request, listing_id: int):
     _listing_or_404(listing_id)

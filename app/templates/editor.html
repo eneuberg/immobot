@@ -38,9 +38,27 @@
     {% if facts %}<p class="ed-facts">{{ facts|join(" · ") }}</p>{% endif %}
     {% if contact_url or logged_in %}
     <div class="ed-links">
-      {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline">📨 Inserat öffnen ↗</a>{% endif %}
+      {% set ask_open = contact_url and (not session or session.status != "done") and listing.status not in ("sent", "dismissed") %}
+      {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline"{% if ask_open %} data-asks-after-open{% endif %}>📨 Inserat öffnen ↗</a>{% endif %}
       {% if logged_in %}<a href="/listing/{{ listing.id }}" role="button" class="secondary outline">🔗 Dashboard</a>{% endif %}
     </div>
+    {% if ask_open %}
+    {# Before "Fertig": after "Inserat öffnen", when the person comes back (app.js), every time. #}
+    <dialog class="ed-ask-dialog" data-after-open="editor-{{ listing.id }}" aria-labelledby="after-open-title">
+      <article>
+        <header>
+          <button type="button" aria-label="Schließen" rel="prev" data-dialog-close></button>
+          <h2 id="after-open-title">Weiter anschreiben?</h2>
+        </header>
+        <p class="ed-ask-listing">{{ listing.title or "Dieses Inserat" }}</p>
+        <p class="help">„Uninteressant“ legt das Inserat ab, auch in Telegram. Dein Text bleibt gespeichert.</p>
+        <footer class="ed-actions">
+          <button type="button" data-dialog-close autofocus>✍️ Ja, interessant</button>
+          <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit" class="secondary outline">❌ Uninteressant</button></form>
+        </footer>
+      </article>
+    </dialog>
+    {% endif %}
     {% endif %}
   </header>
 
