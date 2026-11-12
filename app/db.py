@@ -241,6 +241,12 @@ ADDED_COLUMNS = {
     ],
     "credentials": [("hint", "TEXT")],
     "edit_sessions": [("last_draft_id", "INTEGER REFERENCES drafts(id)"), ("rules_note", "TEXT")],
+    # editor revisions: the draft Claude wrote for this critique / quick button, and what the person did with it
+    # (NULL = not decided yet, "accepted", "rejected" = back to her text, "kept" = went on without deciding)
+    "feedback": [("draft_id", "INTEGER REFERENCES drafts(id)"), ("decision", "TEXT")],
+    # learned rules: when one applies ("private Vermieter"), "soft" (a tendency) or "hard" (always; NULL for rules
+    # from before: shown plainly); action "fact": a change to "Über mich" (fact_old -> fact_new) instead of a rule
+    "learned_rules": [("scope", "TEXT"), ("strength", "TEXT"), ("fact_old", "TEXT"), ("fact_new", "TEXT")],
 }
 
 LISTING_FIELDS = ["fredy_id", "job_id", "provider", "title", "price", "size", "address", "description", "image_url", "url", "fredy_url"]
@@ -917,6 +923,15 @@ def example_sessions(limit: int | None = 3, use: bool = True) -> list[dict]:
         return [dict(r) for r in conn.execute(sql, (1 if use else 0, limit) if limit else (1 if use else 0,))]
 
 
+def changed_sessions(limit: int) -> list[dict]:
+    """Done sessions whose final text differs from Claude's original, newest finished first, with listing info."""
+    sql = (f"SELECT s.*, {_LISTING_INFO} FROM edit_sessions s JOIN listings l ON l.id = s.listing_id "
+           "WHERE s.status = 'done' AND s.final_text IS NOT NULL AND s.final_text != s.original_text "
+           "ORDER BY s.finished_at DESC, s.id DESC LIMIT ?")
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(sql, (limit,))]
+
+
 def unprocessed_sessions(limit: int | None = None) -> list[dict]:
     """Done sessions whose final text differs from Claude's original and that no profile rewrite has processed
     yet, newest finished first, with listing info."""
@@ -938,17 +953,22 @@ def mark_sessions_processed(session_ids: list[int], version_id: int) -> None:
 # --- feedback -------------------------------------------------------------------
 
 def add_feedback(listing_id: int, source: str, kind: str, text: str, *, session_id: int | None = None,
-                 before_text: str | None = None) -> int:
+                 before_text: str | None = None, draft_id: int | None = None) -> int:
     """source: editor | telegram | dashboard; kind: critique (text = the critique verbatim), quick
     (text = shorter | formal | regenerate) or note (editor: a critique typed but not sent to Claude before "Fertig").
-    before_text: the text the critique was about (editor only)."""
+    before_text: the text the critique was about (editor only); draft_id: Claude's revision (editor only)."""
     with connect() as conn:
         cur = conn.execute(
-            """INSERT INTO feedback (listing_id, session_id, source, kind, text, before_text, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (listing_id, session_id, source, kind, text, before_text, now_iso()),
+            """INSERT INTO feedback (listing_id, session_id, source, kind, text, before_text, created_at, draft_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (listing_id, session_id, source, kind, text, before_text, now_iso(), draft_id),
         )
         return cur.lastrowid
+
+
+def set_feedback_decision(feedback_id: int, decision: str) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE feedback SET decision = ? WHERE id = ?", (decision, feedback_id))
 
 
 def list_feedback(*, unprocessed: bool = False, session_id: int | None = None, kind: str | None = None,
@@ -1001,20 +1021,23 @@ def count_feedback_since(listing_id: int, source: str, since_iso: str, kind: str
 
 # --- learned rules --------------------------------------------------------------
 
-RULE_UPDATE_COLUMNS = {"text", "status", "reason", "decided_at", "merged_version_id"}
+RULE_UPDATE_COLUMNS = {"text", "status", "reason", "decided_at", "merged_version_id", "scope", "strength", "fact_new"}
 
 
 def add_rule(text: str, *, status: str = "proposed", action: str = "add", reason: str | None = None,
-             session_id: int | None = None, replaces_rule_id: int | None = None, manual: bool = False) -> int:
-    """action: add | update | remove (what the proposal does; replaces_rule_id = the rule it changes).
-    proposed_text keeps Claude's wording when the text is edited before accepting; NULL for a rule the user wrote
-    (manual)."""
+             session_id: int | None = None, replaces_rule_id: int | None = None, manual: bool = False,
+             scope: str | None = None, strength: str | None = None, fact_old: str | None = None,
+             fact_new: str | None = None) -> int:
+    """action: add | update | remove (what the proposal does; replaces_rule_id = the rule it changes) | fact (a change
+    to "Über mich": fact_old -> fact_new, text = what it is about). proposed_text keeps Claude's wording when the
+    text is edited before accepting; NULL for a rule the user wrote (manual)."""
     with connect() as conn:
         cur = conn.execute(
             """INSERT INTO learned_rules (text, status, reason, session_id, replaces_rule_id, created_at, action,
-                                          proposed_text)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (text, status, reason, session_id, replaces_rule_id, now_iso(), action, None if manual else text),
+                                          proposed_text, scope, strength, fact_old, fact_new)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (text, status, reason, session_id, replaces_rule_id, now_iso(), action, None if manual else text,
+             scope, strength, fact_old, fact_new),
         )
         return cur.lastrowid
 

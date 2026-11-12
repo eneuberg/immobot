@@ -464,13 +464,15 @@ def test_propose_rules_request_and_storage(lid, client):
         ("add", None, "Stell dich mit Vornamen und Alter vor.", "Alter ergänzt"),
         ("update", active, "Formuliere den Einzug als „ab sofort“.", "präziser"),
         ("remove", other, "", "Person nutzt Emojis"),
-        ("add", None, "Noch eine vierte.", "zu viel"),
+        ("add", None, "Lob sparsam: ein Gesamturteil statt Begeisterung für jedes Detail.", "auch früher"),
+        ("add", None, "Noch eine fünfte.", "zu viel"),
     ))
     proposals = asyncio.run(learning.propose_rules(session["id"]))
     assert [(p["action"], p["replaces_rule_id"], p["text"], p["status"]) for p in proposals] == [
         ("add", None, "Stell dich mit Vornamen und Alter vor.", "proposed"),
         ("update", active, "Formuliere den Einzug als „ab sofort“.", "proposed"),
         ("remove", other, "Keine Emojis.", "proposed"),  # a remove shows the rule it would remove
+        ("add", None, "Lob sparsam: ein Gesamturteil statt Begeisterung für jedes Detail.", "proposed"),
     ]
     assert proposals[0]["proposed_text"] == proposals[0]["text"] and proposals[0]["listing_id"] == lid
     (call,) = client.beta.messages.calls  # Opus 5.5: with the refusal fallback, like drafts
@@ -492,10 +494,11 @@ def test_propose_rules_request_and_storage(lid, client):
 
 
 def test_rules_prompt_asks_for_rules_and_a_reason_without(lid, client):
-    """Less timid: a plausible general preference should become a rule (the user checks every proposal anyway);
-    an empty list comes with no_rule_reason."""
+    """Bold and general: the reason behind an edit, not the edit (the user checks every proposal anyway); an empty
+    list comes with no_rule_reason."""
     assert "Lieber keine Regel als eine schwache" not in learning.RULES_SYSTEM
-    assert "mindestens eine Regel" in learning.RULES_SYSTEM and "no_rule_reason" in learning.RULES_SYSTEM
+    assert "lieber mutig vor" in learning.RULES_SYSTEM and "no_rule_reason" in learning.RULES_SYSTEM
+    assert "warum sie sie gemacht hat" in learning.RULES_SYSTEM
     assert learning.RULES_SCHEMA["required"] == ["actions", "no_rule_reason"]
     assert learning.RULES_SCHEMA["properties"]["no_rule_reason"]["type"] == "string"
     assert '"no_rule_reason": "…"' in learning.RULES_SHAPE
@@ -931,3 +934,91 @@ def test_learning_costs_count_everywhere(lid, client):
     with pytest.raises(llm.BudgetExceeded):
         asyncio.run(learning.propose_rules(session["id"]))
     assert client.calls == []
+
+
+# --- who changed what, facts, tendencies ---------------------------------------------------
+
+def test_revision_review_accept_reject_and_timeline(lid, fake_generate):
+    db.add_draft(lid, "initial", "Hallo. Die Wohnung finde ich richtig schön.", "claude-opus-5-5")
+    session = learning.open_or_create_session(lid)
+    assert learning.pending_review(session) is None
+    asyncio.run(learning.revise_in_editor(session["id"], "Hallo. Die Wohnung ist toll.", "natürlicher"))
+    review = learning.pending_review(db.get_session(session["id"]))
+    assert review["before_text"] == "Hallo. Die Wohnung ist toll." and review["draft_text"] == "Fassung 1"
+    rejected = learning.decide_revision(session["id"], accept=False)
+    assert rejected["current_text"] == "Hallo. Die Wohnung ist toll."  # her text is back
+    assert learning.pending_review(rejected) is None
+    with pytest.raises(learning.LearningError):
+        learning.decide_revision(session["id"], accept=True)
+    asyncio.run(learning.quick_in_editor(session["id"], "Hallo. Die Wohnung ist toll.", "shorter"))
+    assert learning.decide_revision(session["id"], accept=True)["current_text"] == "Fassung 2"
+    done = learning.finish(session["id"], "Fassung 2. Ich kann ab sofort einziehen.")
+    timeline = learning.session_timeline(done)
+    assert timeline.startswith("1. Claude schreibt den Entwurf (<original>).")
+    assert "2. Die Person ändert selbst:\n- Die Wohnung finde ich richtig schön.\n+ Die Wohnung ist toll." in timeline
+    assert "3. Sie bittet Claude: „natürlicher“\nClaude überarbeitet (nicht ihre Wortwahl):" in timeline
+    assert "Die Person hat das verworfen (zurück zu ihrem Text)." in timeline
+    assert "4. Sie bittet Claude: Kürzer (Schnellbutton)" in timeline and "Die Person hat das übernommen." in timeline
+    assert "5. Die Person ändert selbst bis zur Endversion:\n" in timeline and "+ Ich kann ab sofort einziehen." in timeline
+
+
+def test_undecided_revision_counts_as_kept(lid, fake_generate):
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    session = learning.open_or_create_session(lid)
+    asyncio.run(learning.revise_in_editor(session["id"], "Original", "kürzer"))
+    asyncio.run(learning.revise_in_editor(session["id"], "Fassung 1", "netter"))  # went on: the first one is kept
+    first, second = reversed([f for f in db.list_feedback(session_id=session["id"])])
+    assert first["decision"] == "kept" and second["decision"] is None
+    learning.finish(session["id"], "Fassung 2")
+    assert db.list_feedback(session_id=session["id"])[0]["decision"] == "kept"
+
+
+def full_answer(*items):
+    keys = ("action", "rule_id", "text", "scope", "strength", "reason", "profile_old", "profile_new")
+    return fake_response({"actions": [dict(zip(keys, item)) for item in items], "no_rule_reason": ""})
+
+
+def test_proposals_with_scope_strength_and_a_fact(lid, client):
+    db.update_settings({"profile": "Ich bin Erika. Einzug: ideal Anfang November."})
+    earlier = done_session(db.insert_listing({**LISTING, "fredy_id": "L0", "title": "Frühere"})[0],
+                           original="Die Küche ist richtig schön.", final="Schöne Wohnung!")
+    session = done_session(lid)
+    client.responses.append(full_answer(
+        ("add", None, "Lob sparsam: ein Gesamturteil statt Lob für jedes Detail.", "", "tendenz", "auch früher", "", ""),
+        ("add", None, "Gern ein Smiley am Ende.", "privater Vermieter", "tendenz", "", "", ""),
+        ("add", None, "Gruß immer mit Vornamen.", "", "immer", "jedes Mal", "", ""),
+        ("fact", None, "Einzug ab sofort möglich", "", "", "Datum korrigiert", "ideal Anfang November", "ab sofort"),
+        ("fact", None, "passt nicht", "", "", "", "steht nicht im Profil", "x"),  # dropped: old not in "Über mich"
+    ))
+    proposals = asyncio.run(learning.propose_rules(session["id"]))
+    assert [(p["action"], p["scope"], p["strength"]) for p in proposals] == [
+        ("add", None, "soft"), ("add", "privater Vermieter", "soft"), ("add", None, "hard"), ("fact", None, None)]
+    fact = proposals[3]
+    assert (fact["fact_old"], fact["fact_new"]) == ("ideal Anfang November", "ab sofort")
+    user = client.calls[0]["messages"][0]["content"]
+    assert "<verlauf>\n1. Claude schreibt den Entwurf" in user
+    assert "<fruehere_aenderungen>\n- Frühere" in user and "+ Schöne Wohnung!" in user
+    assert "<ueber_mich>\nIch bin Erika. Einzug: ideal Anfang November.\n</ueber_mich>" in user
+    assert earlier["id"] != session["id"]
+
+    smiley = learning.decide_rule(proposals[1]["id"], True, "Gern ein „:)“ am Ende.", scope="lockeres Inserat",
+                                  strength="hard")
+    assert (smiley["status"], smiley["text"], smiley["scope"], smiley["strength"]) == (
+        "active", "Gern ein „:)“ am Ende.", "lockeres Inserat", "hard")
+    merged = learning.decide_rule(fact["id"], True, "ab sofort (gern auch früher)")
+    assert merged["status"] == "merged" and merged["merged_version_id"]
+    assert db.get_settings()["profile"] == "Ich bin Erika. Einzug: ab sofort (gern auch früher)."
+    assert db.latest_version()["source"] == "feedback"
+    rules, _ = llm.learned_context(db.get_settings())
+    assert [r["text"] for r in rules] == ["Gern ein „:)“ am Ende."]  # a fact is no rule
+
+
+def test_fact_that_no_longer_fits(lid, client):
+    db.update_settings({"profile": "Einzug: November."})
+    session = done_session(lid)
+    client.responses.append(full_answer(("fact", None, "Einzug", "", "", "", "November", "sofort")))
+    (fact,) = asyncio.run(learning.propose_rules(session["id"]))
+    db.update_settings({"profile": "Einzug: Dezember."})
+    with pytest.raises(learning.LearningError, match="passt nicht mehr"):
+        learning.decide_rule(fact["id"], True)
+    assert db.get_rule(fact["id"])["status"] == "proposed"
