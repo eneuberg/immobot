@@ -69,7 +69,7 @@ SETTINGS_SECTIONS = {
 SECTION_FIELDS = {
     "profil": [*TEXT_SETTINGS, "target_words"],
     "verhalten": ["effort", "monthly_budget_eur", "eur_usd_rate", "send_image", "llm_max_images", "is24_fetch",
-                  "followup_delay_s", "paused", "auto_dismiss_hours", "use_examples", "use_rules",
+                  "followup_delay_s", "paused", "auto_dismiss_hours", "kleinanzeigen_enabled", "use_examples", "use_rules",
                   "use_voice_guide"],
     "zugaenge": ["provider", "model", "fredy_base_url"],  # the model list depends on the provider and its key
 }
@@ -348,6 +348,10 @@ async def fredy_webhook(request: Request):
     items = payload.get("listings")
     if not isinstance(items, list):
         return JSONResponse({"error": "listings must be a list"}, status_code=400)
+    if payload.get("provider") in portals.OWN_POST_PROVIDERS and not settings.as_bool(
+            db.get_settings().get(portals.OWN_POST_PROVIDERS[payload["provider"]])):
+        log.info("Fredy webhook: %d %s listing(s) ignored (switched off)", len(items), payload["provider"])
+        return {"received": 0, "new": 0, "ignored": True}
 
     received, new_ids, with_images = 0, [], 0
     for item in items:

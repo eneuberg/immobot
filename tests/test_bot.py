@@ -1479,3 +1479,27 @@ def test_post_manual_retries_a_timeout_and_never_sends_the_album_twice(tg, monke
         conn.execute("UPDATE listings SET tg_message_id = NULL WHERE id = ?", (listing_id,))
     asyncio.run(bot.post_manual(slow, CHAT, listing_id))
     assert len(slow.albums) == 1 and len(slow.sent) == 2
+
+
+def test_kleinanzeigen_listing_is_posted_with_album_and_badge(tg, monkeypatch):
+    db = bot.db
+    listing_id = add_listing(db, fredy_id="ka-1", tg_message_id=None, provider="kleinanzeigen",
+                             url="https://www.kleinanzeigen.de/s-anzeige/x/123-203-945", title="Altbau Ehrenfeld")
+    db.set_media_source(listing_id, "fredy")
+    store_pictures(db, listing_id, ["Wohnzimmer", "Küche"])
+    downloaded = []
+
+    async def ensure_media(lid, retry=False, want_images=True):
+        downloaded.append(lid)
+        return bot.media.stored_pictures(lid)
+
+    monkeypatch.setattr(bot.media, "ensure_media", ensure_media)
+    monkeypatch.setattr(bot, "FREDY_SEND_GAP_S", 0)
+    db.update_settings({"followup_delay_s": "0"})
+    album_bot = AlbumBot()
+    asyncio.run(bot.announce(album_bot, CHAT, [listing_id]))
+    (album,) = album_bot.albums
+    assert downloaded == [listing_id] and "🟢 Kleinanzeigen" in album["media"][0].caption
+    (message,) = album_bot.sent
+    assert "<b>🟢 Kleinanzeigen</b>" in message["text"]
+    assert db.get_listing(listing_id)["tg_message_id"] == 101

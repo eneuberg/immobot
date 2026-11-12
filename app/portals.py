@@ -23,6 +23,11 @@ PROVIDER_LABELS = {
     "immoswp": "Immo SWP",
 }
 
+# Portals whose Fredy job sends only to immobot (no Fredy Telegram message): immobot posts the pictures and the
+# message itself, marked with the badge; each can be switched off with its setting.
+OWN_POST_PROVIDERS = {"kleinanzeigen": "kleinanzeigen_enabled"}
+PROVIDER_BADGES = {"kleinanzeigen": "🟢 Kleinanzeigen"}
+
 _IS24_EXPOSE_PATH = re.compile(r"/expose/\d+/?")
 _WG_LISTING_PATH = re.compile(r"/[^/]+\.html")
 

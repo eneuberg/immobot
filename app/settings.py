@@ -141,6 +141,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "is24_fetch": "1",  # media.py: fetch exposé + pictures from ImmoScout24 when Fredy sends no pictures
     "followup_delay_s": "4",
     "paused": "0",
+    "kleinanzeigen_enabled": "1",  # Fredy's Kleinanzeigen listings: posted by immobot (pictures + message); 0 = ignored
     "auto_dismiss_hours": "48",  # main.auto_dismiss_loop: "neu" without a draft for this long -> uninteressant; 0 = off
     "fredy_base_url": "",  # portals.fredy_url: own "In Fredy öffnen" links; empty = the fredyUrl Fredy sent
     "use_examples": "1",  # learning.py: the newest finished editor texts go into the system prompt as examples

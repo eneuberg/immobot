@@ -447,3 +447,17 @@ def test_hand_added_listing_keeps_its_pictures_with_the_switch_off(fresh_db):
     switch_off()
     assert media.source_of(db.get_listing(manual)) == "is24" and media.has_gallery(db.get_listing(manual))
     assert media.source_of(db.get_listing(other)) is None
+
+
+def test_kleinanzeigen_switch(client):
+    item = {"id": "ka1", "title": "Altbau", "url": "https://www.kleinanzeigen.de/s-anzeige/a/1-203-945",
+            "images": FREDY_IMAGES[:1]}
+    body = {"jobId": "ka", "provider": "kleinanzeigen", "listings": [item]}
+    headers = {"Authorization": f"Bearer {TEST_SECRETS['FREDY_WEBHOOK_TOKEN']}"}
+    db.update_settings({"kleinanzeigen_enabled": "0"})
+    r = client.post("/hook/fredy", json=body, headers=headers)
+    assert r.json() == {"received": 0, "new": 0, "ignored": True} and db.list_listings() == []
+    db.update_settings({"kleinanzeigen_enabled": "1"})
+    assert client.post("/hook/fredy", json=body, headers=headers).json() == {"received": 1, "new": 1}
+    (listing,) = db.list_listings()
+    assert listing["provider"] == "kleinanzeigen" and listing["media_source"] == "fredy"

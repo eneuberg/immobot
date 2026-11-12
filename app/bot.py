@@ -164,7 +164,8 @@ def header(listing: dict) -> str:
     lines = [f"🏠 <b>{_esc(_title(listing))}</b>"]
     if facts:
         lines.append(" · ".join(_esc(fact) for fact in facts))
-    lines.append(_esc(portals.provider_label(listing.get("provider"))))
+    badge = portals.PROVIDER_BADGES.get(listing.get("provider"))
+    lines.append(f"<b>{_esc(badge)}</b>" if badge else _esc(portals.provider_label(listing.get("provider"))))
     return "\n".join(lines)
 
 
@@ -797,6 +798,10 @@ async def announce(tg_bot, chat_id: int, listing_ids: list[int]) -> None:
         listing = db.get_listing(listing_id)
         if listing is None or listing.get("tg_message_id") or listing_id in _announcing:
             continue  # unknown, already announced, or another task is on it
+        if listing.get("provider") in portals.OWN_POST_PROVIDERS:  # no Fredy message: pictures and message from us
+            await media.ensure_media(listing_id)
+            await post_manual(tg_bot, chat_id, listing_id)
+            continue
         _announcing.add(listing_id)
         try:
             if index < media.NEW_DETAILS_MAX:  # warm rent; usually fetched meanwhile (web.fredy_webhook)
@@ -811,9 +816,14 @@ async def announce(tg_bot, chat_id: int, listing_ids: list[int]) -> None:
 
 
 def manual_album_caption(listing: dict, rows: list[dict], total: int) -> str:
-    """Plain-text caption of a hand-added listing's album: title, facts and portal, then the picture list."""
+    """Plain-text caption of the album immobot posts itself (a hand-added listing, or one from a portal in
+    portals.OWN_POST_PROVIDERS): title, facts and portal, then the picture list."""
     facts = " · ".join(_shorten(fact, FACT_MAX) for fact in facts_of(listing))
-    head = "\n".join(filter(None, [f"🏠 {_shorten(_title(listing), 200)}", facts, "ImmoScout24 · per Link hinzugefügt"]))
+    if str(listing.get("fredy_id") or "").startswith(media.MANUAL_PREFIX):
+        origin = portals.provider_label(listing.get("provider")) + " · per Link hinzugefügt"
+    else:
+        origin = portals.PROVIDER_BADGES.get(listing.get("provider")) or portals.provider_label(listing.get("provider"))
+    head = "\n".join(filter(None, [f"🏠 {_shorten(_title(listing), 200)}", facts, origin]))
     pictures = album_caption(rows, total, None)
     caption = f"{head}\n{pictures}"
     if _tg_len(caption) > CAPTION_MAX:
@@ -822,8 +832,9 @@ def manual_album_caption(listing: dict, rows: list[dict], total: int) -> str:
 
 
 async def post_manual(tg_bot, chat_id: int, listing_id: int) -> None:
-    """A listing added by hand: there is no Fredy message, so the pictures go first (one album, up to ALBUM_MAX, like
-    Fredy's preview), then the usual message with the buttons."""
+    """A listing added by hand, or from a portal whose Fredy job sends only to immobot: there is no Fredy message,
+    so the pictures go first (one album, up to ALBUM_MAX, like Fredy's preview), then the usual message with the
+    buttons."""
     listing = db.get_listing(listing_id)
     if listing is None or listing.get("tg_message_id") or listing_id in _announcing:
         return
