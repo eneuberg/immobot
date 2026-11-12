@@ -816,10 +816,9 @@ def manual_album_caption(listing: dict, rows: list[dict], total: int) -> str:
     return caption if _tg_len(caption) <= CAPTION_MAX else caption[: CAPTION_MAX // 2]
 
 
-async def post_manual(tg_bot, chat_id: int, listing_id: int, write_draft: bool) -> None:
+async def post_manual(tg_bot, chat_id: int, listing_id: int) -> None:
     """A listing added by hand: there is no Fredy message, so the pictures go first (one album, up to ALBUM_MAX, like
-    Fredy's preview), then the usual message with the buttons; with write_draft Claude writes the first draft right
-    away (shown in that message)."""
+    Fredy's preview), then the usual message with the buttons."""
     listing = db.get_listing(listing_id)
     if listing is None or listing.get("tg_message_id") or listing_id in _announcing:
         return
@@ -846,23 +845,17 @@ async def post_manual(tg_bot, chat_id: int, listing_id: int, write_draft: bool) 
         db.set_listing_tg_message(listing_id, message.message_id)
     except TelegramError as exc:
         _record_error(exc)
-        return
     finally:
         _announcing.discard(listing_id)
-    if write_draft and not has_draft(listing_id):
-        async with _lock(listing_id):
-            fresh = db.get_listing(listing_id)
-            if fresh and not has_draft(listing_id):
-                await _generate(tg_bot, fresh, "initial")
 
 
-def schedule_post_manual(listing_id: int, write_draft: bool) -> bool:
+def schedule_post_manual(listing_id: int) -> bool:
     """Non-blocking post_manual in the background. False if there is no running bot or no chat."""
     chat = configured_chat_id()
     if _app is None or chat is None:
         log.warning("Telegram bot or chat missing – hand-added listing %s not posted", listing_id)
         return False
-    task = asyncio.create_task(post_manual(_app.bot, chat, listing_id, write_draft))
+    task = asyncio.create_task(post_manual(_app.bot, chat, listing_id))
     _tasks.add(task)
     task.add_done_callback(_task_done)
     return True

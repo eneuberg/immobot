@@ -1,11 +1,11 @@
-"""app/search.py and the search on the listings page: word search (free) and "Mit Claude suchen"."""
+"""app/search.py and the search on the listings page (word search)."""
 
 import dataclasses
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import db, learning, llm, main, search, web
+from app import db, main, search
 
 from .conftest import TEST_SECRETS
 
@@ -59,35 +59,3 @@ def test_word_search_on_the_listings_page(client):
     assert "Altbau in Ehrenfeld" not in page and "Suche zurücksetzen" in page
     page = client.get("/", params={"q": "Sauna"}).text
     assert "0 Treffer" in page and "Kein Inserat enthält alle Wörter." in page
-
-
-def test_claude_search(client, monkeypatch):
-    first, second = add("Ruhige Wohnung", "Am Park 1"), add("Laute Wohnung", "Hauptstraße 2")
-    seen = {}
-
-    async def ask_json(settings, **kwargs):
-        seen.update(kwargs)
-        db.add_llm_usage("search", "anthropic", kwargs["model"], input_tokens=1000, output_tokens=50, cost_usd=0.002,
-                         currency="USD", cost_native=0.002)
-        return {"matches": [{"id": first, "why": "liegt  am Park"}, {"id": 999, "why": "gibt es nicht"},
-                            {"id": first, "why": "doppelt"}]}
-
-    monkeypatch.setattr(learning, "_ask_json", ask_json)
-    r = client.post("/search", data={"q": "ruhig und grün"})
-    assert r.status_code == 200
-    assert "1 Treffer</strong> für „ruhig und grün“ · mit Claude" in r.text and "🔎 liegt am Park" in r.text
-    assert "Laute Wohnung" not in r.text
-    assert seen["purpose"] == "search" and seen["model"] == "claude-haiku-5-5" and f"[{second}] Laute Wohnung" in seen["user"]
-
-
-def test_claude_search_errors_are_shown(client, monkeypatch):
-    add("Wohnung")
-
-    async def broke(settings, **kwargs):
-        raise llm.BudgetExceeded("Monatsbudget von 15,00 € erreicht – im Dashboard erhöhen.")
-
-    monkeypatch.setattr(learning, "_ask_json", broke)
-    page = client.post("/search", data={"q": "irgendwas"}).text
-    assert "Monatsbudget von 15,00 € erreicht" in page and "0 Treffer" in page
-    assert client.post("/search", data={"q": "  "}).headers["location"] == "/"
-    assert client.post("/search", data={"q": "x"}, headers={"Origin": "https://evil.example"}).status_code == 403

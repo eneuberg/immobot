@@ -1821,31 +1821,27 @@ def manual_add(client, monkeypatch):
 
     monkeypatch.setattr(is24, "fetch_expose", fetch)
     monkeypatch.setattr(media, "store_is24", store)
-    monkeypatch.setattr(bot, "schedule_post_manual", lambda lid, draft: calls["post"].append((lid, draft)) or True)
+    monkeypatch.setattr(bot, "schedule_post_manual", lambda lid: calls["post"].append(lid) or True)
     monkeypatch.setattr(main.app.state, "config", dataclasses.replace(main.app.state.config, disable_bot=False))
     login(client)
     return calls
 
 
 def test_add_listing_by_link(client, manual_add):
-    r = client.post("/listings/add", data={"url": " https://www.immobilienscout24.de/expose/171725784?referrer=x ",
-                                           "draft": "1"})
+    r = client.post("/listings/add", data={"url": " https://www.immobilienscout24.de/expose/171725784?referrer=x "})
     assert r.status_code == 303
     listing_id = int(r.headers["location"].split("/listing/")[1].split("?")[0])
-    assert r.headers["location"].endswith("?neu=tg-draft")
+    assert r.headers["location"].endswith("?neu=tg")
     listing = db.get_listing(listing_id)
     assert listing["fredy_id"] == "manual-171725784" and listing["provider"] == "immoscout"
     assert listing["url"] == "https://www.immobilienscout24.de/expose/171725784" and listing["job_id"] is None
     assert listing["title"] == "Handwerklich geschickte Mieter gesucht" and listing["price"] == "1.100 €"
     assert manual_add["fetch"] == ["171725784"] and manual_add["store"][0][0] == listing_id
-    assert manual_add["post"] == [(listing_id, True)]
-    assert "Claude schreibt dort gleich den Entwurf" in client.get(r.headers["location"]).text
+    assert manual_add["post"] == [listing_id]
+    assert "Bilder und Nachricht gehen gerade an Telegram" in client.get(r.headers["location"]).text
     # the same exposé again (also from Fredy, any URL form): shown, not added
     again = client.post("/listings/add", data={"url": "https://www.immobilienscout24.de/expose/171725784/"})
     assert again.headers["location"] == f"/listing/{listing_id}?neu=schon" and len(manual_add["fetch"]) == 1
-    # without the checkbox: no draft
-    client.post("/listings/add", data={"url": "https://www.immobilienscout24.de/expose/99"})
-    assert manual_add["post"][-1][1] is False
     # the app's share text around the link: only the exposé id counts
     shared = client.post("/listings/add", data={
         "url": "Schau dir dieses Angebot auf ImmoScout24 an:\nTraumwohnung\nhttps://www.immobilienscout24.de/expose/77?referrer=APP_SHARE"})

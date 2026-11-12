@@ -905,11 +905,11 @@ details.rule-add button { width: auto; margin: 0; }
 .add-listing .add-preview .gone { color: var(--pico-muted-color); opacity: .6; text-decoration: line-through; }
 .add-listing .add-preview.is-missing { color: var(--pico-del-color, #c62828); }
 .add-listing .add-submit { margin: .6rem 0 0; width: auto; }
-.add-listing .add-draft { display: flex; align-items: center; gap: .45rem; margin: .6rem 0 .25rem; font-size: .92rem; }
-.add-listing .add-draft input { margin: 0; }
-.add-listing small { display: block; }
-.search-listings .search-more { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .75rem; margin-top: .6rem; }
-.search-listings .search-more button { margin: 0; width: auto; }
+.add-listing small { display: block; margin-top: .5rem; }
+/* "Inserat per Link hinzufügen": folded to one line until tapped */
+details.add-listing { padding: 0; margin-bottom: .75rem; }
+details.add-listing > summary { padding: .6rem 1rem; font-weight: 600; cursor: pointer; }
+details.add-listing[open] > summary { padding-bottom: .35rem; }
+details.add-listing > form { padding: 0 1rem .85rem; margin: 0; }
 .search-result { margin: 0 0 1rem; }
 .search-result p { margin: 0 0 .35rem; }
-.lc-why { display: block; margin-top: .25rem; font-size: .88rem; color: var(--accent); }

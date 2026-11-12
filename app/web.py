@@ -572,7 +572,7 @@ def _render_listings(request: Request, listings: list[dict], *, status: str | No
         "costs": cost_overview(),
         "status_filter": status,
         "add_failed": add_failed,
-        "search": search_info,  # {"query", "mode": "words"/"claude", "error", "cost"} while searching
+        "search": search_info,  # {"query", "no_terms"} while searching
     })
 
 
@@ -588,41 +588,12 @@ def listings_page(request: Request, status: str | None = None, add: str | None =
     if query:  # word search: free, every meaningful word must appear (search.keyword_search)
         rows = search.keyword_search(query, db.list_listings(status, limit=2000))
         return _render_listings(request, _listing_cards(rows), status=status, add_failed=add_failed,
-                                search_info={"query": query, "mode": "words",
-                                             "no_terms": not search.query_terms(query)})
+                                search_info={"query": query, "no_terms": not search.query_terms(query)})
     return _render_listings(request, _listing_cards(db.list_listings(status)), status=status, add_failed=add_failed)
-
-
-@router.post("/search", dependencies=ACTION)
-async def listings_claude_search(request: Request, q: str = Form("")):
-    """"Mit Claude suchen": matches by meaning, each with a short reason (search.claude_search, a few cents)."""
-    query = " ".join(q.split())[:search.QUERY_MAX]
-    if not query:
-        return RedirectResponse("/", status_code=303)
-    info = {"query": query, "mode": "claude", "error": None, "cost": None}
-    try:
-        results = await search.claude_search(query)
-    except llm.LLMError as exc:
-        info["error"] = redact(request, str(exc))
-        results = []
-    except Exception:
-        log.exception("Claude search failed")
-        info["error"] = "Unerwarteter Fehler bei der Suche – Details im Log."
-        results = []
-    else:
-        last = db.list_llm_usage(limit=1)
-        if last and last[0]["purpose"] == "search":
-            info["cost"] = last[0]["cost_eur"]
-    cards = _listing_cards([r["listing"] for r in results])
-    for card, result in zip(cards, results):
-        card["why"] = result["why"]
-    return _render_listings(request, cards, search_info=info)
 
 
 ADDED_MESSAGES = {  # /listing/{id}?neu=… after "Inserat per Link"
     "tg": "Inserat hinzugefügt. Bilder und Nachricht gehen gerade an Telegram.",
-    "tg-draft": "Inserat hinzugefügt. Bilder und Nachricht gehen an Telegram, Claude schreibt dort gleich den Entwurf "
-                "(hier nach dem Neuladen zu sehen).",
     "ohne": "Inserat hinzugefügt. Der Telegram-Bot läuft nicht oder kein Chat ist verbunden – keine Nachricht.",
     "schon": "Dieses Inserat ist schon da – nichts neu angelegt.",
 }
@@ -641,10 +612,10 @@ def _add_failed(url: str, error: str) -> RedirectResponse:
 
 
 @router.post("/listings/add", dependencies=ACTION)
-async def listing_add(request: Request, url: str = Form(""), draft: str = Form("")):
+async def listing_add(request: Request, url: str = Form("")):
     """"Inserat per Link": an ImmoScout24 exposé added by hand. One exposé request (like Fredy's), its pictures
-    downloaded now, then - in the background - the pictures as an album and the usual message in Telegram, with
-    the first draft if asked. A listing already known (same exposé) is only shown."""
+    downloaded now, then - in the background - the pictures as an album and the usual message in Telegram. A listing
+    already known (same exposé) is only shown."""
     expose = is24.expose_in_text(url)  # also from the share text around the link
     if expose is None:
         return _add_failed(url, "Kein ImmoScout24-Exposé-Link gefunden. Er sieht so aus: "
@@ -666,9 +637,8 @@ async def listing_add(request: Request, url: str = Form(""), draft: str = Form("
     if not created:
         return RedirectResponse(f"/listing/{listing_id}?neu=schon", status_code=303)
     await media.store_is24(listing_id, parsed)
-    write_draft = draft == "1"
-    posted = not request.app.state.config.disable_bot and bot.schedule_post_manual(listing_id, write_draft)
-    added = ("tg-draft" if write_draft else "tg") if posted else "ohne"
+    posted = not request.app.state.config.disable_bot and bot.schedule_post_manual(listing_id)
+    added = "tg" if posted else "ohne"
     return RedirectResponse(f"/listing/{listing_id}?neu={added}", status_code=303)
 
 
