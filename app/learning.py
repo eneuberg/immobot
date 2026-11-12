@@ -911,23 +911,32 @@ Telegram und dem Dashboard sind oft nur für ein Inserat gemeint.
 bei kleinen Änderungen darunter die geänderten Wörter).
 - R…: gelernte Regeln, die gerade gelten.
 - Schnellbuttons: wie oft „Kürzer“, „Förmlicher“ und „Neu“ gedrückt wurde.
+- E…: die letzten Endversionen der Person im ganzen Wortlaut: so schreibt sie wirklich.
 
-Schlag kleine, einzelne Änderungen vor. Jede ersetzt in einem Feld die Textstelle old durch new:
-- old wörtlich aus dem aktuellen Feld kopieren, so kurz wie möglich, aber nur einmal im Feld vorkommend. Leeres \
-old hängt new ans Feldende an. Nie ein ganzes Feld neu schreiben. Bei target_words ist old die aktuelle Zahl und \
-new die neue.
+Ziel: Claudes Entwürfe sollen spürbar näher an die Person kommen, sodass sie kaum noch etwas ändern muss. Das \
+Profil darf sich dafür deutlich verändern. Schlag vor, was die Belege hergeben; die Person entscheidet über jede \
+Änderung einzeln und kann jede Version zurückholen.
+
+Jede Änderung ersetzt in einem Feld die Textstelle old durch new:
+- old wörtlich aus dem aktuellen Feld kopieren und nur einmal im Feld vorkommend. Leeres old hängt new ans Feldende \
+an. Bei target_words ist old die aktuelle Zahl und new die neue.
+- Du darfst Sätze und Absätze neu fassen, zusammenlegen oder streichen (new leer): vor allem was veraltet ist, was \
+die Person in ihren Änderungen immer wieder rückgängig macht, was einer gelernten Regel oder anderen Stellen \
+widerspricht, und Beispielformulierungen, die Claude nur kopiert.
+- style darfst du als Ganzes neu schreiben (old = das ganze Feld), wenn die Endversionen eine andere Stimme zeigen \
+als beschrieben: dann eine knappe Beschreibung ihrer Stimme (Ton, Anrede, Einstieg, Länge, typische Wörter, was \
+sie weglässt), ohne Sätze zum Kopieren.
 - Eine allgemeine Änderung braucht mindestens 2 Belege oder eine ausdrückliche Aussage der Person („immer“, „nie“, \
-„grundsätzlich“).
-- Was nur zu einem Inserat passt, nie verallgemeinern.
-- Fakten in profile nur ändern, wenn die Person sie selbst ausdrücklich korrigiert hat, dann is_fact: true. Sonst \
+„grundsätzlich“). Was nur zu einem Inserat passt, nie verallgemeinern.
+- Fakten in profile nur ändern, wenn die Person sie selbst korrigiert oder ergänzt hat, dann is_fact: true. Sonst \
 is_fact: false.
 - Übernimmt eine Änderung eine gelernte Regel vollständig ins Profil, deren Nummer in covers_rules angeben \
 (3 für R3).
-- Alle Felder zusammen werden um höchstens 15 % länger.
+- Lieber klar und widerspruchsfrei als lang: Das Profil darf auch kürzer werden.
 - Nichts vorschlagen, was unter „nicht wieder vorschlagen“ steht.
-- reason: ein kurzer Satz. evidence: die Kennungen der Belege.
-- Lieber 0 Änderungen als schwache.\
+- reason: ein kurzer Satz. evidence: die Kennungen der Belege.\
 """
+REVIEW_FINALS_MAX = 6  # E…: the newest final versions in full
 
 
 def _declined_for_review() -> list[str]:
@@ -947,7 +956,7 @@ def _declined_for_review() -> list[str]:
 
 
 def _rewrite_user_text(version: dict, values: dict, rules: list[dict], critiques: list[dict], sessions: list[dict],
-                       quick_counts: dict, declined: list[str]) -> str:
+                       quick_counts: dict, declined: list[str], finals: list[dict] | None = None) -> str:
     fields = "\n".join(f"<{key}>\n{values[key].strip()}\n</{key}>" for key in PROFILE_FIELDS)
     feedback_lines = [
         f"F{f['id']} · {FEEDBACK_SOURCE_LABELS.get(f['source'], f['source'])} · Inserat: "
@@ -960,12 +969,15 @@ def _rewrite_user_text(version: dict, values: dict, rules: list[dict], critiques
         for s in sessions
     ]
     quick = " · ".join(f"{label}: {quick_counts.get(kind, 0)}" for kind, label in QUICK_LABELS.items())
+    final_lines = [f"E{s['id']} · Inserat: {listing_brief(s, 'listing_')}\n{(s['final_text'] or '').strip()}"
+                   for s in finals or []]
     parts = [
         f'<profil version="{version["id"]}">\n{fields}\n</profil>',
         "<gelernte_regeln>\n" + ("\n".join(f"R{r['id']}: {_one_line(r['text'], RULE_MAX_CHARS)}" for r in rules)
                                  or "(keine)") + "\n</gelernte_regeln>",
         "<rueckmeldungen>\n" + ("\n\n".join(feedback_lines) or "(keine)") + "\n</rueckmeldungen>",
         "<sitzungen>\n" + ("\n\n".join(session_lines) or "(keine)") + "\n</sitzungen>",
+        "<endversionen>\n" + ("\n\n".join(final_lines) or "(keine)") + "\n</endversionen>",
         "<schnellbuttons>\n" + quick + "\n</schnellbuttons>",
         "<nicht_wieder_vorschlagen>\n" + ("\n".join("- " + line for line in declined) or "(nichts)")
         + "\n</nicht_wieder_vorschlagen>",
@@ -1121,7 +1133,9 @@ async def propose_rewrite() -> dict:
         quick_counts[row["text"]] = quick_counts.get(row["text"], 0) + 1
     sessions = db.unprocessed_sessions(REVIEW_SESSIONS_MAX)
     rules = db.list_rules("active")
-    user = _rewrite_user_text(version, values, rules, critiques, sessions, quick_counts, _declined_for_review())
+    finals = db.example_sessions(REVIEW_FINALS_MAX)
+    user = _rewrite_user_text(version, values, rules, critiques, sessions, quick_counts, _declined_for_review(),
+                              finals)
 
     _rewrite_running = True
     try:
@@ -1132,7 +1146,8 @@ async def propose_rewrite() -> dict:
         )
     finally:
         _rewrite_running = False
-    labels = ({f"F{f['id']}" for f in critiques} | {f"S{s['id']}" for s in sessions} | {f"R{r['id']}" for r in rules})
+    labels = ({f"F{f['id']}" for f in critiques} | {f"S{s['id']}" for s in sessions} | {f"R{r['id']}" for r in rules}
+              | {f"E{s['id']}" for s in finals})
     edits = _valid_edits(data, values, labels, {r["id"] for r in rules})
     now = db.now_iso()
     for old in db.list_rewrite_proposals("pending"):

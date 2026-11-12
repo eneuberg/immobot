@@ -144,8 +144,13 @@
           {% if r.action == "remove" %}
           <p class="rule-kind">Diese Regel streichen:</p>
           <p class="rule-text">{{ r.text }}</p>
+          {% elif r.action == "fact" %}
+          <p class="rule-kind">„Über mich“ ergänzen: <strong>{{ r.text }}</strong>{% if r.fact_old %} – bisher: <span class="old">„{{ r.fact_old }}“</span>{% endif %}</p>
+          <label class="sr-only" for="rule-text-{{ r.id }}">Neue Fassung</label>
+          <textarea id="rule-text-{{ r.id }}" name="text" rows="2" maxlength="2000">{{ r.fact_new }}</textarea>
           {% else %}
-          <p class="rule-kind">{% if r.action == "update" %}Regel ändern{% if r.target %} – bisher: <span class="old">„{{ r.target.text }}“</span>{% endif %}{% else %}Neue Regel{% endif %}</p>
+          <p class="rule-kind">{% if r.action == "update" %}Regel ändern{% if r.target %} – bisher: <span class="old">„{{ r.target.text }}“</span>{% endif %}{% else %}Neue Regel{% endif %}
+            {%- if r.scope %} · gilt, wenn: {{ r.scope }}{% endif %}{% if r.strength == "hard" %} · immer{% endif %}</p>
           <label class="sr-only" for="rule-text-{{ r.id }}">Text der Regel</label>
           <textarea id="rule-text-{{ r.id }}" name="text" rows="3" maxlength="300">{{ r.text }}</textarea>
           {% endif %}
@@ -168,7 +173,7 @@
   <ul class="rule-list">
     {% for r in rules_in_use %}
     <li class="rule{% if r.status == 'inactive' %} is-off{% endif %}" id="regel-{{ r.id }}">
-      <p class="rule-text">{{ r.text }}</p>
+      <p class="rule-text">{{ r.text }}{% if r.scope or r.strength == "hard" %} <small class="muted">({% if r.strength == "hard" %}immer{% if r.scope %}, {% endif %}{% endif %}{% if r.scope %}wenn: {{ r.scope }}{% endif %})</small>{% endif %}</p>
       <div class="rule-foot">
         {# The switch saves itself (app.js, data-autosubmit); without JS the small button does. #}
         <form class="rule-toggle" method="post" action="/settings/rules/{{ r.id }}/active">

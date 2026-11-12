@@ -811,6 +811,9 @@ def test_propose_rewrite_request_and_validation(lid, client):
     assert f"F{critique} · Editor · Inserat: Helle 2-Zimmer-Wohnung" in user and "„Immer per Du schreiben“" in user
     assert f"S{session['id']} · Inserat:" in user and "+ Ich bin Erika, 34." in user
     assert "Kürzer: 3 · Förmlicher: 0 · Neu: 0" in user
+    assert f"<endversionen>\nE{session['id']} · Inserat: Helle 2-Zimmer-Wohnung" in user  # her final texts in full
+    assert "Hallo. Ich bin Erika, 34.\n</endversionen>" in user
+    assert "Das Profil darf auch kürzer werden" in learning.REWRITE_SYSTEM and "15 %" not in learning.REWRITE_SYSTEM
     assert "- Regel: „Schreib auf Englisch.“" in user
     assert db.list_llm_usage()[0]["purpose"] == "rewrite" and db.list_llm_usage()[0]["listing_id"] is None
     assert learning.rewrite_status()["pending"]["id"] == proposal["id"]

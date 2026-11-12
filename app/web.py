@@ -1393,7 +1393,7 @@ def settings_rule_decide(request: Request, rule_id: int, accept: str = Form(""),
     """✅ / ❌ on a proposed rule that was never decided in the editor; the text may be edited before accepting."""
     yes = accept == "1"
     return _learning_action(request, lambda: learning.decide_rule(rule_id, yes, text if yes else None),
-                            "rule_accepted" if yes else "rule_rejected")
+                            "rule_accepted" if yes else "rule_rejected")  # a fact's text is its new wording
 
 
 @router.post("/settings/examples/{session_id}/off", dependencies=ACTION)
