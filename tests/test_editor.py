@@ -559,7 +559,8 @@ def test_mark_sent(client, lid):
     post(client, lid, "finish", fields, text="Ende")
     page = client.get(f"/editor/{lid}").text
     assert "Hast du die Nachricht abgeschickt?" in page and "✅ Ja, abgeschickt" in page
-    assert f'data-opens-listing="{lid}"' in page and "data-ask-sent-later" in page
+    assert f'<dialog class="ed-ask-dialog" data-ask-sent="{lid}"' in page and "data-ask-close" in page  # the overlay
+    assert page.count(f'action="/editor/{lid}/sent"') == 2  # card and overlay
     r = post(client, lid, "sent", {"token": fields["token"]})
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=sent#ende"
     assert db.get_listing(lid)["status"] == "sent" and client.refreshed == [lid, lid]  # Telegram: Endversion, then "gesendet"

@@ -332,23 +332,41 @@
     setTimeout(check, 2000);
   }
 
-  // --- "Hast du die Nachricht abgeschickt?": after "Inserat öffnen", when the person comes back ------------------
-  // A flag in sessionStorage survives the reload when the rule proposals arrive meanwhile.
+  // --- "Hast du die Nachricht abgeschickt?": an overlay every time the person comes back to the page -------------
+  // "Left" = the page was hidden (other tab or app) or the window lost focus (other window) for more than LEAVE_MS.
+  // The time of leaving sits in sessionStorage, so a reload meanwhile (the rule proposals arriving) still asks.
+  // Submitting a form on the page is not leaving.
   var ask = document.querySelector("[data-ask-sent]");
-  var askKey = ask ? "immobot-opened-" + ask.dataset.askSent : null;
-  function store(action, value) { try { return action === "get" ? sessionStorage.getItem(askKey) : (value ? sessionStorage.setItem(askKey, "1") : sessionStorage.removeItem(askKey)); } catch (err) { return null; } }
-  function bringUp() { ask.classList.add("is-asking"); ask.scrollIntoView({ behavior: "smooth", block: "center" }); }
-  if (ask) {
-    document.querySelectorAll("[data-opens-listing]").forEach(function (link) {
-      link.addEventListener("click", function () { store("set", true); });
-    });
+  if (ask && typeof ask.showModal === "function") {
+    var LEAVE_MS = 1500;
+    var askKey = "immobot-left-" + ask.dataset.askSent;
+    var submitting = false;
+    var leftAt = function (value) {
+      try {
+        if (value === undefined) return Number(sessionStorage.getItem(askKey)) || 0;
+        if (value) sessionStorage.setItem(askKey, String(value)); else sessionStorage.removeItem(askKey);
+      } catch (err) { /* no storage: only this page's visit counts */ }
+      return 0;
+    };
+    var leave = function () { if (!submitting && !leftAt()) leftAt(Date.now()); };
+    var back = function () {
+      var since = leftAt();
+      if (!since || document.visibilityState !== "visible") return;
+      leftAt(null);
+      if (Date.now() - since >= LEAVE_MS && !ask.open) ask.showModal();
+    };
     document.addEventListener("visibilitychange", function () {
-      if (document.visibilityState === "visible" && store("get")) bringUp();
+      if (document.visibilityState === "hidden") leave(); else back();
     });
-    if (store("get")) bringUp();
-    ask.addEventListener("submit", function () { store("set", false); });
-    var later = ask.querySelector("[data-ask-sent-later]");
-    if (later) later.addEventListener("click", function () { store("set", false); ask.classList.remove("is-asking"); ask.hidden = true; });
+    window.addEventListener("blur", leave);
+    window.addEventListener("focus", back);
+    window.addEventListener("pageshow", back);
+    document.addEventListener("submit", function () { submitting = true; leftAt(null); }, true);
+    ask.querySelectorAll("[data-ask-close]").forEach(function (btn) {
+      btn.addEventListener("click", function () { ask.close(); });
+    });
+    ask.addEventListener("click", function (e) { if (e.target === ask) ask.close(); });  // beside the box
+    back();
   }
 
   if (form && text && window.location.hash === "#text" && window.matchMedia("(min-width: 768px)").matches) {

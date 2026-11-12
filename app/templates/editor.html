@@ -217,15 +217,29 @@
         </div>
       </article>
       {% if listing.status != "sent" %}
-      {# Asked after "Inserat öffnen" (editor.js brings it into view on return); the rule proposals follow below. #}
-      <article class="ed-card ed-ask-sent" id="abgeschickt" data-ask-sent="{{ listing.id }}">
+      {# The same question twice: as a card here, and as an overlay that editor.js opens every time the person comes
+         back to this page (other tab, other app); it closes with ✕, "Noch nicht", Esc or a click beside it. #}
+      <article class="ed-card ed-ask-sent" id="abgeschickt">
         <h2>Hast du die Nachricht abgeschickt?</h2>
         <p class="help">Kopieren, im Inserat einfügen und absenden – dann hier bestätigen. Das Inserat steht danach auf „gesendet“, auch in Telegram.</p>
         <div class="ed-actions">
           <form method="post" action="/editor/{{ listing.id }}/sent">{{ hidden() }}<button type="submit">✅ Ja, abgeschickt</button></form>
-          <button type="button" class="secondary outline" data-ask-sent-later>Noch nicht</button>
         </div>
       </article>
+      <dialog class="ed-ask-dialog" data-ask-sent="{{ listing.id }}" aria-labelledby="ask-sent-title">
+        <article>
+          <header>
+            <button type="button" aria-label="Schließen" rel="prev" data-ask-close></button>
+            <h2 id="ask-sent-title">Hast du die Nachricht abgeschickt?</h2>
+          </header>
+          <p class="ed-ask-listing">{{ listing.title or "Dieses Inserat" }}</p>
+          <p class="help">Dann steht das Inserat auf „gesendet“, auch in Telegram. Willst du noch etwas ändern, schließ das Fenster einfach.</p>
+          <footer class="ed-actions">
+            <button type="button" class="secondary outline" data-ask-close>Noch nicht</button>
+            <form method="post" action="/editor/{{ listing.id }}/sent">{{ hidden() }}<button type="submit" autofocus>✅ Ja, abgeschickt</button></form>
+          </footer>
+        </article>
+      </dialog>
       {% endif %}
       <details class="disclosure ed-diff">
         <summary>Änderungen zum Original <span class="badge {{ 'warn' if changed else '' }}">{{ "geändert" if changed else "keine" }}</span></summary>
