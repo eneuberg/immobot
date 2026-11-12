@@ -557,12 +557,14 @@ def test_mark_sent(client, lid):
     editor_cookie(client, lid)
     _, fields = open_editor(client, lid)
     post(client, lid, "finish", fields, text="Ende")
-    assert "✅ Als gesendet markieren" in client.get(f"/editor/{lid}").text
+    page = client.get(f"/editor/{lid}").text
+    assert "Hast du die Nachricht abgeschickt?" in page and "✅ Ja, abgeschickt" in page
+    assert f'data-opens-listing="{lid}"' in page and "data-ask-sent-later" in page
     r = post(client, lid, "sent", {"token": fields["token"]})
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=sent#ende"
     assert db.get_listing(lid)["status"] == "sent" and client.refreshed == [lid, lid]  # Telegram: Endversion, then "gesendet"
     page = client.get(f"/editor/{lid}").text
-    assert "als gesendet markiert" in page and "✅ Als gesendet markieren" not in page
+    assert "als gesendet markiert" in page and "Hast du die Nachricht abgeschickt?" not in page
 
 
 def test_new_round_from_a_newer_draft(client, lid):
@@ -671,10 +673,11 @@ def test_page_without_a_save_button(client, lid):
     editor_cookie(client, lid)
     r, _ = open_editor(client, lid)
     bar = r.text.split('<div class="ed-bar">')[1].split("</div>")[0]
-    assert ">Kopieren</button>" in bar and ">Fertig ✓</button>" in bar and "Speichern" not in bar
+    assert ">Fertig ✓</button>" in bar and "Speichern" not in bar
+    assert "Kopieren" not in r.text.split('<div class="ed-grid"')[0] + bar  # copying comes after "Fertig"
     head = r.text.split('<header class="ed-card-head">')[1].split("</header>")[0]
     assert 'class="linkish ed-save-nojs nojs-only"' in head and ">Zwischenspeichern</button>" in head  # without JS
-    assert "„Fertig“ = das ist meine Endversion → Claude sucht Regeln, Telegram zeigt diese Fassung." in bar
+    assert "Erst bearbeiten, dann „Fertig“: Danach kannst du den Text kopieren" in bar
     assert 'data-save-state role="status"' in r.text and "data-save-reload hidden" in r.text
 
 
@@ -731,8 +734,7 @@ def test_rules_card_explains_the_search(client, lid, fake_rules):
     post(client, lid, "finish", fields, text="Geändert")
     wait_for_rules(client, lid)
     page = client.get(f"/editor/{lid}").text
-    assert ("Claude vergleicht seinen Entwurf mit deiner Endversion (inkl. geänderter Sätze) und deiner Kritik\n"
-            "          und schlägt allgemeine Regeln vor – du entscheidest.") in page
+    assert "Claude schaut, was du selbst geändert hast, was du von seinen Überarbeitungen behalten hast" in page
     # Claude proposed something: "Regel selbst eintragen" is there, but collapsed
     assert '<details class="rule-add">\n  <summary>Regel selbst eintragen</summary>' in page
 
@@ -918,3 +920,45 @@ def test_editor_redirects_become_json_for_editor_js(client, lid):
     assert r.status_code == 303
     r = client.post(f"/editor/{lid}/save", data={"text": "x"}, headers={"X-Editor-Nav": "replace"})
     assert r.status_code != 200 or "location" not in r.text  # error pages stay pages
+
+
+def test_claudes_revision_is_kept_or_undone(client, lid, fake_generate):
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    editor_cookie(client, lid)
+    _, fields = open_editor(client, lid)
+    post(client, lid, "revise", fields, text="Original von Hand", critique="natürlicher")
+    page = client.get(f"/editor/{lid}").text
+    assert "Claudes Überarbeitung</strong> – „natürlicher“" in page and "👍 Übernehmen" in page
+    r = post(client, lid, "revision", fields, text="Fassung von Claude 1", decision="reject")
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=revision_undone#text"
+    assert db.latest_session(lid)["current_text"] == "Original von Hand"
+    assert "Claudes Überarbeitung</strong>" not in client.get(f"/editor/{lid}").text
+    assert post(client, lid, "revision", fields, text="x", decision="accept").status_code == 400  # nothing to decide
+    post(client, lid, "revise", fields, text="Original von Hand", critique="kürzer")
+    r = post(client, lid, "revision", fields, text="Fassung von Claude 2, noch von Hand", decision="accept")
+    assert r.headers["location"] == f"/editor/{lid}?m=revision_kept#text"
+    assert db.latest_session(lid)["current_text"] == "Fassung von Claude 2, noch von Hand"
+    assert [f["decision"] for f in db.list_feedback(session_id=db.latest_session(lid)["id"])] == ["accepted", "rejected"]
+
+
+def test_rule_accepted_with_scope_and_strength_and_a_fact(client, lid):
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    db.update_settings({"profile": "Einzug: ideal November."})
+    editor_cookie(client, lid)
+    _, fields = open_editor(client, lid)
+    post(client, lid, "finish", fields, text="Ende")
+    session_id = db.latest_session(lid)["id"]
+    rule = db.add_rule("Gern ein Smiley.", session_id=session_id, scope="privat", strength="soft")
+    fact = db.add_rule("Einzug ab sofort", action="fact", session_id=session_id, fact_old="ideal November",
+                       fact_new="ab sofort")
+    page = client.get(f"/editor/{lid}").text
+    assert 'value="privat"' in page and "„Über mich“ ergänzen" in page and "In „Über mich“ bisher:" in page
+    r = post(client, lid, f"rules/{rule}", {"token": fields["token"], "session_id": str(session_id)},
+             decision="accept", text="Gern ein „:)“.", scope="lockerer Ton", strength="hard", has_opts="1")
+    assert r.status_code == 303
+    assert {k: db.get_rule(rule)[k] for k in ("status", "text", "scope", "strength")} == {
+        "status": "active", "text": "Gern ein „:)“.", "scope": "lockerer Ton", "strength": "hard"}
+    r = post(client, lid, f"rules/{fact}", {"token": fields["token"], "session_id": str(session_id)},
+             decision="accept", text="ab sofort")
+    assert r.headers["location"] == f"/editor/{lid}?m=fact#regeln"
+    assert db.get_settings()["profile"] == "Einzug: ab sofort." and db.get_rule(fact)["status"] == "merged"

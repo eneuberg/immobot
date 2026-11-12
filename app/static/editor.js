@@ -332,6 +332,25 @@
     setTimeout(check, 2000);
   }
 
+  // --- "Hast du die Nachricht abgeschickt?": after "Inserat öffnen", when the person comes back ------------------
+  // A flag in sessionStorage survives the reload when the rule proposals arrive meanwhile.
+  var ask = document.querySelector("[data-ask-sent]");
+  var askKey = ask ? "immobot-opened-" + ask.dataset.askSent : null;
+  function store(action, value) { try { return action === "get" ? sessionStorage.getItem(askKey) : (value ? sessionStorage.setItem(askKey, "1") : sessionStorage.removeItem(askKey)); } catch (err) { return null; } }
+  function bringUp() { ask.classList.add("is-asking"); ask.scrollIntoView({ behavior: "smooth", block: "center" }); }
+  if (ask) {
+    document.querySelectorAll("[data-opens-listing]").forEach(function (link) {
+      link.addEventListener("click", function () { store("set", true); });
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible" && store("get")) bringUp();
+    });
+    if (store("get")) bringUp();
+    ask.addEventListener("submit", function () { store("set", false); });
+    var later = ask.querySelector("[data-ask-sent-later]");
+    if (later) later.addEventListener("click", function () { store("set", false); ask.classList.remove("is-asking"); ask.hidden = true; });
+  }
+
   if (form && text && window.location.hash === "#text" && window.matchMedia("(min-width: 768px)").matches) {
     text.focus({ preventScroll: true });
   }

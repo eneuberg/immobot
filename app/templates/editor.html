@@ -140,11 +140,27 @@
         <p class="help ed-intro">Selbst ändern oder unten Claude überarbeiten lassen; „Fertig“ speichert die Endversion.</p>
         {% endif %}
         {% if hint %}<div class="callout warn"><div class="md"><strong class="md-label">Hinweis von Claude:</strong> {{ hint|md }}</div></div>{% endif %}
+        {% if review %}
+        {# Claude's last revision, to keep or to undo (learning.decide_revision); the decision goes into learning. #}
+        <div class="callout info ed-review" id="ueberarbeitung" role="status">
+          <div>
+            <p><strong>Claudes Überarbeitung</strong> – {% if review.kind == "quick" %}{{ review.quick_label }}{% else %}„{{ review.text }}“{% endif %}. Behalten oder zurück zu deinem Text?</p>
+            <details class="ed-review-diff">
+              <summary>Was Claude geändert hat</summary>
+              {{ text_diff((review.before_text or "")|word_diff(review.draft_text)|trim_diff) }}
+            </details>
+            <div class="ed-actions">
+              <button type="submit" formaction="/editor/{{ listing.id }}/revision" name="decision" value="accept" class="btn-sm">👍 Übernehmen</button>
+              <button type="submit" formaction="/editor/{{ listing.id }}/revision" name="decision" value="reject" class="secondary outline btn-sm"
+                      data-confirm="Zurück zu deinem Text von vor der Überarbeitung? Was du seitdem geändert hast, geht verloren.">↩️ Verwerfen</button>
+            </div>
+          </div>
+        </div>
+        {% endif %}
         <textarea id="ed-text" name="text" rows="12" maxlength="20000" spellcheck="true" data-autosize>{{ text }}</textarea>
         <div class="ed-bar">
-          <button type="button" class="secondary outline" data-copy-field="ed-text">Kopieren</button>
           <button type="submit" formaction="/editor/{{ listing.id }}/finish" aria-describedby="ed-done-note">Fertig ✓</button>
-          <p class="ed-bar-note" id="ed-done-note">„Fertig“ = das ist meine Endversion → Claude sucht Regeln, Telegram zeigt diese Fassung.</p>
+          <p class="ed-bar-note" id="ed-done-note">Erst bearbeiten, dann „Fertig“: Danach kannst du den Text kopieren und abschicken, und Claude lernt aus deinen Änderungen.</p>
         </div>
       </article>
       <details class="disclosure ed-diff">
@@ -195,15 +211,22 @@
         <pre class="draft" id="ed-final">{{ text }}</pre>
         <div class="ed-actions">
           <button type="button" class="copy-btn" data-copy="ed-final">Kopieren</button>
-          {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary">📨 Inserat öffnen ↗</a>{% endif %}
-          {% if listing.status == "sent" %}
-          <span class="badge ok ed-sent">✓ als gesendet markiert</span>
-          {% else %}
-          <form method="post" action="/editor/{{ listing.id }}/sent">{{ hidden() }}<button type="submit" class="secondary outline">✅ Als gesendet markieren</button></form>
-          {% endif %}
+          {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary" data-opens-listing="{{ listing.id }}">📨 Inserat öffnen ↗</a>{% endif %}
+          {% if listing.status == "sent" %}<span class="badge ok ed-sent">✓ als gesendet markiert</span>{% endif %}
           <form method="post" action="/editor/{{ listing.id }}/reopen">{{ hidden() }}<button type="submit" class="secondary outline">Weiter bearbeiten</button></form>
         </div>
       </article>
+      {% if listing.status != "sent" %}
+      {# Asked after "Inserat öffnen" (editor.js brings it into view on return); the rule proposals follow below. #}
+      <article class="ed-card ed-ask-sent" id="abgeschickt" data-ask-sent="{{ listing.id }}">
+        <h2>Hast du die Nachricht abgeschickt?</h2>
+        <p class="help">Kopieren, im Inserat einfügen und absenden – dann hier bestätigen. Das Inserat steht danach auf „gesendet“, auch in Telegram.</p>
+        <div class="ed-actions">
+          <form method="post" action="/editor/{{ listing.id }}/sent">{{ hidden() }}<button type="submit">✅ Ja, abgeschickt</button></form>
+          <button type="button" class="secondary outline" data-ask-sent-later>Noch nicht</button>
+        </div>
+      </article>
+      {% endif %}
       <details class="disclosure ed-diff">
         <summary>Änderungen zum Original <span class="badge {{ 'warn' if changed else '' }}">{{ "geändert" if changed else "keine" }}</span></summary>
         <div class="disclosure-body">
@@ -216,9 +239,10 @@
     <div class="ed-side">
       {% if use_rules or proposals or decided %}
       <article class="ed-card ed-rules" id="regeln">
-        <h2>Regeln für künftige Entwürfe</h2>
-        <p class="help">Claude vergleicht seinen Entwurf mit deiner Endversion (inkl. geänderter Sätze) und deiner Kritik
-          und schlägt allgemeine Regeln vor – du entscheidest. Übernommene Regeln gelten für jeden neuen Entwurf.
+        <h2>Was Claude daraus lernt</h2>
+        <p class="help">Claude schaut, was du selbst geändert hast, was du von seinen Überarbeitungen behalten hast und
+          was du schon früher geändert hast, und schlägt Vorlieben vor – oder Korrekturen an „Über mich“. Du entscheidest
+          und kannst jeden Vorschlag anpassen.
           {% if logged_in %}<a href="/settings/verhalten#regeln">Alle Regeln</a>{% else %}Alle Regeln: im Dashboard unter Einstellungen → Verhalten.{% endif %}</p>
         {% if job and job.state == "running" %}
         <p class="ed-wait" aria-busy="true" data-rules-poll="/editor/{{ listing.id }}/rules/status">Claude sucht nach Regeln …</p>
@@ -233,10 +257,21 @@
           <p class="ed-rule-kind"><span class="badge {{ 'err' if rule.action == 'remove' else 'accent' }}">{{ rule.action_label }}</span></p>
           {% if rule.action == "remove" %}
           <p class="ed-rule-text"><del>{{ rule.text }}</del></p>
+          {% elif rule.action == "fact" %}
+          <p class="ed-rule-text"><strong>{{ rule.text }}</strong></p>
+          {% if rule.fact_old %}<p class="ed-rule-old"><span class="muted">In „Über mich“ bisher:</span> {{ rule.fact_old }}</p>{% endif %}
+          <label for="rule-{{ rule.id }}">{{ "Neu" if rule.fact_old else "Anhängen an „Über mich“" }}</label>
+          <textarea id="rule-{{ rule.id }}" name="text" rows="2" maxlength="2000" data-autosize>{{ rule.fact_new }}</textarea>
           {% else %}
           {% if rule.target_text %}<p class="ed-rule-old"><span class="muted">Bisher:</span> {{ rule.target_text }}</p>{% endif %}
           <label class="sr-only" for="rule-{{ rule.id }}">Text der Regel</label>
           <textarea id="rule-{{ rule.id }}" name="text" rows="3" maxlength="300" data-autosize>{{ rule.text }}</textarea>
+          <div class="ed-rule-opts">
+            <label for="scope-{{ rule.id }}">Gilt, wenn <small class="muted">(leer = generell)</small></label>
+            <input id="scope-{{ rule.id }}" name="scope" maxlength="150" value="{{ rule.scope or '' }}" placeholder="z. B. privater Vermieter">
+            <label class="check"><input type="checkbox" name="strength" value="hard" {% if rule.strength == "hard" %}checked{% endif %}> immer <small class="muted">(sonst eine Tendenz, von der Claude abweichen darf)</small></label>
+            <input type="hidden" name="has_opts" value="1">
+          </div>
           {% endif %}
           {% if rule.reason %}<div class="ed-reason md">{{ rule.reason|md }}</div>{% endif %}
           <div class="ed-actions">

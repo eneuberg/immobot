@@ -59,6 +59,9 @@ MESSAGES = {
     "accepted": "Regel übernommen – sie gilt ab dem nächsten Entwurf.",
     "removed": "Regel abgeschaltet.",
     "rejected": "Vorschlag verworfen.",
+    "fact": "„Über mich“ geändert – gilt ab dem nächsten Entwurf.",
+    "revision_kept": "Überarbeitung übernommen.",
+    "revision_undone": "Zurück zu deinem Text von vor der Überarbeitung.",
     "sent": "Als gesendet markiert.",
     "draft": "Entwurf erzeugt.",
     "media": "Inserat neu geladen.",
@@ -101,7 +104,8 @@ EXPIRED = (401, "Sitzung abgelaufen – bitte anmelden",
            "unter einem neuen Entwurf noch einmal auf „📝\u00a0Bearbeiten“ tippen.")
 NOT_FOUND = (404, "Inserat nicht gefunden", "Dieses Inserat gibt es nicht (mehr).")
 
-RULE_ACTION_LABELS = {"add": "Neue Regel", "update": "Regel ändern", "remove": "Regel streichen"}
+RULE_ACTION_LABELS = {"add": "Neue Vorliebe", "update": "Regel ändern", "remove": "Regel streichen",
+                      "fact": "„Über mich“ ergänzen"}
 CALLS_SHOWN_FROM = 20  # "Heute schon n von 30 Claude-Aufrufen …" only when the daily limit comes near
 
 # Rule proposals after "Fertig": session id -> {"state": "running" | "done" | "error", "error": message or None}.
@@ -269,6 +273,7 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
         last_draft = db.get_draft(session["last_draft_id"]) if session["last_draft_id"] else None
         newer = learning.newer_draft(session)
         proposals, decided = _proposals(session)
+        review = learning.pending_review(session)
         job = _rule_job(session["id"])
         if job and job["state"] == "done":
             _rule_jobs.pop(session["id"], None)  # shown now: the page lists the proposals
@@ -282,6 +287,7 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
             newer={**newer, "kind_label": web.DRAFT_KIND_LABELS.get(newer["kind"], newer["kind"])} if newer else None,
             proposals=proposals,
             decided=decided,
+            review={**review, "quick_label": learning.QUICK_LABELS.get(review["text"])} if review else None,
             job=job if job and job["state"] != "done" else None,
             job_error=web.redact(request, job["error"]) if job and job.get("error") else None,
             calls_today=learning.editor_calls_today(listing_id),
@@ -447,6 +453,25 @@ async def editor_revise(request: Request, listing_id: str, token: str = Form("")
     return _back(listing["id"], "revised", "text")
 
 
+@router.post("/editor/{listing_id}/revision", dependencies=ACTION)
+def editor_revision(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
+                    text: str = Form(""), decision: str = Form("")):
+    """"👍 Übernehmen" (hand edits since are saved) / "↩️ Verwerfen" (back to the text before the revision)."""
+    listing, mode, denied = _gate(request, listing_id, token)
+    if denied is not None:
+        return denied
+    session = _current_session(listing, session_id)
+    if session is None or session["status"] != "open":
+        return _stale(request, listing, mode, text)
+    try:
+        if decision == "accept":
+            learning.save_text(session["id"], text)
+        learning.decide_revision(session["id"], decision == "accept")
+    except Exception as exc:
+        return _failed(request, listing, mode, exc)
+    return _back(listing["id"], "revision_kept" if decision == "accept" else "revision_undone", "text")
+
+
 # --- quick buttons next to the critique field ("Kürzer", "Förmlicher", "Ganz neu schreiben") ---------------------
 
 @router.post("/editor/{listing_id}/quick", dependencies=ACTION)
@@ -587,7 +612,8 @@ def editor_add_rule(request: Request, listing_id: str, token: str = Form(""), se
 
 @router.post("/editor/{listing_id}/rules/{rule_id}", dependencies=ACTION)
 def editor_decide_rule(request: Request, listing_id: str, rule_id: str, token: str = Form(""),
-                       session_id: str = Form(""), decision: str = Form(""), text: str = Form("")):
+                       session_id: str = Form(""), decision: str = Form(""), text: str = Form(""),
+                       scope: str = Form(""), strength: str = Form(""), has_opts: str = Form("")):
     """✅ / ❌ on a rule proposal - only one of this listing's current session."""
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
@@ -600,11 +626,15 @@ def editor_decide_rule(request: Request, listing_id: str, rule_id: str, token: s
     if decision not in ("accept", "reject"):
         return _render(request, listing, mode, error="Bitte „Übernehmen“ oder „Verwerfen“ wählen.", status_code=400)
     try:
-        decided = learning.decide_rule(rule["id"], decision == "accept", text if rule["action"] != "remove" else None)
+        opts = {"scope": scope, "strength": "hard" if strength == "hard" else "soft"} if has_opts == "1" else {}
+        decided = learning.decide_rule(rule["id"], decision == "accept", text if rule["action"] != "remove" else None,
+                                       **opts)
     except Exception as exc:
         return _failed(request, listing, mode, exc)
     if decision == "reject":
         message = "rejected"
+    elif rule["action"] == "fact":
+        message = "fact"
     else:
         message = "removed" if rule["action"] == "remove" and decided["id"] != rule["id"] else "accepted"
     return _back(listing["id"], message, "regeln")
