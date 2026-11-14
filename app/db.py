@@ -2,8 +2,10 @@
 FastAPI threadpool and the Telegram bot's event loop.
 
 Tables:
-  listings         one row per listing received from Fredy (+ ImmoScout24 details and picture source, see media.py)
-                   and seen_at, when the person first looked at it (mark_seen; NULL = still unseen)
+  listings         one row per listing received from Fredy (+ ImmoScout24 details and picture source, see media.py),
+                   its track status (settings.STATUSES: new -> seen -> drafted -> sent), seen_at (when the person
+                   first looked at it, mark_seen; NULL = unseen) and, beside the status, whether it is aussortiert
+                   (discard_reason, settings.DISCARD_REASONS; NULL = not)
   listing_media    pictures of a listing, from Fredy or ImmoScout24 (files under DATA_DIR/media/<listing id>/;
                    `file` is "" until the picture is downloaded)
   drafts           every generated message, with provider, model, tokens and cost in the provider's currency
@@ -39,7 +41,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-from .settings import DEFAULT_SETTINGS, PROFILE_FIELDS, eur_usd_rate
+from .settings import DEFAULT_SETTINGS, MANUAL_DISCARD, PROFILE_FIELDS, STATUSES, eur_usd_rate
 
 _db_path: str | None = None
 
@@ -230,12 +232,19 @@ ADDED_COLUMNS = {
         ("album_message_id", "INTEGER"),
         ("album_sent_at", "TEXT"),
         ("media_source", "TEXT"),  # "fredy" | "is24" | NULL
-        # auto_dismiss: NULL, "dismissed" (set to uninteressant after auto_dismiss_hours without a draft) or "kept"
-        # (the user changed the status since, or set it to neu: never automatically again)
+        # NULL, or "kept": brought back by hand (↩️ Zurückholen), never "uninteressant" automatically again
+        # (auto_dismiss). Before discard_reason existed it was also "dismissed" (migrated, see _add_missing_columns).
         ("auto_status", "TEXT"),
         # when the person first looked at or acted on the listing (page, editor, a status, a Telegram button);
-        # NULL = never: the dashboard card glows while it is still "neu"
+        # NULL = never (status "new": the dashboard card glows)
         ("seen_at", "TEXT"),
+        # Aussortiert (settings.DISCARD_REASONS), beside the status, which stays as it was underneath: NULL = not;
+        # since when; 1 = by a job (housekeeping.py), 0 = by hand. discard_prev: the "uninteressant" an "offline"
+        # replaced (JSON {"reason", "auto", "at"}), restored when Fredy reports the ad online again (mark_online).
+        ("discard_reason", "TEXT"),
+        ("discarded_at", "TEXT"),
+        ("discard_auto", "INTEGER NOT NULL DEFAULT 0"),
+        ("discard_prev", "TEXT"),
     ],
     "listing_media": [("floor_plan", "INTEGER NOT NULL DEFAULT 0")],
     "drafts": [
@@ -304,6 +313,18 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
         # Listings from before "seen" existed: the ones the person touched (a status other than "neu", or brought
         # back to "neu") count as seen; plain "neu" ones stay unseen.
         conn.execute("UPDATE listings SET seen_at = updated_at WHERE status != 'new' OR auto_status = 'kept'")
+    if ("listings", "discard_reason") in added:
+        # "uninteressant" was a status until now: it becomes aussortiert (automatically if auto_status said so), and the
+        # status underneath is the best guess of where the listing was: "Entwurf" with drafts, else "Gesehen" if it
+        # was looked at, else "Neu". "neu" listings already looked at are "Gesehen" now. "kept" stays as it is.
+        conn.execute("""
+            UPDATE listings SET discard_reason = 'uninteressant', discarded_at = updated_at,
+                discard_auto = CASE WHEN auto_status = 'dismissed' THEN 1 ELSE 0 END,
+                status = CASE WHEN EXISTS (SELECT 1 FROM drafts d WHERE d.listing_id = listings.id AND d.kind != 'test')
+                              THEN 'drafted' WHEN seen_at IS NOT NULL THEN 'seen' ELSE 'new' END
+            WHERE status = 'dismissed'""")
+        conn.execute("UPDATE listings SET auto_status = NULL WHERE auto_status = 'dismissed'")
+        conn.execute("UPDATE listings SET status = 'seen' WHERE status = 'new' AND seen_at IS NOT NULL")
 
 
 @contextmanager
@@ -369,9 +390,11 @@ def latest_listing() -> dict | None:
 
 
 def list_listings(status: str | None = None, limit: int = 300, auto: bool = False,
-                  listing_id: int | None = None) -> list[dict]:
+                  listing_id: int | None = None, discard: str | None = None) -> list[dict]:
     """Listings newest first, each with draft_count and cost_eur (its drafts plus its learning calls in llm_usage,
-    in euros). auto: only those dismissed automatically. listing_id: just that one (a single card)."""
+    in euros). status: one track status. discard: None = aussortiert or not, "none" = not aussortiert, "any" =
+    aussortiert, or one settings.DISCARD_REASONS key. auto: only those aussortiert by a job. listing_id: just that one
+    (a single card)."""
     sql = """
         SELECT l.*, COUNT(d.id) AS draft_count,
                COALESCE(SUM({cost}), 0)
@@ -382,60 +405,196 @@ def list_listings(status: str | None = None, limit: int = 300, auto: bool = Fals
     """
     rate = _rate()
     params: list = [rate, rate]
-    where = ""
+    where = []
     if status:
-        where = "WHERE l.status = ?"
+        where.append("l.status = ?")
         params.append(status)
+    if discard == "none":
+        where.append("l.discard_reason IS NULL")
+    elif discard == "any":
+        where.append("l.discard_reason IS NOT NULL")
+    elif discard:
+        where.append("l.discard_reason = ?")
+        params.append(discard)
     if auto:
-        where += (" AND" if where else "WHERE") + " l.status = 'dismissed' AND l.auto_status = 'dismissed'"
+        where.append("l.discard_reason IS NOT NULL AND l.discard_auto = 1")
     if listing_id is not None:
-        where += (" AND" if where else "WHERE") + " l.id = ?"
+        where.append("l.id = ?")
         params.append(listing_id)
     params.append(limit)
-    sql = sql.format(cost=cost_eur_sql("d"), usage_cost=cost_eur_sql("u"), where=where)
+    sql = sql.format(cost=cost_eur_sql("d"), usage_cost=cost_eur_sql("u"),
+                     where="WHERE " + " AND ".join(where) if where else "")
     with connect() as conn:
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
 def unannounced_listing_ids(hours: int = 24) -> list[int]:
-    """Recent 'new' listings that never got a Telegram follow-up (e.g. bot was down when Fredy posted them)."""
+    """Recent listings without a draft that never got a Telegram follow-up (e.g. bot was down when Fredy posted
+    them), not aussortiert."""
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
     with connect() as conn:
         rows = conn.execute(
-            "SELECT id FROM listings WHERE status = 'new' AND tg_message_id IS NULL AND received_at >= ? ORDER BY id",
+            "SELECT id FROM listings WHERE status IN ('new', 'seen') AND discard_reason IS NULL "
+            "AND tg_message_id IS NULL AND received_at >= ? ORDER BY id",
             (since,),
         ).fetchall()
         return [r["id"] for r in rows]
 
 
-def set_listing_status(listing_id: int, status: str) -> None:
-    """A status change by the user or a draft. After it the listing is never dismissed automatically again if it had
-    been, or if it is set back to neu (see auto_dismiss)."""
-    with connect() as conn:
-        conn.execute("UPDATE listings SET status = ?, updated_at = ?, auto_status = CASE "
-                     "WHEN ? = 'new' OR auto_status IS NOT NULL THEN 'kept' END WHERE id = ?",
-                     (status, now_iso(), status, listing_id))
+# --- status & aussortiert -----------------------------------------------------
+# Track status (settings.STATUSES) and "aussortiert" (discard_reason) are separate. "Neu", "Gesehen" and "Entwurf"
+# just happen (insert_listing, mark_seen, advance_status); by hand there is only "✅ Gesendet" (mark_sent, undone with
+# unmark_sent) and "❌ Uninteressant" (discard, undone with restore). Aussortiert locks the status as it is until it
+# is undone (restore, mark_online). Every function here changes only the rows it is meant for and says which.
 
-
-def mark_seen(listing_id: int) -> bool:
-    """The person looked at or acted on the listing (page, editor, a status change, a Telegram button). Only the
-    first time is stored; automatic changes (auto_dismiss, webhook, picture fetches) never call this.
-    Returns whether it was unseen until now."""
+def set_listing_status(listing_id: int, status: str) -> bool:
+    """Low level: set the status as it is (also backwards); any status but "new" counts as seen. Refused while the
+    listing is aussortiert (False). The person's actions go through mark_sent / unmark_sent."""
     with connect() as conn:
-        cur = conn.execute("UPDATE listings SET seen_at = ? WHERE id = ? AND seen_at IS NULL", (now_iso(), listing_id))
+        cur = conn.execute("UPDATE listings SET status = ?, updated_at = ?, "
+                           "seen_at = CASE WHEN ? = 'new' THEN seen_at ELSE COALESCE(seen_at, ?) END "
+                           "WHERE id = ? AND discard_reason IS NULL",
+                           (status, now_iso(), status, now_iso(), listing_id))
         return cur.rowcount > 0
 
 
-def auto_dismiss(received_before: str) -> list[int]:
-    """Listings still "neu" (no draft, untouched) received before `received_before`: set to uninteressant, marked
-    auto_status "dismissed". Returns their ids, newest first."""
+def mark_sent(listing_id: int) -> bool:
+    """"✅ Gesendet" (listing page, editor "Ja, abgeschickt", Telegram). Refused while aussortiert (False)."""
+    return set_listing_status(listing_id, "sent")
+
+
+def unmark_sent(listing_id: int) -> bool:
+    """"Gesendet zurücknehmen" (pressed by mistake): back to "drafted" if the listing has a draft, else "seen".
+    Only a sent listing that isn't aussortiert. Returns whether it changed."""
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE listings SET updated_at = ?, status = CASE WHEN EXISTS (SELECT 1 FROM drafts d "
+            "WHERE d.listing_id = listings.id AND d.kind != 'test') THEN 'drafted' ELSE 'seen' END "
+            "WHERE id = ? AND status = 'sent' AND discard_reason IS NULL", (now_iso(), listing_id))
+        return cur.rowcount > 0
+
+
+def advance_status(listing_id: int, status: str) -> bool:
+    """An automatic step forward (a draft -> "drafted"): only from an earlier status, never back. Also while
+    aussortiert (it then shows as "war: Entwurf"). Returns whether it moved."""
+    earlier = list(STATUSES)[:list(STATUSES).index(status)]
+    if not earlier:
+        return False
+    with connect() as conn:
+        cur = conn.execute(f"UPDATE listings SET status = ?, updated_at = ?, seen_at = COALESCE(seen_at, ?) "
+                           f"WHERE id = ? AND status IN ({_placeholders(earlier)})",
+                           (status, now_iso(), now_iso(), listing_id, *earlier))
+        return cur.rowcount > 0
+
+
+def mark_seen(listing_id: int) -> bool:
+    """The person looked at or acted on the listing (page, editor, a status change, a Telegram button): "new" moves
+    to "seen". Only the first time is stored in seen_at; automatic changes (housekeeping, webhook, picture fetches)
+    never call this. Returns whether it was unseen until now."""
+    with connect() as conn:
+        cur = conn.execute("UPDATE listings SET seen_at = COALESCE(seen_at, ?), "
+                           "status = CASE WHEN status = 'new' THEN 'seen' ELSE status END "
+                           "WHERE id = ? AND (seen_at IS NULL OR status = 'new')", (now_iso(), listing_id))
+        return cur.rowcount > 0
+
+
+def discard(listing_id: int, reason: str = MANUAL_DISCARD, auto: bool = False) -> bool:
+    """Aussortieren (by hand only MANUAL_DISCARD, the ❌). Only a listing that isn't aussortiert yet; its status stays
+    underneath. Returns whether it changed."""
+    with connect() as conn:
+        cur = conn.execute("UPDATE listings SET discard_reason = ?, discarded_at = ?, discard_auto = ?, "
+                           "discard_prev = NULL, updated_at = ? WHERE id = ? AND discard_reason IS NULL",
+                           (reason, now_iso(), int(auto), now_iso(), listing_id))
+        return cur.rowcount > 0
+
+
+def restore(listing_id: int) -> bool:
+    """↩️ Zurückholen: only "uninteressant" (offline and veraltet are final). The status underneath shows again, and
+    the listing is never "uninteressant" automatically again (auto_status "kept"). Returns whether it changed."""
+    with connect() as conn:
+        cur = conn.execute("UPDATE listings SET discard_reason = NULL, discarded_at = NULL, discard_auto = 0, "
+                           "discard_prev = NULL, auto_status = 'kept', updated_at = ? "
+                           "WHERE id = ? AND discard_reason = ?", (now_iso(), listing_id, MANUAL_DISCARD))
+        return cur.rowcount > 0
+
+
+def _discard_many(conn: sqlite3.Connection, ids: list[int], reason: str) -> None:
+    conn.executemany("UPDATE listings SET discard_reason = ?, discarded_at = ?, discard_auto = 1, discard_prev = NULL, "
+                     "updated_at = ? WHERE id = ? AND discard_reason IS NULL",
+                     [(reason, now_iso(), now_iso(), listing_id) for listing_id in ids])
+
+
+def auto_dismiss(seen_before: str) -> list[int]:
+    """Listings "seen" before `seen_before` that got no draft since (status still "seen", no non-test draft), not
+    aussortiert and never brought back by hand: aussortiert "uninteressant" by the job. Never unseen "new" ones.
+    Returns their ids, newest first."""
     with connect() as conn:
         ids = [row[0] for row in conn.execute(
-            "SELECT id FROM listings WHERE status = 'new' AND auto_status IS NULL AND received_at < ? ORDER BY id DESC",
-            (received_before,))]
-        conn.executemany("UPDATE listings SET status = 'dismissed', auto_status = 'dismissed', updated_at = ? "
-                         "WHERE id = ?", [(now_iso(), listing_id) for listing_id in ids])
+            "SELECT id FROM listings l WHERE status = 'seen' AND discard_reason IS NULL AND auto_status IS NULL "
+            "AND seen_at < ? AND NOT EXISTS (SELECT 1 FROM drafts d WHERE d.listing_id = l.id AND d.kind != 'test') "
+            "ORDER BY id DESC", (seen_before,))]
+        _discard_many(conn, ids, MANUAL_DISCARD)
     return ids
+
+
+def discard_stale(received_before: str) -> list[int]:
+    """Listings received before `received_before`, whatever their status, not aussortiert yet: aussortiert
+    "veraltet" by the job. Returns their ids, newest first."""
+    with connect() as conn:
+        ids = [row[0] for row in conn.execute(
+            "SELECT id FROM listings WHERE discard_reason IS NULL AND received_at < ? ORDER BY id DESC",
+            (received_before,))]
+        _discard_many(conn, ids, "veraltet")
+    return ids
+
+
+_FREDY_ID_CHUNK = 500  # ids per query (SQLite's limit of bound parameters)
+
+
+def _rows_by_fredy_id(conn: sqlite3.Connection, fredy_ids, where: str) -> list[sqlite3.Row]:
+    ids = sorted({str(i) for i in fredy_ids if i not in (None, "")})
+    rows = []
+    for start in range(0, len(ids), _FREDY_ID_CHUNK):
+        chunk = ids[start:start + _FREDY_ID_CHUNK]
+        rows += conn.execute(f"SELECT * FROM listings WHERE fredy_id IN ({_placeholders(chunk)}) AND {where}",
+                             chunk).fetchall()
+    return sorted(rows, key=lambda row: -row["id"])
+
+
+def mark_offline(fredy_ids) -> list[int]:
+    """Fredy reports these ads as no longer online: aussortiert "offline" (by the job; final, not undone by hand).
+    It replaces an "uninteressant" (kept in discard_prev for mark_online); listings already offline or veraltet stay
+    as they are. Returns the ids that changed, newest first."""
+    with connect() as conn:
+        rows = _rows_by_fredy_id(conn, fredy_ids, "(discard_reason IS NULL OR discard_reason = 'uninteressant')")
+        for row in rows:
+            prev = None
+            if row["discard_reason"]:
+                prev = json.dumps({"reason": row["discard_reason"], "auto": row["discard_auto"],
+                                   "at": row["discarded_at"]})
+            conn.execute("UPDATE listings SET discard_reason = 'offline', discarded_at = ?, discard_auto = 1, "
+                         "discard_prev = ?, updated_at = ? WHERE id = ?", (now_iso(), prev, now_iso(), row["id"]))
+    return [row["id"] for row in rows]
+
+
+def mark_online(fredy_ids) -> list[int]:
+    """Fredy reports these ads online again: "offline" is lifted, back to the "uninteressant" it replaced (if any) or
+    to not aussortiert. Nothing else changes (a veraltet one stays veraltet; one older than settings.STALE_DAYS
+    becomes veraltet with the next housekeeping run). Returns the ids that changed, newest first."""
+    with connect() as conn:
+        rows = _rows_by_fredy_id(conn, fredy_ids, "discard_reason = 'offline'")
+        for row in rows:
+            try:
+                prev = json.loads(row["discard_prev"]) if row["discard_prev"] else None
+            except ValueError:
+                prev = None
+            if isinstance(prev, dict) and prev.get("reason") == MANUAL_DISCARD:
+                values = (MANUAL_DISCARD, prev.get("at") or now_iso(), 1 if prev.get("auto") else 0)
+            else:
+                values = (None, None, 0)
+            conn.execute("UPDATE listings SET discard_reason = ?, discarded_at = ?, discard_auto = ?, "
+                         "discard_prev = NULL, updated_at = ? WHERE id = ?", (*values, now_iso(), row["id"]))
+    return [row["id"] for row in rows]
 
 
 def set_listing_tg_message(listing_id: int, message_id: int) -> None:
@@ -659,19 +818,23 @@ def stats() -> dict:
         listings_total = conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0]
         drafts_total = conn.execute("SELECT COUNT(*) FROM drafts").fetchone()[0]
         cost_total = conn.execute(_COST_SUM_SQL.format(cost=cost_eur_sql(), where=""), (rate, rate)).fetchone()[0]
-        by_status = {r["status"]: r["n"] for r in conn.execute("SELECT status, COUNT(*) AS n FROM listings GROUP BY status")}
-        auto_dismissed = conn.execute("SELECT COUNT(*) FROM listings WHERE status = 'dismissed' "
-                                      "AND auto_status = 'dismissed'").fetchone()[0]
-        unseen = conn.execute("SELECT COUNT(*) FROM listings WHERE status = 'new' AND seen_at IS NULL").fetchone()[0]
+        by_status = {r["status"]: r["n"] for r in conn.execute(
+            "SELECT status, COUNT(*) AS n FROM listings WHERE discard_reason IS NULL GROUP BY status")}
+        by_discard = {r["discard_reason"]: r["n"] for r in conn.execute(
+            "SELECT discard_reason, COUNT(*) AS n FROM listings WHERE discard_reason IS NOT NULL GROUP BY discard_reason")}
+        auto_dismissed = conn.execute("SELECT COUNT(*) FROM listings WHERE discard_reason = ? "
+                                      "AND discard_auto = 1", (MANUAL_DISCARD,)).fetchone()[0]
     return {
         "listings_total": listings_total,
+        "active_total": sum(by_status.values()),  # not aussortiert ("Alle" on the main page)
+        "discarded_total": sum(by_discard.values()),
         "drafts_total": drafts_total,
         "cost_total": float(cost_total),
         "cost_month": cost_this_month(),
         "month": month_prefix,
-        "by_status": by_status,
-        "auto_dismissed": auto_dismissed,
-        "unseen": unseen,  # "neu" and never looked at: the glowing cards
+        "by_status": by_status,  # not aussortiert only; "new" = the glowing cards
+        "by_discard": by_discard,
+        "auto_dismissed": auto_dismissed,  # "uninteressant" set by the job
     }
 
 

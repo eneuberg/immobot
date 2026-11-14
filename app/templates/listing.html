@@ -1,10 +1,11 @@
 {% extends "base.html" %}
-{% from "macros.html" import status_badge, draft_meta, icon %}
+{% from "macros.html" import state_badge, discard_note, draft_meta, icon %}
 {% from "listing_macros.html" import media_label, details_article %}
 {% block title %}{{ listing.title or "Inserat" }}{% endblock %}
 
 
 {% block content %}
+{% set asks_after_open = contact_url and listing.status != "sent" and listing.discard_reason in (none, MANUAL_DISCARD) %}
 <p class="backlink"><a href="/">← Inserate</a></p>
 {% if error %}<div class="flash err" role="alert">{{ error }}</div>{% endif %}
 {% if added %}<div class="flash ok" role="status">{{ added }}</div>{% endif %}
@@ -84,7 +85,7 @@
     {# ---- picture carousel (end) ---- #}
     {% endif %}
     <div class="lh-body">
-      <div class="lh-top">{{ status_badge(listing.status) }}{% if listing.status == "dismissed" and listing.auto_status == "dismissed" %}<span class="chip" title="kein Entwurf, nach der eingestellten Zeit automatisch aussortiert">⏱ automatisch</span>{% endif %}<span class="chip">{{ portal }}</span><span>eingegangen {{ listing.received_at|local_time }}</span></div>
+      <div class="lh-top">{{ state_badge(listing) }}<span class="chip">{{ portal }}</span><span>eingegangen {{ listing.received_at|local_time }}</span></div>
       <h1>{{ listing.title or "(ohne Titel)" }}</h1>
       {% if listing.address %}<p class="lh-addr">{{ icon("pin") }}<span>{{ listing.address }}</span></p>{% endif %}
       {% set map_link = listing.address|maps_url %}
@@ -114,36 +115,72 @@
         <div><dt>Entwürfe</dt><dd><a href="#entwuerfe">{{ drafts|length }} ↓</a></dd></div>
       </dl>
       <div class="lh-actions">
-        {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button"{% if listing.status != "sent" %} data-asks-after-open{% endif %}>Inserat öffnen ↗</a>{% endif %}
+        {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button"{% if asks_after_open %} data-asks-after-open{% endif %}>Inserat öffnen ↗</a>{% endif %}
         <a href="/editor/{{ listing.id }}" role="button" class="secondary">📝 Im Editor bearbeiten</a>
         {% if fredy_url %}<a href="{{ fredy_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline">In Fredy öffnen ↗</a>{% endif %}
       </div>
-      <form method="post" action="/listing/{{ listing.id }}/status" class="status-switch">
-        <span class="label" id="status-label">Status ändern</span>
-        <div class="seg" role="group" aria-labelledby="status-label">
+      {# ---- status (begin) ----
+         The status only shows where the listing is (Neu → Gesehen → Entwurf → Gesendet happen by themselves); by hand
+         there is "✅ Gesendet" (with "zurücknehmen") and "❌ Uninteressant". Aussortiert: the track is greyed and
+         locked, a line says why; only "uninteressant" can be brought back. #}
+      {% set order = STATUSES|list %}
+      {% set step = order.index(listing.status) if listing.status in order else 0 %}
+      <section class="status-box{% if listing.discard_reason %} is-locked{% endif %}" id="status" aria-labelledby="status-label">
+        <h2 class="label" id="status-label">{% if listing.discard_reason %}Status <span class="muted">(gesperrt)</span>{% else %}Status{% endif %}</h2>
+        <ol class="status-track">
           {% for key, label in STATUSES.items() %}
-          <button type="submit" name="status" value="{{ key }}" class="st-{{ key }}" aria-pressed="{{ 'true' if key == listing.status else 'false' }}">{{ label }}</button>
+          <li class="st-step st-{{ key }}{% if loop.index0 < step %} is-done{% elif loop.index0 == step %} is-current{% endif %}"
+            {%- if loop.index0 == step %} aria-current="step"{% endif %}><span class="st-dot" aria-hidden="true"></span><span class="st-label">{{ label }}</span>
+            {%- if loop.index0 == step and listing.discard_reason %}<span class="sr-only"> (letzter Stand)</span>{% endif %}</li>
           {% endfor %}
+        </ol>
+        {% if listing.discard_reason %}
+        <div class="status-lock dc-{{ listing.discard_reason }}">
+          <p>{{ icon("archive") }}<span><strong>Aussortiert · {{ DISCARD_REASONS.get(listing.discard_reason, listing.discard_reason) }}.</strong>
+            {{ discard_note(listing, auto_dismiss_hours) }}
+            {% if listing.discard_reason == MANUAL_DISCARD %}Zurückholen, um es wieder in die Liste zu nehmen.{% else %}Das ist endgültig; Entwürfe und Editor bleiben nutzbar.{% endif %}</span></p>
+          {% if listing.discard_reason == MANUAL_DISCARD %}
+          <form method="post" action="/listing/{{ listing.id }}/restore"><input type="hidden" name="next" value="/listing/{{ listing.id }}">
+            <button type="submit" class="secondary">↩️ Zurückholen</button></form>
+          {% endif %}
         </div>
-      </form>
+        {% else %}
+        <div class="status-actions">
+          {% if listing.status == "sent" %}
+          <form method="post" action="/listing/{{ listing.id }}/unsent" class="status-undo"><input type="hidden" name="next" value="/listing/{{ listing.id }}">
+            <span class="badge ok">✓ als gesendet markiert</span> <button type="submit" class="linkish">zurücknehmen</button></form>
+          {% else %}
+          <form method="post" action="/listing/{{ listing.id }}/sent"><input type="hidden" name="next" value="/listing/{{ listing.id }}">
+            <button type="submit" class="secondary">✅ Als gesendet markieren</button></form>
+          {% endif %}
+          <form method="post" action="/listing/{{ listing.id }}/dismiss"><input type="hidden" name="next" value="/listing/{{ listing.id }}">
+            <button type="submit" class="secondary outline">❌ Uninteressant</button></form>
+        </div>
+        {% endif %}
+      </section>
+      {# ---- status (end) ---- #}
     </div>
   </div>
 </article>
 
-{% if contact_url and listing.status != "sent" %}
+{% if asks_after_open %}
 {# Opened after "Inserat öffnen" when the person comes back (app.js), every time; closes with ✕, Später, Esc or a
-   click beside it. #}
+   click beside it. Not once sent, and not for offline / veraltet listings (nothing to decide any more). #}
+{% set dismissed = listing.discard_reason == MANUAL_DISCARD %}
 <dialog class="ed-ask-dialog" data-after-open="listing-{{ listing.id }}" aria-labelledby="after-open-title">
   <article>
     <header>
       <button type="button" aria-label="Schließen" rel="prev" data-dialog-close></button>
-      <h2 id="after-open-title">{{ "Doch interessant?" if listing.status == "dismissed" else "Interessant?" }}</h2>
+      <h2 id="after-open-title">{{ "Doch interessant?" if dismissed else "Interessant?" }}</h2>
     </header>
     <p class="ed-ask-listing">{{ listing.title or "Dieses Inserat" }}</p>
+    {% if dismissed %}<p class="help">Es ist als uninteressant aussortiert. „Zurückholen“ nimmt es wieder in die Liste.</p>{% endif %}
     <footer class="ed-actions">
-      <a href="/editor/{{ listing.id }}" role="button" autofocus>✍️ {{ "Doch interessant" if listing.status == "dismissed" else "Interessant" }} – im Editor anschreiben</a>
-      {% if listing.status != "dismissed" %}
-      <form method="post" action="/listing/{{ listing.id }}/status"><button type="submit" name="status" value="dismissed" class="secondary outline">❌ Uninteressant</button></form>
+      {% if dismissed %}
+      <form method="post" action="/listing/{{ listing.id }}/restore"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit" autofocus>↩️ Zurückholen</button></form>
+      {% else %}
+      <a href="/editor/{{ listing.id }}" role="button" autofocus>✍️ Interessant – im Editor anschreiben</a>
+      <form method="post" action="/listing/{{ listing.id }}/dismiss"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit" class="secondary outline">❌ Uninteressant</button></form>
       {% endif %}
       <button type="button" class="secondary outline" data-dialog-close>Später</button>
     </footer>

@@ -99,9 +99,11 @@ def test_unannounced_listing_ids(fresh_db):
     waiting, _ = fresh_db.insert_listing(_listing("a"))
     announced, _ = fresh_db.insert_listing(_listing("b"))
     dismissed, _ = fresh_db.insert_listing(_listing("c"))
+    seen, _ = fresh_db.insert_listing(_listing("d"))
     fresh_db.set_listing_tg_message(announced, 99)
-    fresh_db.set_listing_status(dismissed, "dismissed")
-    assert fresh_db.unannounced_listing_ids() == [waiting]
+    fresh_db.discard(dismissed)
+    fresh_db.mark_seen(seen)  # opened in the dashboard before the bot got to it: still announced
+    assert fresh_db.unannounced_listing_ids() == [waiting, seen]
 
 
 OLD_SCHEMA = """
@@ -181,22 +183,139 @@ def test_migration_counts_touched_listings_as_seen(tmp_path):
     seen = {row["fredy_id"]: row["seen_at"] for row in db.list_listings()}
     assert seen == {"untouched": None, "brought-back": "2026-11-02T09:00:00+00:00",
                     "drafted": "2026-11-03T08:00:00+00:00", "auto": "2026-11-04T07:00:00+00:00"}
-    assert db.stats()["unseen"] == 1
-    db.set_listing_status(1, "drafted")  # changed without mark_seen
+    assert db.stats()["by_status"] == {"new": 1, "seen": 1, "drafted": 1}  # "auto" is aussortiert now
+    with db.connect() as conn:
+        conn.execute("UPDATE listings SET seen_at = NULL WHERE id = 1")
     db.init_db(str(tmp_path))
     assert db.get_listing(1)["seen_at"] is None
 
 
+# The listings table right before "aussortiert" (with the live mix: auto and manual "uninteressant", with and without
+# drafts and seen_at, a "kept" one, "neu" seen and unseen, drafted, sent).
+SCHEMA_BEFORE_DISCARD = SCHEMA_BEFORE_SEEN.split("INSERT")[0].replace("auto_status TEXT);",
+                                                                      "auto_status TEXT, seen_at TEXT);") + """
+CREATE TABLE drafts (id INTEGER PRIMARY KEY AUTOINCREMENT, listing_id INTEGER NOT NULL REFERENCES listings(id),
+    kind TEXT NOT NULL, instruction TEXT, text TEXT NOT NULL, hint TEXT, model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+INSERT INTO listings (fredy_id, status, auto_status, seen_at, received_at, updated_at) VALUES
+    ('auto-unseen', 'dismissed', 'dismissed', NULL, '2026-11-01T10:00:00+00:00', '2026-11-03T10:00:00+00:00'),
+    ('auto-seen', 'dismissed', 'dismissed', '2026-11-01T12:00:00+00:00', '2026-11-01T10:00:00+00:00',
+     '2026-11-03T11:00:00+00:00'),
+    ('manual', 'dismissed', 'kept', '2026-11-02T08:00:00+00:00', '2026-11-01T10:00:00+00:00', '2026-11-04T09:00:00+00:00'),
+    ('manual-draft', 'dismissed', NULL, '2026-11-02T08:00:00+00:00', '2026-11-01T10:00:00+00:00',
+     '2026-11-05T09:00:00+00:00'),
+    ('test-draft-only', 'dismissed', NULL, NULL, '2026-11-01T10:00:00+00:00', '2026-11-05T10:00:00+00:00'),
+    ('new-seen', 'new', 'kept', '2026-11-06T08:00:00+00:00', '2026-11-06T07:00:00+00:00', '2026-11-06T08:00:00+00:00'),
+    ('new-unseen', 'new', NULL, NULL, '2026-11-07T07:00:00+00:00', '2026-11-07T07:00:00+00:00'),
+    ('drafted', 'drafted', NULL, '2026-11-02T08:00:00+00:00', '2026-11-01T10:00:00+00:00', '2026-11-02T09:00:00+00:00'),
+    ('sent', 'sent', 'kept', '2026-11-02T08:00:00+00:00', '2026-11-01T10:00:00+00:00', '2026-11-02T10:00:00+00:00');
+INSERT INTO drafts (listing_id, kind, text, model, created_at) VALUES
+    (4, 'initial', 'Hallo', 'claude-opus-5-5', '2026-11-02T08:30:00+00:00'),
+    (5, 'test', 'Test', 'claude-opus-5-5', '2026-11-02T08:30:00+00:00'),
+    (8, 'initial', 'Hallo', 'claude-opus-5-5', '2026-11-02T08:30:00+00:00');
+"""
+
+
+def test_migration_turns_uninteressant_into_aussortiert(tmp_path):
+    """"uninteressant" was a status: it becomes aussortiert (auto as before), the status underneath is the best guess
+    (Entwurf with a real draft, else Gesehen if seen, else Neu); "neu" but seen becomes "Gesehen"; "kept" survives.
+    Only on the run that adds the columns: a restart changes nothing."""
+    import sqlite3
+
+    from app import db
+
+    conn = sqlite3.connect(tmp_path / "immobot.db")
+    conn.executescript(SCHEMA_BEFORE_DISCARD)
+    conn.close()
+    db.init_db(str(tmp_path))
+    rows = {row["fredy_id"]: (row["status"], row["discard_reason"], row["discard_auto"], row["discarded_at"],
+                              row["auto_status"]) for row in db.list_listings()}
+    assert rows == {
+        "auto-unseen": ("new", "uninteressant", 1, "2026-11-03T10:00:00+00:00", None),
+        "auto-seen": ("seen", "uninteressant", 1, "2026-11-03T11:00:00+00:00", None),
+        "manual": ("seen", "uninteressant", 0, "2026-11-04T09:00:00+00:00", "kept"),
+        "manual-draft": ("drafted", "uninteressant", 0, "2026-11-05T09:00:00+00:00", None),
+        "test-draft-only": ("new", "uninteressant", 0, "2026-11-05T10:00:00+00:00", None),
+        "new-seen": ("seen", None, 0, None, "kept"),
+        "new-unseen": ("new", None, 0, None, None),
+        "drafted": ("drafted", None, 0, None, None),
+        "sent": ("sent", None, 0, None, "kept"),
+    }
+    stats = db.stats()
+    assert stats["by_status"] == {"new": 1, "seen": 1, "drafted": 1, "sent": 1} and stats["active_total"] == 4
+    assert stats["by_discard"] == {"uninteressant": 5} and stats["auto_dismissed"] == 2
+    assert db.restore(3) and db.get_listing(3)["status"] == "seen"  # brought back: the status underneath
+    db.discard(7)
+    db.init_db(str(tmp_path))  # a restart: nothing migrated again
+    assert db.get_listing(3)["discard_reason"] is None and db.get_listing(7)["status"] == "new"
+    assert db.get_listing(7)["discard_reason"] == "uninteressant"
+
+
 def test_mark_seen_keeps_the_first_time(fresh_db):
     listing_id, _ = fresh_db.insert_listing(_listing())
-    assert fresh_db.get_listing(listing_id)["seen_at"] is None and fresh_db.stats()["unseen"] == 1
+    assert fresh_db.get_listing(listing_id)["seen_at"] is None and fresh_db.stats()["by_status"] == {"new": 1}
     assert fresh_db.mark_seen(listing_id) is True
     first = fresh_db.get_listing(listing_id)["seen_at"]
     assert first and fresh_db.mark_seen(listing_id) is False and fresh_db.get_listing(listing_id)["seen_at"] == first
-    assert fresh_db.stats()["unseen"] == 0 and fresh_db.mark_seen(9999) is False
-    other, _ = fresh_db.insert_listing(_listing("other"))
-    fresh_db.set_listing_status(other, "dismissed")
-    assert fresh_db.stats()["unseen"] == 0  # unseen counts only "neu"
+    assert fresh_db.get_listing(listing_id)["status"] == "seen" and fresh_db.mark_seen(9999) is False
+    fresh_db.set_listing_status(listing_id, "sent")
+    fresh_db.mark_seen(listing_id)
+    assert fresh_db.get_listing(listing_id)["status"] == "sent"  # never backwards
+
+
+def test_status_moves_forward_by_itself_and_only_sent_by_hand(fresh_db):
+    lid, _ = fresh_db.insert_listing(_listing())
+    assert fresh_db.advance_status(lid, "drafted") and fresh_db.get_listing(lid)["status"] == "drafted"
+    assert fresh_db.get_listing(lid)["seen_at"]  # a draft means it was looked at
+    assert fresh_db.advance_status(lid, "seen") is False and fresh_db.advance_status(lid, "new") is False
+    assert fresh_db.mark_sent(lid) and fresh_db.advance_status(lid, "drafted") is False  # sent stays sent
+    assert fresh_db.unmark_sent(lid) and fresh_db.get_listing(lid)["status"] == "seen"  # no draft: "Gesehen"
+    assert fresh_db.unmark_sent(lid) is False  # only from "sent"
+    fresh_db.add_draft(lid, "initial", "Text", "claude-opus-5-5")
+    fresh_db.mark_sent(lid)
+    assert fresh_db.unmark_sent(lid) and fresh_db.get_listing(lid)["status"] == "drafted"
+
+
+def test_aussortiert_locks_the_status(fresh_db):
+    lid, _ = fresh_db.insert_listing(_listing())
+    fresh_db.mark_seen(lid)
+    assert fresh_db.discard(lid) and fresh_db.discard(lid) is False  # once
+    listing = fresh_db.get_listing(lid)
+    assert (listing["discard_reason"], listing["discard_auto"], listing["status"]) == ("uninteressant", 0, "seen")
+    assert listing["discarded_at"]
+    assert fresh_db.mark_sent(lid) is False and fresh_db.get_listing(lid)["status"] == "seen"
+    assert fresh_db.advance_status(lid, "drafted")  # automatic steps still happen underneath ("war: Entwurf")
+    assert fresh_db.restore(lid) and fresh_db.get_listing(lid)["auto_status"] == "kept"
+    assert fresh_db.restore(lid) is False
+    fresh_db.discard(lid, "veraltet", auto=True)
+    assert fresh_db.restore(lid) is False and fresh_db.get_listing(lid)["discard_reason"] == "veraltet"  # final
+    assert [row["id"] for row in fresh_db.list_listings(discard="none")] == []
+    assert [row["id"] for row in fresh_db.list_listings(discard="veraltet", auto=True)] == [lid]
+    assert fresh_db.list_listings(discard="uninteressant") == []
+
+
+def test_offline_and_online_again(fresh_db):
+    """Fredy's ad states: offline replaces uninteressant (which comes back with the ad), never veraltet; unknown ids
+    and listings already offline are left alone."""
+    plain, dismissed, auto, stale = (fresh_db.insert_listing(_listing(f"f{i}"))[0] for i in range(4))
+    fresh_db.discard(dismissed)
+    fresh_db.discard(auto, auto=True)
+    fresh_db.discard(stale, "veraltet", auto=True)
+    before = fresh_db.get_listing(dismissed)["discarded_at"]
+    assert fresh_db.mark_offline(["f0", "f1", "f2", "f3", "unknown", None]) == [auto, dismissed, plain]
+    assert {fresh_db.get_listing(i)["discard_reason"] for i in (plain, dismissed, auto)} == {"offline"}
+    assert fresh_db.get_listing(plain)["discard_auto"] == 1 and fresh_db.get_listing(stale)["discard_reason"] == "veraltet"
+    assert fresh_db.mark_offline(["f0"]) == []  # already offline
+    assert fresh_db.mark_online(["f0", "f1", "f2", "f3"]) == [auto, dismissed, plain]
+    assert fresh_db.get_listing(plain)["discard_reason"] is None
+    back = fresh_db.get_listing(dismissed)
+    assert (back["discard_reason"], back["discard_auto"], back["discarded_at"]) == ("uninteressant", 0, before)
+    assert fresh_db.get_listing(auto)["discard_auto"] == 1
+    assert fresh_db.get_listing(stale)["discard_reason"] == "veraltet" and fresh_db.mark_online(["f0"]) == []
+    many = [f"x{i}" for i in range(1200)]  # more ids than one query takes
+    assert fresh_db.mark_offline(many + ["f0"]) == [plain]
 
 
 def test_fresh_database_has_the_new_columns(fresh_db):

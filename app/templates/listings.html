@@ -56,22 +56,35 @@
     {%- if costs.budget %}{{ cost_track(costs, slim=True) }}{% endif %}
     <span class="sub">{% if costs.over %}Budget erreicht{% elif costs.budget %}von {{ costs.budget|eur }} Budget{% else %}kein Limit{% endif %}</span></div>
   <div class="stat"><span class="label">Kosten gesamt</span><span class="value">{{ stats.cost_total|eur }}</span><span class="sub">seit Beginn</span></div>
-  <div class="stat"><span class="label">Inserate</span><span class="value">{{ stats.listings_total }}</span><span class="sub">
-    {#- data-count: kept current by app.js after ❌/↩️ (web.card_counts) -#}
-    <span data-count="new">{{ stats.by_status.get("new", 0) }}</span> neu · <span data-count="sent">{{ stats.by_status.get("sent", 0) }}</span> gesendet
-    {%- if stats.unseen %}<span data-unseen-part> · <span data-count="unseen">{{ stats.unseen }}</span> ungesehen</span>{% endif %}</span></div>
+  {# data-count: kept current by app.js after ❌/↩️ and when a glowing card is opened (web.card_counts) #}
+  <div class="stat"><span class="label">Inserate in der Liste</span><span class="value" data-count="all">{{ counts.all }}</span><span class="sub">
+    <span data-count="new">{{ counts.new }}</span> neu · <span data-count="seen">{{ counts.seen }}</span> gesehen · <span data-count="drafted">{{ counts.drafted }}</span> mit Entwurf · <span data-count="sent">{{ counts.sent }}</span> gesendet</span></div>
   <div class="stat"><span class="label">Entwürfe</span><span class="value">{{ stats.drafts_total }}</span><span class="sub">insgesamt erzeugt</span></div>
 </section>
 
+{# Two rows: the statuses of the listings in the list ("Alle" = not aussortiert), and - outlined like the
+   aussortiert chip, since it is no status - "Aussortiert" with its reasons. Reasons without listings are left out
+   (unless chosen). #}
 <nav class="filters" aria-label="Nach Status filtern">
-  <a href="/" {% if not status_filter %}aria-current="page"{% endif %}>Alle <span class="n" data-count="all">{{ stats.listings_total }}</span></a>
+  <a href="/" {% if not status_filter and not discard_filter %}aria-current="page"{% endif %}>Alle <span class="n" data-count="all">{{ counts.all }}</span></a>
   {% for key, label in STATUSES.items() %}
-  <a href="/?status={{ key }}" {% if status_filter == key and not auto_filter %}aria-current="page"{% endif %}><span class="dot st-{{ key }}" aria-hidden="true"></span>{{ label }} <span class="n" data-count="{{ key }}">{{ stats.by_status.get(key, 0) }}</span></a>
+  <a href="/?status={{ key }}" {% if status_filter == key %}aria-current="page"{% endif %}><span class="dot st-{{ key }}" aria-hidden="true"></span>{{ label }} <span class="n" data-count="{{ key }}">{{ counts[key] }}</span></a>
   {% endfor %}
-  {% if stats.auto_dismissed %}
-  <a href="/?status=dismissed&amp;auto=1" {% if auto_filter %}aria-current="page"{% endif %} title="Nach {{ auto_dismiss_hours }} h ohne Entwurf automatisch aussortiert">⏱ davon automatisch <span class="n" data-count="auto">{{ stats.auto_dismissed }}</span></a>
-  {% endif %}
 </nav>
+<nav class="filters filters-discard" aria-label="Aussortierte Inserate">
+  <a href="/?discarded=all" class="f-discard" {% if discard_filter == "all" %}aria-current="page"{% endif %}>{{ icon("archive") }}Aussortiert <span class="n" data-count="discarded">{{ counts.discarded }}</span></a>
+  {% for key, label in DISCARD_REASONS.items() if counts[key] or discard_filter == key %}
+  <a href="/?discarded={{ key }}" {% if discard_filter == key and not auto_filter %}aria-current="page"{% endif %}>{{ label }} <span class="n" data-count="{{ key }}">{{ counts[key] }}</span></a>
+  {% if key == MANUAL_DISCARD and (counts.auto or auto_filter) %}
+  <a href="/?discarded={{ key }}&amp;auto=1" {% if auto_filter %}aria-current="page"{% endif %} title="Angesehen, aber {{ auto_dismiss_hours }} h lang kein Entwurf: automatisch aussortiert">⏱ davon automatisch <span class="n" data-count="auto">{{ counts.auto }}</span></a>
+  {% endif %}
+  {% endfor %}
+</nav>
+{% if discard_filter %}
+<p class="help discard-help">Aussortierte Inserate stehen nicht mehr in der Liste; ihr Status bleibt, wie er war.
+  <strong>Uninteressant</strong>: von dir mit ❌ oder automatisch {{ auto_dismiss_hours }} h nach dem Ansehen ohne Entwurf – mit ↩️ zurückholen.
+  <strong>Offline</strong>: laut Fredy nicht mehr online. <strong>Veraltet</strong>: älter als {{ STALE_DAYS }} Tage. Diese beiden sind endgültig.</p>
+{% endif %}
 {% endif %}
 
 {% if listings %}
@@ -85,6 +98,18 @@
   {{ icon("inbox") }}
   <strong>Keine Inserate mit Status „{{ STATUSES[status_filter] }}“</strong>
   <p><a href="/">Alle Inserate anzeigen</a></p>
+</div>
+{% elif discard_filter %}
+<div class="empty">
+  {{ icon("archive") }}
+  <strong>{% if discard_filter == "all" %}Nichts aussortiert{% else %}Nichts aussortiert als „{{ DISCARD_REASONS[discard_filter] }}“{% endif %}</strong>
+  <p><a href="/">Zur Liste</a></p>
+</div>
+{% elif stats.listings_total %}
+<div class="empty">
+  {{ icon("inbox") }}
+  <strong>Alles aussortiert</strong>
+  <p>Gerade steht kein Inserat in der Liste. Die aussortierten findest du unter <a href="/?discarded=all">Aussortiert</a>.</p>
 </div>
 {% else %}
 <div class="empty">

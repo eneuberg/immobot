@@ -126,7 +126,8 @@ def test_security_headers(client):
     ("post", "/settings/rules/1/text"), ("post", "/settings/rules/1/delete"), ("post", "/settings/rules/1/decide"),
     ("post", "/settings/examples/1/off"),
     ("post", "/settings"), ("post", "/settings/test"), ("post", "/settings/reset/profile"),
-    ("post", "/listing/1/status"), ("post", "/listing/1/draft"),
+    ("post", "/listing/1/sent"), ("post", "/listing/1/unsent"), ("post", "/listing/1/dismiss"),
+    ("post", "/listing/1/restore"), ("post", "/listing/1/draft"),
     ("get", "/credentials"), ("post", "/credentials/save/anthropic_api_key"), ("post", "/credentials/clear/anthropic_api_key"),
     ("post", "/credentials/regenerate-webhook-token"), ("post", "/credentials/pair"), ("post", "/credentials/test/anthropic"),
 ])
@@ -165,10 +166,10 @@ def test_login_rate_limit(client):
 def test_foreign_origin_rejected(client):
     login(client)
     lid = add_listing()
-    r = client.post(f"/listing/{lid}/status", data={"status": "sent"}, headers={"Origin": "https://evil.example"})
+    r = client.post(f"/listing/{lid}/sent", headers={"Origin": "https://evil.example"})
     assert r.status_code == 403
     assert db.get_listing(lid)["status"] == "new"
-    r = client.post(f"/listing/{lid}/status", data={"status": "sent"}, headers={"Origin": "http://testserver"})
+    r = client.post(f"/listing/{lid}/sent", headers={"Origin": "http://testserver"})
     assert r.status_code == 303
     assert db.get_listing(lid)["status"] == "sent"
 
@@ -179,11 +180,11 @@ def test_sibling_subdomain_rejected_via_sec_fetch_site(client):
     login(client)
     lid = add_listing()
     for site in ("same-site", "cross-site"):
-        r = client.post(f"/listing/{lid}/status", data={"status": "sent"},
+        r = client.post(f"/listing/{lid}/sent",
                         headers={"Origin": "null", "Sec-Fetch-Site": site})
         assert r.status_code == 403
     assert db.get_listing(lid)["status"] == "new"
-    r = client.post(f"/listing/{lid}/status", data={"status": "sent"},
+    r = client.post(f"/listing/{lid}/sent",
                     headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"})
     assert r.status_code == 303 and db.get_listing(lid)["status"] == "sent"
 
@@ -386,52 +387,103 @@ def test_static_assets_served_without_login(client):
     assert re.fullmatch(r"[0-9a-f]{12}", version)
     assert f'href="/static/app.css?v={version}"' in page.text and f'src="/static/app.js?v={version}"' in page.text
 
-def test_listing_status_change(client):
+
+def test_listing_page_status_track_and_actions(client):
+    """The status is shown, not set: a track Neu → Gesehen → Entwurf → Gesendet; by hand only "✅ Gesendet" (and
+    "zurücknehmen") and "❌ Uninteressant"."""
     login(client)
     lid = add_listing()
-    r = client.post(f"/listing/{lid}/status", data={"status": "dismissed"})
-    assert r.status_code == 303 and db.get_listing(lid)["status"] == "dismissed"
-    assert client.post(f"/listing/{lid}/status", data={"status": "bogus"}).status_code == 400
-    assert db.get_listing(lid)["status"] == "dismissed"
-    assert client.post("/listing/9999/status", data={"status": "sent"}).status_code == 404
+    page = client.get(f"/listing/{lid}").text  # opening it: "Neu" -> "Gesehen"
+    assert db.get_listing(lid)["status"] == "seen"
+    assert '<li class="st-step st-seen is-current" aria-current="step">' in page
+    assert '<li class="st-step st-new is-done">' in page and '<li class="st-step st-sent">' in page
+    assert f'action="/listing/{lid}/sent"' in page and f'action="/listing/{lid}/dismiss"' in page
+    assert 'name="status"' not in page  # no status buttons any more
+    r = client.post(f"/listing/{lid}/sent", data={"next": f"/listing/{lid}"})
+    assert r.status_code == 303 and r.headers["location"] == f"/listing/{lid}?m=sent#status"
+    page = client.get(r.headers["location"]).text
+    assert "Als gesendet markiert." in page and db.get_listing(lid)["status"] == "sent"
+    assert f'action="/listing/{lid}/unsent"' in page and f'action="/listing/{lid}/sent"' not in page
+    client.post(f"/listing/{lid}/unsent", data={"next": f"/listing/{lid}"})
+    assert db.get_listing(lid)["status"] == "seen"  # no draft: back to "Gesehen"
+    assert client.post("/listing/9999/sent").status_code == 404
+    assert client.post(f"/listing/{lid}/status", data={"status": "sent"}).status_code in (404, 405)  # gone
+
+
+def test_listing_page_locked_while_aussortiert(client):
+    login(client)
+    lid = add_listing()
+    db.advance_status(lid, "drafted")
+    r = client.post(f"/listing/{lid}/dismiss", data={"next": f"/listing/{lid}"})
+    assert r.headers["location"] == f"/listing/{lid}?m=dismissed#status"
+    page = client.get(f"/listing/{lid}").text
+    assert 'class="status-box is-locked"' in page and "Von dir als uninteressant aussortiert am" in page
+    assert '<span class="dc-kind">Aussortiert</span><span class="dc-reason">Uninteressant</span>' in page
+    assert f'action="/listing/{lid}/restore"' in page and f'action="/listing/{lid}/sent"' not in page
+    assert f'action="/listing/{lid}/dismiss"' not in page
+    assert '<li class="st-step st-drafted is-current" aria-current="step">' in page  # the last state stays visible
+    client.post(f"/listing/{lid}/sent")
+    assert db.get_listing(lid)["status"] == "drafted"  # locked
+    client.post(f"/listing/{lid}/restore", data={"next": f"/listing/{lid}"})
+    listing = db.get_listing(lid)
+    assert listing["discard_reason"] is None and listing["status"] == "drafted" and listing["auto_status"] == "kept"
+
+    db.mark_offline(["x1"])
+    page = client.get(f"/listing/{lid}").text
+    assert "Inserat ist nicht mehr online – von Fredy gemeldet am" in page and "Das ist endgültig" in page
+    assert f'action="/listing/{lid}/restore"' not in page and f'action="/listing/{lid}/dismiss"' not in page
+    client.post(f"/listing/{lid}/restore")
+    assert db.get_listing(lid)["discard_reason"] == "offline"
+    stale = add_listing(fredy_id="x2")
+    db.discard(stale, "veraltet", auto=True)
+    assert "Älter als 90 Tage (eingegangen am" in client.get(f"/listing/{stale}").text
 
 
 def test_listing_page_asks_after_opening_the_listing(client):
-    """"Inserat öffnen" carries the marker; the overlay offers the editor and "Uninteressant" (not once sent)."""
+    """"Inserat öffnen" carries the marker; the overlay offers the editor and "Uninteressant", for an uninteressant
+    one "Zurückholen"; nothing once sent or offline."""
     login(client)
     lid = add_listing()
     page = client.get(f"/listing/{lid}").text
     assert "data-asks-after-open" in page and f'data-after-open="listing-{lid}"' in page
-    assert "✍️ Interessant – im Editor anschreiben" in page and 'value="dismissed" class="secondary outline">❌ Uninteressant' in page
-    db.set_listing_status(lid, "dismissed")
-    page = client.get(f"/listing/{lid}").text
-    assert "Doch interessant?" in page and "❌ Uninteressant</button>" not in page
-    db.set_listing_status(lid, "sent")
+    overlay = page.split("data-after-open=")[1].split("</dialog>")[0]
+    assert "✍️ Interessant – im Editor anschreiben" in overlay and f'action="/listing/{lid}/dismiss"' in overlay
+    db.discard(lid)
+    overlay = client.get(f"/listing/{lid}").text.split("data-after-open=")[1].split("</dialog>")[0]
+    assert "Doch interessant?" in overlay and "❌ Uninteressant" not in overlay
+    assert f'action="/listing/{lid}/restore"' in overlay
+    db.restore(lid)
+    db.mark_sent(lid)
     page = client.get(f"/listing/{lid}").text
     assert "data-after-open" not in page and "data-asks-after-open" not in page
+    other = add_listing(fredy_id="x2")
+    db.mark_offline(["x2"])
+    assert "data-after-open" not in client.get(f"/listing/{other}").text
 
 
-def test_card_toggle_dismissed(client):
-    """❌ on a main-page card dismisses, ↩️ brings it back ("neu" without drafts, "Entwurf" with); sent: no button."""
+def test_card_dismiss_and_restore(client):
+    """❌ on a main-page card sorts it out, ↩️ brings it back (to the status it had); sent: no button; offline /
+    veraltet: no button either."""
     login(client)
     lid = add_listing()
     page = client.get("/?status=new").text
-    assert f'action="/listing/{lid}/toggle-dismissed"' in page and 'value="/?status=new"' in page
-    r = client.post(f"/listing/{lid}/toggle-dismissed", data={"next": "/?status=new"})
+    assert f'action="/listing/{lid}/dismiss"' in page and 'value="/?status=new"' in page
+    r = client.post(f"/listing/{lid}/dismiss", data={"next": "/?status=new"})
     assert r.status_code == 303 and r.headers["location"] == f"/?status=new#l{lid}"
-    assert db.get_listing(lid)["status"] == "dismissed"
-    assert "↩️</button>" in client.get("/").text
-    client.post(f"/listing/{lid}/toggle-dismissed", data={"next": "https://evil.example/"})
-    assert db.get_listing(lid)["status"] == "new"
-    db.add_draft(lid, "initial", "Text", "claude-opus-5-5")
-    client.post(f"/listing/{lid}/toggle-dismissed")
-    client.post(f"/listing/{lid}/toggle-dismissed")
-    assert db.get_listing(lid)["status"] == "drafted"
-    db.set_listing_status(lid, "sent")
-    r = client.post(f"/listing/{lid}/toggle-dismissed", data={"next": "//evil.example"})
-    assert r.headers["location"] == f"/#l{lid}" and db.get_listing(lid)["status"] == "sent"
-    assert f'action="/listing/{lid}/toggle-dismissed"' not in client.get("/").text
-    assert client.post("/listing/9999/toggle-dismissed").status_code == 404
+    assert db.get_listing(lid)["discard_reason"] == "uninteressant"
+    assert "2 Zi" not in client.get("/").text  # not in the list any more
+    assert f'action="/listing/{lid}/restore"' in client.get("/?discarded=all").text
+    client.post(f"/listing/{lid}/restore", data={"next": "https://evil.example/"})
+    assert db.get_listing(lid)["discard_reason"] is None and db.get_listing(lid)["status"] == "seen"
+    db.mark_sent(lid)
+    r = client.post(f"/listing/{lid}/dismiss", data={"next": "//evil.example"})
+    assert r.headers["location"] == f"/#l{lid}"
+    db.restore(lid)
+    assert f'action="/listing/{lid}/dismiss"' not in client.get("/").text  # sent: no ❌
+    db.mark_offline(["x1"])
+    page = client.get("/?discarded=offline").text
+    assert "2 Zi" in page and "lc-toggle" not in page and "has-toggle" not in page
+    assert client.post("/listing/9999/dismiss").status_code == 404
 
 
 JSON = {"Accept": "application/json"}
@@ -442,81 +494,104 @@ def test_card_toggle_answers_json_for_app_js(client):
     login(client)
     lid = add_listing()
     other = add_listing(fredy_id="x2", title="Andere")
-    db.auto_dismiss("9999")  # both "uninteressant" automatically ("⏱ automatisch")
-    db.set_listing_status(other, "sent")
-    assert "⏱ automatisch</span>" in client.get("/").text
-    r = client.post(f"/listing/{lid}/toggle-dismissed", data={"next": "/?status=dismissed#l3"}, headers=JSON)
+    db.mark_seen(lid)
+    db.auto_dismiss("9999")  # "uninteressant" automatically ("⏱ automatisch")
+    db.mark_sent(other)
+    assert "⏱ automatisch</span>" in client.get("/?discarded=all").text
+    r = client.post(f"/listing/{lid}/restore", data={"next": "/?discarded=all#l3"}, headers=JSON)
     assert r.status_code == 200 and r.headers["content-type"] == "application/json"
     data = r.json()
-    assert data["ok"] is True and data["status"] == "new" and db.get_listing(lid)["status"] == "new"
+    assert data["ok"] is True and data["changed"] is True and data["status"] == "seen"
+    assert data["discard_reason"] is None and db.get_listing(lid)["discard_reason"] is None
     card = data["card"]
     assert card.startswith(f'<li id="l{lid}">') and card.rstrip().endswith("</li>")
-    assert "is-dismissed" not in card and "⏱ automatisch" not in card and "is-unseen" not in card
-    assert '<span class="badge dot st-new">neu</span>' in card and "👁 gesehen" in card  # brought back = seen
-    assert 'value="/?status=dismissed"' in card and 'title="Uninteressant"' in card and "❌</button>" in card
-    assert data["counts"] == {"all": 2, "new": 1, "drafted": 0, "sent": 1, "dismissed": 0, "auto": 0, "unseen": 0}
+    assert "is-discarded" not in card and "⏱ automatisch" not in card and "is-unseen" not in card
+    assert '<span class="badge dot st-seen">Gesehen</span>' in card
+    assert 'value="/?discarded=all"' in card and 'title="Uninteressant – aussortieren"' in card and "❌</button>" in card
+    assert data["counts"] == {"all": 2, "new": 0, "seen": 1, "drafted": 0, "sent": 1, "discarded": 0,
+                              "uninteressant": 0, "offline": 0, "veraltet": 0, "auto": 0}
     # the same card the page renders (there with that page as `next`)
     page = client.get("/").text
-    assert re.sub(r"\s+", " ", card.replace("/?status=dismissed", "/")) in re.sub(r"\s+", " ", page)
+    assert re.sub(r"\s+", " ", card.replace("/?discarded=all", "/")) in re.sub(r"\s+", " ", page)
 
-    data = client.post(f"/listing/{lid}/toggle-dismissed", data={"next": "/"}, headers=JSON).json()
-    assert data["status"] == "dismissed" and "is-dismissed" in data["card"] and "↩️</button>" in data["card"]
-    assert 'aria-label="Doch interessant: 2 Zi"' in data["card"] and "👁 gesehen" not in data["card"]
-    assert data["counts"]["dismissed"] == 1 and data["counts"]["new"] == 0
-    # a sent listing: unchanged, no button in its card
-    data = client.post(f"/listing/{other}/toggle-dismissed", headers=JSON).json()
-    assert data["status"] == "sent" and "lc-toggle" not in data["card"]
+    data = client.post(f"/listing/{lid}/dismiss", data={"next": "/"}, headers=JSON).json()
+    assert data["discard_reason"] == "uninteressant" and "is-discarded" in data["card"] and "↩️</button>" in data["card"]
+    assert 'aria-label="Zurückholen: 2 Zi"' in data["card"] and '<span class="dc-reason">Uninteressant</span>' in data["card"]
+    assert data["counts"]["discarded"] == 1 and data["counts"]["uninteressant"] == 1 and data["counts"]["all"] == 1
+    page = client.get("/?discarded=all").text
+    assert re.sub(r"\s+", " ", data["card"]) in re.sub(r"\s+", " ", page.replace("/?discarded=all", "/"))
+    # a sent listing: no button in its card; ❌ sent anyway (stale page) sorts it out, the card says what it was
+    data = client.post(f"/listing/{other}/dismiss", headers=JSON).json()
+    assert data["status"] == "sent" and "war: Gesendet" in data["card"] and "↩️</button>" in data["card"]
 
 
 def test_card_toggle_logged_out_is_not_json(client):
     """Session expired: no JSON but the login redirect, so app.js falls back to sending the form normally."""
     lid = add_listing()
-    r = client.post(f"/listing/{lid}/toggle-dismissed", headers=JSON)
-    assert r.status_code == 303 and r.headers["location"] == "/login" and db.get_listing(lid)["status"] == "new"
+    r = client.post(f"/listing/{lid}/dismiss", headers=JSON)
+    assert r.status_code == 303 and r.headers["location"] == "/login" and db.get_listing(lid)["discard_reason"] is None
 
 
-def test_counts_on_the_main_page_are_marked_for_app_js(client):
+def test_counts_and_filters_on_the_main_page(client):
+    """"Alle" = not aussortiert, a chip per status, then the "Aussortiert" row with its reasons (empty ones left
+    out); every number is marked for app.js."""
     login(client)
-    add_listing()
+    new, seen, gone, old = (add_listing(fredy_id=f"x{i}", title=f"Wohnung {i}") for i in range(4))
+    db.mark_seen(seen)
+    db.mark_offline(["x2"])
+    db.discard(old, "veraltet", auto=True)
     page = client.get("/").text
-    for key in ("all", "new", "drafted", "sent", "dismissed"):
+    for key in ("all", "new", "seen", "drafted", "sent", "discarded", "offline", "veraltet"):
         assert f'data-count="{key}"' in page
-    assert '<span data-unseen-part> · <span data-count="unseen">1</span> ungesehen</span>' in page
+    assert 'data-count="uninteressant"' not in page and "davon automatisch" not in page  # nothing there
+    assert '<span data-count="new">1</span> neu · <span data-count="seen">1</span> gesehen' in page
+    assert "Wohnung 0" in page and "Wohnung 1" in page and "Wohnung 2" not in page and "Wohnung 3" not in page
+    assert 'href="/?discarded=all" class="f-discard"' in page
+    every = client.get("/?discarded=all").text
+    assert "Wohnung 2" in every and "Wohnung 3" in every and "Wohnung 0" not in every and "endgültig" in every
+    assert "Wohnung 3" not in client.get("/?discarded=offline").text
+    assert "Wohnung 1" in client.get("/?status=seen").text and "Wohnung 0" not in client.get("/?status=seen").text
+    assert "Nichts aussortiert als „Uninteressant“" in client.get("/?discarded=uninteressant").text
+    assert client.get("/?discarded=bogus").text.count("Wohnung 2") == 0  # unknown filter = the list
+
+
+def test_search_finds_aussortiert_listings_too(client):
+    login(client)
+    add_listing(fredy_id="x1", title="Altbau am Park")
+    gone = add_listing(fredy_id="x2", title="Neubau am Park")
+    db.discard(gone)
+    page = client.get("/?q=Park").text
+    assert "2 Treffer" in page and "Neubau am Park" in page and "is-discarded" in page
 
 
 def test_unseen_listing_glows_until_opened(client):
-    """A new listing nobody looked at glows on the main page; once its page was opened it shows "👁 gesehen"."""
+    """A new listing nobody looked at glows on the main page; once its page was opened it is "Gesehen"."""
     login(client)
     hook(client, {"provider": "immowelt", "listings": [fredy_listing("f1")]})  # the webhook doesn't count as seen
     lid = db.list_listings()[0]["id"]
     page = client.get("/").text
     assert db.get_listing(lid)["seen_at"] is None and "is-unseen" in page and "noch nicht angesehen" in page
-    assert "👁 gesehen" not in page and "ungesehen</span>" in page
+    assert '<span class="badge dot st-new">Neu</span>' in page
     assert client.get(f"/listing/{lid}").status_code == 200
     seen_at = db.get_listing(lid)["seen_at"]
     page = client.get("/").text
-    assert seen_at and "is-unseen" not in page and '<span class="lc-seen" title="Schon angesehen">👁 gesehen</span>' in page
-    assert "ungesehen</span>" not in page and "data-unseen-part" not in page
+    assert seen_at and "is-unseen" not in page and '<span class="badge dot st-seen">Gesehen</span>' in page
     client.get(f"/listing/{lid}")
     assert db.get_listing(lid)["seen_at"] == seen_at  # only the first time is kept
-    db.set_listing_status(lid, "drafted")  # other statuses show the interaction already: neither glow nor marker
-    page = client.get("/").text
-    assert "is-unseen" not in page and "👁 gesehen" not in page
 
 
-def test_status_changes_and_drafts_from_the_dashboard_count_as_seen(client, fake_llm):
+def test_actions_and_drafts_from_the_dashboard_count_as_seen(client, fake_llm):
     login(client)
     lid = add_listing()
-    client.post(f"/listing/{lid}/status", data={"status": "drafted"})
+    client.post(f"/listing/{lid}/sent")
     assert db.get_listing(lid)["seen_at"]
     second = add_listing(fredy_id="x2")
     client.post(f"/listing/{second}/draft")
     assert fake_llm == [(second, "initial")] and db.get_listing(second)["seen_at"]
     third = add_listing(fredy_id="x3")
-    client.post(f"/listing/{third}/toggle-dismissed")
-    assert db.get_listing(third)["seen_at"]
+    client.post(f"/listing/{third}/dismiss")
+    assert db.get_listing(third)["seen_at"] and db.get_listing(third)["status"] == "seen"
     assert db.get_listing(add_listing(fredy_id="x4"))["seen_at"] is None
-
 
 def test_create_draft_initial_then_regenerate(client, fake_llm):
     login(client)
@@ -786,6 +861,9 @@ def test_status_page(client):
     assert r.status_code == 200
     assert "Anthropic-API-Key" in r.text and "/hook/fredy" in r.text and settings.APP_VERSION in r.text
     assert "gesetzt (Env-Variable)" in r.text and "Noch keine Änderungen" in r.text
+    db.discard(add_listing(), "veraltet", auto=True)
+    page = client.get("/status").text
+    assert ">Neu: 0</span>" in page and ">Aussortiert · Veraltet: 1</span>" in page
 
 
 def test_status_page_bot_states_and_sources(client, monkeypatch):
@@ -1975,7 +2053,7 @@ def test_listing_status_change_refreshes_telegram(client, monkeypatch):
     monkeypatch.setattr(web.bot, "schedule_refresh", refreshed.append)
     login(client)
     lid = add_listing()
-    assert client.post(f"/listing/{lid}/status", data={"status": "sent"}).status_code == 303
+    assert client.post(f"/listing/{lid}/sent").status_code == 303
     assert refreshed == [lid]
 
 

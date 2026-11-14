@@ -234,8 +234,27 @@ def test_followup_generating_and_collapsed_views():
     text, markup = bot.collapsed_view(listing_dict(id=12, status="sent", title="A & B"))
     assert text == "✅ Gesendet · A &amp; B"
     assert callback_data(markup) == [["undo:12"]]
-    text, _ = bot.collapsed_view(listing_dict(id=12, status="dismissed"))
-    assert text.startswith("❌ Uninteressant · ")
+    text, markup = bot.collapsed_view(listing_dict(id=12, status="seen", discard_reason="uninteressant"))
+    assert text.startswith("❌ Uninteressant · ") and texts(markup) == [["↩️ Zurückholen"]]
+    assert callback_data(markup) == [["undo:12"]]
+    auto = listing_dict(id=12, discard_reason="uninteressant", discard_auto=1)
+    assert bot.collapsed_view(auto)[0].startswith("⏱ Automatisch uninteressant (angesehen, kein Entwurf) · ")
+
+
+def test_offline_and_stale_views_have_only_links(fresh_vault):
+    """Offline / veraltet are final: no button that changes anything, the old status shows as "war"."""
+    gone = listing_dict(id=12, status="sent", discard_reason="offline", title="A & B")
+    text, markup = bot.collapsed_view(gone)
+    assert text == "⚫ Offline (laut Fredy) · A &amp; B\n<i>Status war: Gesendet</i>"
+    assert list(markup.inline_keyboard) == []  # no dashboard address known yet: no links either
+    assert bot.current_view(gone)[0] == text
+    bot.init_public_url("https://immobot.example.com")
+    assert texts(bot.collapsed_view(gone)[1]) == [["📝 Bearbeiten", "🔗 Dashboard"]]
+    assert texts(bot.collapsed_view(gone, editor=False)[1]) == [["🔗 Dashboard"]]
+    old = listing_dict(id=12, status="seen", discard_reason="veraltet")
+    text, markup = bot.collapsed_view(old)
+    assert text.startswith("🗄 Veraltet (älter als 90 Tage) · ") and "war" not in text
+    assert not any(b.callback_data for row in markup.inline_keyboard for b in row)
 
 
 def test_draft_keyboard_layout_with_contact_url(monkeypatch):
@@ -603,7 +622,7 @@ def test_llm_error_restores_view_with_warning(tg, monkeypatch):
     final = tg.edits[-1]
     assert final["text"].endswith("\n\n⚠️ Monatsbudget von 15 $ erreicht.")
     assert callback_data(final["reply_markup"]) == [[f"gen:{listing_id}", f"skip:{listing_id}"]]
-    assert db.get_listing(listing_id)["status"] == "new"
+    assert db.get_listing(listing_id)["status"] == "seen"  # the button press counted as seen, no draft
 
 
 def test_unexpected_error_restores_draft_view_with_generic_warning(tg, monkeypatch):
@@ -659,22 +678,40 @@ def test_sent_skip_and_undo(tg, monkeypatch):
     assert tg.edits[-1]["text"] == "✅ Gesendet · A &amp; B"
     assert callback_data(tg.edits[-1]["reply_markup"]) == [[f"undo:{listing_id}"]]
 
-    press(tg, f"undo:{listing_id}")  # no draft yet -> back to "new" + follow-up buttons
-    assert db.get_listing(listing_id)["status"] == "new"
+    press(tg, f"undo:{listing_id}")  # "Gesendet" undone, no draft yet -> "Gesehen" + follow-up buttons
+    assert db.get_listing(listing_id)["status"] == "seen"
     assert callback_data(tg.edits[-1]["reply_markup"]) == [[f"gen:{listing_id}", f"skip:{listing_id}"]]
 
     db.add_draft(listing_id, "test", "Testentwurf", "claude-opus-5-5")  # test drafts don't count
     press(tg, f"skip:{listing_id}")
-    assert db.get_listing(listing_id)["status"] == "dismissed"
+    listing = db.get_listing(listing_id)
+    assert (listing["discard_reason"], listing["discard_auto"], listing["status"]) == ("uninteressant", 0, "seen")
     assert tg.edits[-1]["text"].startswith("❌ Uninteressant · ")
-    press(tg, f"undo:{listing_id}")
-    assert db.get_listing(listing_id)["status"] == "new"
+    assert texts(tg.edits[-1]["reply_markup"]) == [["↩️ Zurückholen"]]
+    press(tg, f"sent:{listing_id}")  # a button of an older message: aussortiert stays, only the state is shown
+    assert db.get_listing(listing_id)["status"] == "seen" and tg.edits[-1]["text"].startswith("❌ Uninteressant")
+    press(tg, f"undo:{listing_id}")  # Zurückholen
+    listing = db.get_listing(listing_id)
+    assert listing["discard_reason"] is None and listing["auto_status"] == "kept" and listing["status"] == "seen"
 
     db.add_draft(listing_id, "initial", "Echter Entwurf", "claude-opus-5-5")
-    press(tg, f"skip:{listing_id}")
+    db.advance_status(listing_id, "drafted")
+    press(tg, f"sent:{listing_id}")
     press(tg, f"undo:{listing_id}")  # with a draft -> back to "drafted" + draft view
     assert db.get_listing(listing_id)["status"] == "drafted"
     assert "<pre>Echter Entwurf</pre>" in tg.edits[-1]["text"]
+
+
+def test_offline_listing_buttons_change_nothing(tg):
+    """Offline / veraltet are final: old buttons (also ↩️) only show the state; no draft is written."""
+    db = bot.db
+    listing_id = add_listing(db, title="Weg")
+    db.mark_offline(["f1"])
+    for action in ("gen", "skip", "sent", "undo"):
+        press(tg, f"{action}:{listing_id}")
+        assert tg.edits[-1]["text"].startswith("⚫ Offline (laut Fredy) · Weg")
+    listing = db.get_listing(listing_id)
+    assert listing["discard_reason"] == "offline" and listing["status"] == "seen" and db.latest_draft(listing_id) is None
 
 
 def test_any_button_counts_as_seen(tg):
@@ -685,8 +722,10 @@ def test_any_button_counts_as_seen(tg):
     assert db.get_listing(first)["seen_at"] is None
     query = press(tg, f"img:{first}")
     assert query.answers == [bot.NO_PICTURES_HERE] and db.get_listing(first)["seen_at"]
+    assert db.get_listing(first)["status"] == "seen"  # "Neu" -> "Gesehen"
     press(tg, f"skip:{second}")
-    assert db.get_listing(second)["seen_at"] and db.get_listing(second)["status"] == "dismissed"
+    assert db.get_listing(second)["seen_at"] and db.get_listing(second)["discard_reason"] == "uninteressant"
+    assert db.get_listing(second)["status"] == "seen"
     without_message = add_listing(db, "f3", tg_message_id=None)
     press(tg, f"skip:{without_message}")  # "Inserat nicht gefunden.": nothing happened
     assert db.get_listing(without_message)["seen_at"] is None

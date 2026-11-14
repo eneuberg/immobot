@@ -52,6 +52,7 @@
   --err: #b42318;      --err-soft: #fdecea;  --err-line: #f5c2bc;
   --info: #1f5fbf;     --info-soft: #e6effc; --info-line: #c3d6f5;
   --neutral: #4f5866;  --neutral-soft: #eceef2;
+  --seen: #5a48b8;     --seen-soft: #efecfb;  /* status "Gesehen" */
   --shadow-lift: 0 4px 14px rgba(16, 24, 40, .08);
   --overlay: rgba(10, 12, 16, .94);
 }
@@ -96,6 +97,7 @@
     --err: #ff9a8f;      --err-soft: rgba(240, 82, 66, .14);   --err-line: rgba(240, 82, 66, .36);
     --info: #8db8ff;     --info-soft: rgba(80, 140, 255, .14); --info-line: rgba(80, 140, 255, .34);
     --neutral: #b2bac6;  --neutral-soft: rgba(150, 162, 180, .14);
+    --seen: #b9adff;     --seen-soft: rgba(150, 130, 255, .15);
     --shadow-lift: 0 4px 18px rgba(0, 0, 0, .35);
     --overlay: rgba(0, 0, 0, .94);
   }
@@ -233,7 +235,18 @@ article > :last-child { margin-bottom: 0; }
 .badge.err { background: var(--err-soft); color: var(--err); }
 .badge.info, .st-new { background: var(--info-soft); color: var(--info); }
 .badge.accent { background: var(--accent-soft); color: var(--accent-strong); }
-.st-dismissed { background: var(--neutral-soft); color: var(--neutral); }
+.st-seen { background: var(--seen-soft); color: var(--seen); }
+/* "Aussortiert" is no status: outlined (dashed), no fill, neutral, with the archive icon - next to the filled status
+   pills it reads as a different kind of thing. */
+.discard-chip {
+  display: inline-flex; align-items: center; gap: .3rem; padding: .08rem .5rem; border-radius: 999px;
+  border: 1px dashed var(--pico-form-element-border-color); background: transparent; color: var(--neutral);
+  font-size: .76rem; font-weight: 600; line-height: 1.45; white-space: nowrap;
+}
+.discard-chip .icon { width: .95em; height: .95em; flex: none; }
+.discard-chip .dc-kind { font-weight: 500; color: var(--pico-muted-color); }
+.discard-chip .dc-kind::after { content: "·"; margin-left: .3rem; }
+.discard-chip.dc-offline, .discard-chip.dc-veraltet { border-style: solid; }  /* final: a solid line */
 .chips { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0; padding: 0; list-style: none; }
 p.chips { margin-bottom: 1.5rem; }
 .chip {
@@ -308,11 +321,21 @@ details.howto p { font-size: .88rem; margin: .4rem 0 0; color: var(--pico-muted-
 .filters a .n { color: var(--pico-muted-color); font-variant-numeric: tabular-nums; font-size: .82rem; }
 .filters a .dot { width: .5rem; height: .5rem; border-radius: 50%; background: currentColor; }
 .filters a .dot.st-new { color: var(--info); } .filters a .dot.st-drafted { color: var(--warn); }
-.filters a .dot.st-sent { color: var(--ok); } .filters a .dot.st-dismissed { color: var(--neutral); }
+.filters a .dot.st-sent { color: var(--ok); } .filters a .dot.st-seen { color: var(--seen); }
 .filters a[aria-current="page"] { background: var(--pico-primary-background); border-color: var(--pico-primary-background); color: #fff; }
 .filters a[aria-current="page"] .n { color: rgba(255, 255, 255, .8); }
 .filters a[aria-current="page"] .dot { color: #fff; background: #fff; }
 @media (min-width: 768px) { .filters { flex-wrap: wrap; margin-left: 0; margin-right: 0; padding-left: 0; padding-right: 0; } }
+/* The "Aussortiert" row: right under the statuses, dashed like the aussortiert chip; chosen = neutral, not the
+   primary colour (it isn't the list). The first chip names the group. */
+.filters:has(+ .filters-discard) { margin-bottom: .4rem; }
+.filters.filters-discard { flex-wrap: wrap; overflow: visible; gap: .35rem; }  /* few chips: all in view, no scrolling */
+.filters-discard a { border-style: dashed; border-color: var(--pico-form-element-border-color); background: transparent; color: var(--neutral); font-size: .84rem; padding: .28rem .7rem; }
+.filters-discard a.f-discard { font-weight: 600; }
+.filters-discard a .icon { width: 1em; height: 1em; }
+.filters-discard a[aria-current="page"] { background: var(--neutral); border-color: var(--neutral); border-style: solid; color: var(--pico-card-background-color); }
+.filters-discard a[aria-current="page"] .n { color: inherit; opacity: .8; }
+.discard-help { margin-top: -.4rem; }
 
 .listing-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .65rem; }
 .listing-list > li { list-style: none; margin: 0; }
@@ -327,10 +350,13 @@ details.howto p { font-size: .88rem; margin: .4rem 0 0; color: var(--pico-muted-
 .listing-card:hover { border-color: var(--pico-form-element-border-color); box-shadow: var(--shadow-lift); color: var(--text); }
 .listing-card:hover .lc-title { color: var(--pico-primary); }
 .listing-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.listing-card.is-dismissed { opacity: .62; }
-.listing-card.is-dismissed:hover { opacity: 1; }
+/* Aussortiert: faded, picture without colour, flat (no shadow); back to normal on hover/focus. */
+.listing-card.is-discarded { opacity: .66; box-shadow: none; background: transparent; }
+.listing-card.is-discarded .thumb img { filter: grayscale(.85); }
+.listing-card.is-discarded:hover, .listing-card.is-discarded:focus-visible { opacity: 1; }
+.listing-card.is-discarded:hover .thumb img { filter: none; }
 .lc-body { min-width: 0; display: flex; flex-direction: column; gap: .2rem; }
-.lc-auto { color: var(--pico-muted-color); }
+.lc-auto, .lc-was { color: var(--pico-muted-color); }
 .lc-top { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem .5rem; white-space: nowrap; font-size: .78rem; color: var(--pico-muted-color); }
 .lc-title {
   font-weight: 650; font-size: .98rem; line-height: 1.3; color: var(--pico-h2-color);
@@ -370,8 +396,8 @@ details.howto p { font-size: .88rem; margin: .4rem 0 0; color: var(--pico-muted-
   .lc-toggle { right: .9rem; }
 }
 
-/* Still "neu" and never looked at (db.mark_seen): a soft ring in the "neu" colour that breathes three times, then
-   stays. Seen and still "neu": a quiet "👁 gesehen" next to the badge. Under reduced motion: ring only. */
+/* Status "Neu" (never looked at, db.mark_seen): a soft ring in the "Neu" colour that breathes three times, then
+   stays. Under reduced motion: ring only. */
 .listing-card.is-unseen {
   border-color: var(--info-line);
   box-shadow: 0 0 0 1px var(--info-line), 0 0 16px -3px color-mix(in srgb, var(--info) 45%, transparent);
@@ -385,8 +411,6 @@ details.howto p { font-size: .88rem; margin: .4rem 0 0; color: var(--pico-muted-
   50% { box-shadow: 0 0 0 1px var(--info-line), 0 0 24px 0 color-mix(in srgb, var(--info) 30%, transparent); }
 }
 @media (prefers-reduced-motion: reduce) { .listing-card.is-unseen { animation: none; } }
-.lc-seen { color: var(--pico-muted-color); }
-.stat [data-unseen-part] { white-space: nowrap; }  /* "· 2 ungesehen" wraps as a whole */
 /* ---- Hauptseite (end) ------------------------------------------------------------------------------------ */
 
 /* thumbnails: fixed 4:3 box, placeholder underneath, image on top (removed by app.js when it fails) */
@@ -425,22 +449,61 @@ details.howto p { font-size: .88rem; margin: .4rem 0 0; color: var(--pico-muted-
 .facts dd { margin: 0; font-weight: 650; color: var(--pico-h1-color); overflow-wrap: anywhere; }
 .lh-actions { display: grid; grid-template-columns: 1fr; gap: .5rem; }
 .lh-actions [role=button] { margin: 0; text-align: center; }
-.status-switch { margin: 1rem 0 0; padding-top: .9rem; border-top: 1px solid var(--pico-card-border-color); }
-.status-switch .label { display: block; font-size: .82rem; color: var(--pico-muted-color); margin-bottom: .4rem; }
-.seg { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .4rem; }
-.seg button {
-  margin: 0; padding: .45rem .5rem; font-size: .88rem; font-weight: 600; border-radius: var(--radius-sm);
-  background: transparent; color: var(--text); border: 1px solid var(--pico-form-element-border-color);
+/* ---- Listing page: status (begin) ----
+   A read-only track Neu → Gesehen → Entwurf → Gesendet: steps up to the current one in its colour, the current one
+   as a filled pill (like the badge), later ones muted. Below it the two actions. Aussortiert: the track is greyed
+   (the last state still marked) and a lock box says why. */
+.status-box { margin: 1rem 0 0; padding-top: .9rem; border-top: 1px solid var(--pico-card-border-color); scroll-margin-top: 4rem; }
+.status-box .label { font-size: .82rem; font-weight: 500; color: var(--pico-muted-color); margin: 0 0 .45rem; }
+.status-track {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 .75rem; padding: 0; list-style: none;
+  counter-reset: none;
 }
-.seg button:hover { background: var(--surface-2); color: var(--text); }
-.seg button[aria-pressed="true"] { border-color: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
-.seg button[aria-pressed="true"].st-new { background: var(--info-soft); color: var(--info); }
-.seg button[aria-pressed="true"].st-drafted { background: var(--warn-soft); color: var(--warn); }
-.seg button[aria-pressed="true"].st-sent { background: var(--ok-soft); color: var(--ok); }
-.seg button[aria-pressed="true"].st-dismissed { background: var(--neutral-soft); color: var(--neutral); }
+.status-track .st-step {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: .3rem; margin: 0; padding: 0;
+  list-style: none; background: none; font-size: .78rem; font-weight: 500; color: var(--pico-muted-color); text-align: center;
+}
+/* the line between the dots: from this dot's centre to the previous one */
+.status-track .st-step + .st-step::before {
+  content: ""; position: absolute; top: .55rem; right: 50%; width: 100%; height: 2px; margin-top: -1px;
+  background: var(--pico-muted-border-color);
+}
+.status-track .st-dot {
+  position: relative; z-index: 1; width: 1.1rem; height: 1.1rem; border-radius: 50%;
+  border: 2px solid var(--pico-form-element-border-color); background: var(--pico-card-background-color);
+}
+.status-track .st-step.is-done, .status-track .st-step.is-current { color: currentColor; }
+.status-track .st-step.st-new { --step: var(--info); --step-soft: var(--info-soft); }
+.status-track .st-step.st-seen { --step: var(--seen); --step-soft: var(--seen-soft); }
+.status-track .st-step.st-drafted { --step: var(--warn); --step-soft: var(--warn-soft); }
+.status-track .st-step.st-sent { --step: var(--ok); --step-soft: var(--ok-soft); }
+.status-track .is-done .st-dot { border-color: var(--step); background: var(--step); }
+.status-track .is-done + .st-step::before { background: var(--step); }
+.status-track .is-done .st-label { color: var(--text); }
+.status-track .is-current .st-dot { border-color: var(--step); background: var(--step); box-shadow: 0 0 0 4px var(--step-soft); }
+.status-track .is-current .st-label {
+  padding: .02rem .5rem; border-radius: 999px; background: var(--step-soft); color: var(--step); font-weight: 700;
+}
+.status-box.is-locked .status-track { filter: grayscale(1); opacity: .55; }
+.status-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.status-actions form { margin: 0; flex: 1 1 11rem; }
+.status-actions button { width: 100%; margin: 0; }
+.status-actions .status-undo { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.status-actions .status-undo button { width: auto; }
+@media (min-width: 576px) { .status-actions form { flex: 0 0 auto; } .status-actions button { width: auto; } }
+/* Why it is locked (listing page and the editor's banner): dashed like the aussortiert chip, solid when final. */
+.status-lock {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; padding: .65rem .8rem; border-radius: var(--radius-sm);
+  border: 1px dashed var(--pico-form-element-border-color); background: var(--neutral-soft); color: var(--text); font-size: .9rem;
+}
+.status-lock.dc-offline, .status-lock.dc-veraltet { border-style: solid; }
+.status-lock p { display: flex; gap: .5rem; align-items: flex-start; flex: 1 1 16rem; margin: 0; }
+.status-lock p > .icon { flex: none; width: 1.15rem; height: 1.15rem; margin-top: .12rem; color: var(--neutral); }
+.status-lock form { margin: 0; }
+.status-lock button { width: auto; margin: 0; }
+/* ---- Listing page: status (end) ---- */
 @media (min-width: 576px) {
   .lh-actions { grid-template-columns: repeat(auto-fit, minmax(10rem, max-content)); }
-  .seg { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .facts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 @media (min-width: 900px) {
@@ -987,6 +1050,8 @@ details.notes-box .notes { margin: 0; font-size: .9rem; }
 .ed-done .ed-actions button, .ed-done .ed-actions [role=button] { width: 100%; text-align: center; }
 .ed-done .ed-actions .copy-btn { min-width: 0; }
 .ed-sent { justify-content: center; padding: .55rem .8rem; font-size: .88rem; }
+.ed-unsent { margin: .6rem 0 0; }
+.ed-discarded { margin-top: .75rem; }
 .ed-rules h2 { margin-bottom: .75rem; }
 .ed-wait {
   display: flex; align-items: center; gap: .6rem; margin: 0 0 .5rem; padding: .75rem .9rem; border-radius: var(--radius-sm);

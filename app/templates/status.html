@@ -128,6 +128,7 @@
 </section>
 <p class="chips">
   {% for key, label in STATUSES.items() %}<span class="badge dot st-{{ key }}">{{ label }}: {{ stats.by_status.get(key, 0) }}</span>{% endfor %}
+  {% for key, label in DISCARD_REASONS.items() %}<span class="discard-chip">Aussortiert · {{ label }}: {{ stats.by_discard.get(key, 0) }}</span>{% endfor %}
 </p>
 
 <article id="fredy">

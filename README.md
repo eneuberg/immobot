@@ -10,6 +10,14 @@ Telegram, Fredy).
 
 Gesendet wird **nie automatisch**. Du kopierst den Entwurf und schickst ihn im Portal selbst ab.
 
+**Status und Aussortiert.** Jedes Inserat hat einen Status **Neu → Gesehen → Entwurf → Gesendet**. Die ersten drei passieren
+von selbst (eingegangen; angesehen oder ein Telegram-Button gedrückt; ein Entwurf existiert), von Hand gibt es nur
+**✅ Gesendet** (mit „zurücknehmen“). Daneben kann ein Inserat **aussortiert** sein – das ist kein Status, der Status bleibt
+darunter stehen und ist solange gesperrt: **Uninteressant** (❌ von dir, oder automatisch, wenn du es angesehen, aber nach
+„Automatisch uninteressant nach“ Stunden keinen Entwurf hast; mit ↩️ zurückholen), **Offline** (laut Fredy nicht mehr online)
+und **Veraltet** (älter als 90 Tage). Offline und Veraltet setzt nur immobot, sie sind endgültig. Die Hauptseite zeigt unter
+„Alle“ nur nicht aussortierte Inserate; die aussortierten haben eine eigene Filterzeile, die Suche findet alle.
+
 ```
 Fredy ──Telegram-Adapter──▶ Telegram  (Inserat wie bisher)
   └────HTTP-Adapter──▶ immobot /hook/fredy ──▶ Telegram (Buttons, Entwurf)  ◀── Dashboard
