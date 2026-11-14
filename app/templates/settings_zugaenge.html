@@ -1,5 +1,5 @@
 {# Einstellungen → Zugänge: what is set up once. KI-Anbieter (key, model, test, model list), Telegram (bot token, chat,
-   allowed users, links and editor login), Fredy (webhook token, address). Credentials: status only, never values. #}
+   allowed users, links and editor login), Fredy (webhook token, MCP token, address). Credentials: status only, never values. #}
 {% extends "settings_base.html" %}
 {% from "macros.html" import cred_badge, howto, key_line %}
 {% from "settings_macros.html" import field_error, need_tag with context %}
@@ -206,7 +206,7 @@
   <form method="post" action="/credentials/test/telegram" data-once><button type="submit" class="secondary outline btn-sm">Verbindung testen</button></form>
 </div>
 <div class="cred-list">
-  {% for c in credentials if c.name != "fredy_webhook_token" %}{{ cred_card(c) }}{% endfor %}
+  {% for c in credentials if not c.name.startswith("fredy_") %}{{ cred_card(c) }}{% endfor %}
 </div>
 
 <article id="editor-login" class="setting-card">
@@ -248,7 +248,7 @@
 {# ---- Fredy ---- #}
 <div class="section-head" id="fredy"><h2>Fredy</h2></div>
 <div class="cred-list">
-  {% for c in credentials if c.name == "fredy_webhook_token" %}{{ cred_card(c) }}{% endfor %}
+  {% for c in credentials if c.name.startswith("fredy_") %}{{ cred_card(c) }}{% endfor %}
 </div>
 
 {# The settings form of this tab: the Fredy address here, provider and model above (form="zugaenge-form"). #}
@@ -256,7 +256,8 @@
   <input type="hidden" name="section" value="zugaenge">
   <article id="fredy-adresse" class="setting-card">
     <label>Adresse deiner Fredy-Instanz {{ need_tag("optional") }}
-      <small>Für die Links „In Fredy öffnen“. Leer = die Links, die Fredy mitschickt.</small>
+      <small>Für die Links „In Fredy öffnen“ und – mit dem Fredy-MCP-Token – für den Abgleich, welche Inserate offline
+        sind. Leer = die Links, die Fredy mitschickt, und kein Abgleich.</small>
       <input type="text" inputmode="url" name="fredy_base_url" value="{{ values.fredy_base_url }}"
         placeholder="https://fredy.example.com" autocomplete="off" spellcheck="false" autocapitalize="off"
         {% if errors.fredy_base_url %}aria-invalid="true"{% endif %}>

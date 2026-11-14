@@ -23,6 +23,7 @@ DASHBOARD_SECRETS = {
     "telegram_chat_id": "-100555",  # not secret
     "fredy_webhook_token": "dashboard-webhook-SECRET-" + "w" * 32,
     "deutschlandgpt_api_key": "dgpt-DASHBOARD-SECRET-0123456789abcdef",
+    "fredy_mcp_token": "fredy_DASHBOARDmcpSECRET" + "m" * 40,
 }
 
 # main.py may not register the middleware yet; it has to be added before the app first starts.
@@ -794,7 +795,8 @@ def test_status_page_bot_states_and_sources(client, monkeypatch):
     r = client.get("/status")
     assert "nicht konfiguriert" in r.text
     assert r.text.count('<span class="error">nicht gesetzt</span>') == 5  # the required ones (with the allowlist)
-    assert "nicht gesetzt (optional)" not in r.text and "nicht gesetzt (nur für den anderen KI-Anbieter nötig)" in r.text
+    assert r.text.count("nicht gesetzt (optional)") == 1  # the Fredy MCP token
+    assert "nicht gesetzt (nur für den anderen KI-Anbieter nötig)" in r.text
     assert "Kein Anthropic-API-Key hinterlegt" in r.text
     save_credential(client, "anthropic_api_key", DASHBOARD_SECRETS["anthropic_api_key"])
     save_credential(client, "telegram_bot_token", DASHBOARD_SECRETS["telegram_bot_token"])
@@ -960,14 +962,15 @@ def test_credentials_page_shows_status_never_values(client):
     assert "Aktuelle Chat-ID: <code>42</code>" in r.text  # the chat id is not secret
     assert "SESSION_SECRET" in r.text
     # one tab in the order KI-Anbieter, Telegram, Fredy
-    assert r.text.index('id="anbieter"') < r.text.index('id="telegram_bot_token"') < r.text.index('id="fredy_webhook_token"')
+    assert (r.text.index('id="anbieter"') < r.text.index('id="telegram_bot_token"') < r.text.index('id="fredy_webhook_token"')
+            < r.text.index('id="fredy_mcp_token"') < r.text.index('id="fredy-adresse"'))
 
     save_credential(client, "telegram_bot_token", DASHBOARD_SECRETS["telegram_bot_token"])
     save_credential(client, "anthropic_api_key", DASHBOARD_SECRETS["anthropic_api_key"])
     pages = {"/settings/zugaenge": client.get("/settings/zugaenge").text}
     assert "gesetzt über Dashboard am" in pages["/settings/zugaenge"]
-    # 4 credential cards (bot token, chat, allowlist, webhook) + 2 provider panels; masked: the 4 secrets
-    for path, page, values, masked in [("/settings/zugaenge", pages["/settings/zugaenge"], 6, 4)]:
+    # 5 credential cards (bot token, chat, allowlist, webhook, MCP token) + 2 provider panels; masked: the 5 secrets
+    for path, page, values, masked in [("/settings/zugaenge", pages["/settings/zugaenge"], 7, 5)]:
         value_inputs = re.findall(r"<input[^>]*name=\"value\"[^>]*>", page)
         assert len(value_inputs) == values, path
         for tag in value_inputs:

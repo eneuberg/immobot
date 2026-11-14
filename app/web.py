@@ -75,9 +75,9 @@ SECTION_FIELDS = {
 }
 FIELD_SECTION = {field: section for section, fields in SECTION_FIELDS.items() for field in fields}
 AI_CREDENTIALS = {info["credential"]: provider for provider, info in settings.PROVIDERS.items()}  # "Zugänge" → KI-Anbieter
-# Credentials that may stay empty. None at the moment: the allowlist is required (with an empty list nobody may
-# press the bot's buttons or open the editor from Telegram).
-OPTIONAL_CREDENTIALS: set[str] = set()
+# Credentials that may stay empty. Not the allowlist: with an empty list nobody may press the bot's buttons or open
+# the editor from Telegram. The Fredy MCP token is optional: without it listings just aren't marked offline automatically.
+OPTIONAL_CREDENTIALS: set[str] = {"fredy_mcp_token"}
 
 GENERIC_DRAFT_ERROR = "Unerwarteter Fehler beim Generieren – Details im Log."
 
@@ -1467,6 +1467,9 @@ CREDENTIAL_HELP = {  # the AI keys are explained in their provider panel
                                   "kommagetrennt. Ohne Liste kann niemand die Buttons nutzen. „Chat per Code "
                                   "verbinden“ trägt dich automatisch ein."),
     "fredy_webhook_token": "Mindestens 32 Zeichen. Am einfachsten „Neu erzeugen“ und in Fredys HTTP-Adapter eintragen.",
+    "fredy_mcp_token": ("Damit liest immobot alle 30 Minuten bei Fredy nach, welche Inserate Fredy als offline erkannt hat "
+                        "(Fredy prüft das selbst, immobot fragt dafür kein Portal an). Braucht zusätzlich die "
+                        "Adresse deiner Fredy-Instanz unten."),
 }
 # test -> credential named in the audit log when it fails
 CONNECTION_TESTS = {"anthropic": "anthropic_api_key", "deutschlandgpt": "deutschlandgpt_api_key", "telegram": "telegram_bot_token"}

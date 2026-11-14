@@ -42,8 +42,10 @@ LABELS = {
     "telegram_chat_id": "Telegram-Chat-ID",
     "telegram_allowed_user_ids": "Erlaubte Telegram-User-IDs",
     "fredy_webhook_token": "Fredy-Webhook-Token",
+    "fredy_mcp_token": "Fredy-MCP-Token",
 }
-SECRET_NAMES = ("anthropic_api_key", "deutschlandgpt_api_key", "telegram_bot_token", "fredy_webhook_token")  # the others aren't
+SECRET_NAMES = ("anthropic_api_key", "deutschlandgpt_api_key", "telegram_bot_token", "fredy_webhook_token",
+                "fredy_mcp_token")  # the others aren't
 ACTION_LABELS = {  # credential_events.action -> German label
     "set": "gespeichert",
     "clear": "entfernt",
@@ -68,6 +70,7 @@ _PRINTABLE_ASCII = re.compile(r"[\x21-\x7e]+")  # no spaces, no control or non-A
 _BOT_TOKEN = re.compile(r"[0-9]+:[A-Za-z0-9_-]{30,}")
 _CHAT_ID = re.compile(r"-?[0-9]{1,20}")
 _USER_IDS = re.compile(r"[0-9]{1,20}(,[0-9]{1,20})*")
+_FREDY_MCP_TOKEN = re.compile(r"fredy_[A-Za-z0-9_-]{16,}")  # Fredy: "fredy_" + 64 hex (userStorage.generateMcpToken)
 
 _aead: AESGCM | None = None
 _pairing_key: bytes | None = None
@@ -167,6 +170,8 @@ def validate(name: str, value: str) -> str:
         value = ",".join(dict.fromkeys(str(int(part)) for part in value.split(",")))  # normalized, no duplicates
     if name == "fredy_webhook_token" and len(value) < 32:
         raise InvalidValue("Mindestens 32 Zeichen – am einfachsten „Neu erzeugen“ verwenden.")
+    if name == "fredy_mcp_token" and not _FREDY_MCP_TOKEN.fullmatch(value):
+        raise InvalidValue("Ein Fredy-MCP-Token beginnt mit „fredy_“ (Fredy: Administration → Benutzer → Token kopieren).")
     if name == "deutschlandgpt_api_key" and not 20 <= len(value) <= 200:
         raise InvalidValue("Ein DeutschlandGPT-API-Key hat 20 bis 200 Zeichen.")
     return value

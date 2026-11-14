@@ -1,7 +1,7 @@
 """Runtime configuration from environment variables.
 
 Only DASHBOARD_PASSWORD and SESSION_SECRET are required. The API key, bot token, chat id, allowed
-Telegram user ids and webhook token are normally entered in the dashboard (Einstellungen, see vault.py);
+Telegram user ids, webhook token and Fredy MCP token are normally entered in the dashboard (Einstellungen, see vault.py);
 the env variables of the same name still work as a fallback (that is how older deployments were set up).
 
 Secrets are never written to the database in plain text, never rendered in templates and never
@@ -32,6 +32,7 @@ class Config:
     telegram_chat_id: str = ""  # not secret; "" = not set
     telegram_allowed_user_ids: str = ""  # not secret; "1,2"; "" = not set
     fredy_webhook_token: str = field(default="", repr=False)
+    fredy_mcp_token: str = field(default="", repr=False)
 
     def env_credentials(self) -> dict[str, str]:
         """The env fallbacks keyed by vault credential name (empty strings = not set)."""
@@ -41,6 +42,7 @@ class Config:
             "telegram_chat_id": self.telegram_chat_id,
             "telegram_allowed_user_ids": self.telegram_allowed_user_ids,
             "fredy_webhook_token": self.fredy_webhook_token,
+            "fredy_mcp_token": self.fredy_mcp_token,
         }
 
 
@@ -88,4 +90,5 @@ def load_config() -> Config:
         telegram_chat_id=chat_id,
         telegram_allowed_user_ids=user_ids,
         fredy_webhook_token=_env("FREDY_WEBHOOK_TOKEN"),
+        fredy_mcp_token=_env("FREDY_MCP_TOKEN"),
     )

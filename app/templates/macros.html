@@ -88,6 +88,18 @@
     <li>Manuell: <a href="https://t.me/userinfobot" target="_blank" rel="noopener noreferrer">@userinfobot</a> öffnen und „Start“ drücken – die angezeigte Id ist deine User-ID. Mehrere IDs mit Komma trennen.</li>
   </ol>
 </details>
+{% elif name == "fredy_mcp_token" %}
+<details class="howto"><summary>So bekommst du den MCP-Token aus Fredy</summary>
+  <ol>
+    <li>In Fredy als Admin anmelden → Administration → <strong>Benutzer</strong>.</li>
+    <li>Beim Benutzer, dem deine Suchaufträge gehören (bei dir: admin), „Token anzeigen“ und dann „Token kopieren“.
+      Der Token beginnt mit <code>fredy_</code>.</li>
+    <li>Hier unter „Eintragen“ einfügen und speichern. Unten muss die Adresse deiner Fredy-Instanz stehen.</li>
+  </ol>
+  <p>immobot ruft damit nur das Werkzeug <code>list_listings</code> auf. Der Token läuft nie ab und darf in Fredy
+    auch schreiben (Notizen, Merkliste) – wie ein Passwort behandeln. Weniger Rechte: in Fredy einen eigenen
+    Benutzer ohne Admin anlegen, ihm die Suchaufträge freigeben und dessen Token nehmen.</p>
+</details>
 {% elif name == "fredy_webhook_token" %}
 <details class="howto"><summary>So richtest du den Webhook in Fredy ein</summary>
   <ol>
