@@ -27,6 +27,10 @@ Telegram rejects a message with the login_url button while the dashboard domain 
 and settings pages). The full layout keeps trying the button, so the first message Telegram accepts with it clears
 the note and the next drafts get the editor layout again. Buttons of older messages ("new", "short", "formal",
 "edit") keep working in either layout. "✍️ Anschreiben" shows the existing draft if there already is one.
+A sent or aussortiert listing (settings.DISCARD_REASONS) collapses to one line (collapsed_view): "↩️ Rückgängig" /
+"↩️ Zurückholen", or for offline / veraltet (final) only the editor and dashboard links. Any button of the listing
+counts as seen (db.mark_seen: "Neu" -> "Gesehen"); buttons of an older message of an aussortiert listing only show
+its current state.
 
 Token and chat id come from vault.py. Without a token the bot stays off ("nicht konfiguriert"); without
 a chat id it polls anyway so that "/pair" can connect a chat. reload() restarts it after a change.
@@ -271,21 +275,44 @@ def draft_view(listing: dict, draft: dict, note: str | None = None) -> tuple[str
     return text, draft_keyboard(listing)
 
 
-def collapsed_view(listing: dict, note: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
-    if listing.get("status") == "sent":
-        label = "✅ Gesendet"
-    elif listing.get("auto_status") == "dismissed":
-        label = "⏱ Automatisch uninteressant (kein Entwurf)"
+FINAL_DISCARDS = {  # aussortiert by a job for good: no buttons that change anything, only the links
+    "offline": "⚫ Offline (laut Fredy)",
+    "veraltet": f"🗄 Veraltet (älter als {settings.STALE_DAYS} Tage)",
+}
+
+
+def is_collapsed(listing: dict) -> bool:
+    """Sent or aussortiert: the message shrinks to one line (collapsed_view)."""
+    return listing.get("status") == "sent" or bool(listing.get("discard_reason"))
+
+
+def collapsed_view(listing: dict, note: str | None = None, editor: bool = True) -> tuple[str, InlineKeyboardMarkup]:
+    """One line for a sent or aussortiert listing. Sent: "↩️ Rückgängig" (back to Entwurf / Gesehen); uninteressant:
+    "↩️ Zurückholen"; offline / veraltet (final): only "📝 Bearbeiten" and "🔗 Dashboard", plus what its status was."""
+    lid, reason = listing["id"], listing.get("discard_reason")
+    extra = ""
+    if reason in FINAL_DISCARDS:
+        label = FINAL_DISCARDS[reason]
+        if listing.get("status") in ("drafted", "sent"):
+            extra = f"\n<i>Status war: {_esc(settings.STATUSES[listing['status']])}</i>"
+        edit = editor_button(lid) if editor and editor_button_error() is None else None
+        url = dashboard_url(lid)
+        row = ([edit] if edit else []) + ([InlineKeyboardButton("🔗 Dashboard", url=url)] if url else [])
+        keyboard = InlineKeyboardMarkup([row] if row else [])
+    elif reason:
+        label = ("⏱ Automatisch uninteressant (angesehen, kein Entwurf)" if listing.get("discard_auto")
+                 else "❌ Uninteressant")
+        keyboard = InlineKeyboardMarkup([[_button("↩️ Zurückholen", "undo", lid)]])
     else:
-        label = "❌ Uninteressant"
-    keyboard = InlineKeyboardMarkup([[_button("↩️ Rückgängig", "undo", listing["id"])]])
-    return f"{label} · {_esc(_title(listing))}" + _note(note), keyboard
+        label = "✅ Gesendet"
+        keyboard = InlineKeyboardMarkup([[_button("↩️ Rückgängig", "undo", lid)]])
+    return f"{label} · {_esc(_title(listing))}{extra}" + _note(note), keyboard
 
 
 def current_view(listing: dict, note: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
     """What the listing's message should show for its current status: the latest non-test draft, or the Endversion
     of a finished editor session when no newer draft came after it (so copying from Telegram copies your text)."""
-    if listing.get("status") in ("sent", "dismissed"):
+    if is_collapsed(listing):
         return collapsed_view(listing, note)
     draft = db.latest_draft(listing["id"])
     if draft is None:
@@ -554,6 +581,8 @@ async def _edit(tg_bot, listing: dict, text: str, keyboard) -> None:
 
 
 def _keyboard_without_editor(listing: dict) -> InlineKeyboardMarkup:
+    if is_collapsed(listing):
+        return collapsed_view(listing, editor=False)[1]
     if db.latest_draft(listing["id"]) is None:
         return followup_view(listing, editor=False)[1]
     return draft_keyboard(listing, editor=False)
@@ -602,10 +631,9 @@ async def _generate(tg_bot, listing: dict, kind: str, instruction: str | None = 
         log.exception("Draft generation failed for listing %s", listing_id)
         await _show(tg_bot, listing, note=GENERIC_ERROR)
         return
-    # Same rule as llm.create_and_store_draft: only "new" becomes "drafted" (a status changed meanwhile stays).
+    # Same rule as llm.create_and_store_draft: forward to "drafted" only (a status that moved on meanwhile stays).
+    db.advance_status(listing_id, "drafted")
     fresh = db.get_listing(listing_id) or listing
-    if fresh.get("status") == "new":
-        db.set_listing_status(listing_id, "drafted")
     try:
         await _edit(tg_bot, fresh, *draft_view(fresh, draft))
     except TelegramError:  # the draft is paid for and stored – try once more before giving up
@@ -711,18 +739,28 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     async with lock:
         await _answer(query)
         tg_bot = context.bot
-        if action == "gen" and has_draft(listing_id):  # written in the dashboard or editor meanwhile: no second one
-            collapsed = listing.get("status") in ("sent", "dismissed")  # a stale message: just show the state
-            await _show(tg_bot, listing, note=None if collapsed else DRAFT_EXISTS)
+        listing = db.get_listing(listing_id) or listing  # mark_seen may have moved "Neu" to "Gesehen"
+        if listing.get("discard_reason") and action != "undo":
+            # aussortiert meanwhile (dashboard, editor, a job): a button of an older message only shows the state
+            await _show(tg_bot, listing)
+        elif action == "gen" and has_draft(listing_id):  # written in the dashboard or editor meanwhile: no second one
+            await _show(tg_bot, listing, note=None if is_collapsed(listing) else DRAFT_EXISTS)
         elif action in GENERATE_KINDS:
             await _generate(tg_bot, listing, GENERATE_KINDS[action])
         elif action == "edit":
             await _ask_instruction(tg_bot, listing)
-        elif action in ("sent", "skip"):
-            db.set_listing_status(listing_id, "sent" if action == "sent" else "dismissed")
+        elif action == "sent":
+            db.mark_sent(listing_id)
+            await _show(tg_bot, db.get_listing(listing_id))
+        elif action == "skip":
+            db.discard(listing_id)
             await _show(tg_bot, db.get_listing(listing_id))
         elif action == "undo":
-            db.set_listing_status(listing_id, "drafted" if db.latest_draft(listing_id) else "new")
+            # ↩️ Zurückholen (uninteressant) or ↩️ Rückgängig (sent); offline / veraltet can't be undone
+            if listing.get("discard_reason") == settings.MANUAL_DISCARD:
+                db.restore(listing_id)
+            elif not listing.get("discard_reason"):
+                db.unmark_sent(listing_id)
             await _show(tg_bot, db.get_listing(listing_id))
 
 

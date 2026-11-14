@@ -72,13 +72,26 @@ DRAFT_KINDS = ["initial", "regenerate", "shorter", "formal", "custom", "test"]
 QUICK_FEEDBACK_KINDS = ("shorter", "formal", "regenerate")
 FEEDBACK_SOURCES = ("editor", "telegram", "dashboard")
 
-# Listing statuses stored in listings.status
+# Track status of a listing (listings.status), in this order. Moves forward by itself (opened -> "seen", a draft ->
+# "drafted", see db.mark_seen / db.advance_status) and is set by hand on the listing page and with "abgeschickt";
+# "new" by hand means "als ungelesen markieren". Kept underneath while the listing is aussortiert (DISCARD_REASONS).
 STATUSES = {
-    "new": "neu",
+    "new": "Neu",
+    "seen": "Gesehen",
     "drafted": "Entwurf",
-    "sent": "gesendet",
-    "dismissed": "uninteressant",
+    "sent": "Gesendet",
 }
+
+# "Aussortiert" (listings.discard_reason): not a status but a disposition beside it. While it is set, the status can't
+# be changed. Only MANUAL_DISCARD is set (❌) and undone (↩️ Zurückholen) by hand; the others are set by
+# housekeeping.py alone and are final. More reasons can be added here (the database stores only the key).
+DISCARD_REASONS = {
+    "uninteressant": "Uninteressant",  # by hand, or automatically auto_dismiss_hours after being seen without a draft
+    "offline": "Offline",  # Fredy reports the ad as no longer online (housekeeping.apply_fredy_states)
+    "veraltet": "Veraltet",  # received more than STALE_DAYS ago
+}
+MANUAL_DISCARD = "uninteressant"
+STALE_DAYS = 90
 
 DEFAULT_SYSTEM_PROMPT = """\
 Du schreibst die erste Kontaktanfrage auf ein Mietwohnungs-Inserat, im Namen der suchenden Person, deren Profil unten steht. \
@@ -142,7 +155,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "followup_delay_s": "4",
     "paused": "0",
     "kleinanzeigen_enabled": "1",  # Fredy's Kleinanzeigen listings: posted by immobot (pictures + message); 0 = ignored
-    "auto_dismiss_hours": "48",  # main.auto_dismiss_loop: "neu" without a draft for this long -> uninteressant; 0 = off
+    "auto_dismiss_hours": "48",  # housekeeping.py: seen this long ago without a draft -> "uninteressant"; 0 = off
     "fredy_base_url": "",  # portals.fredy_url: own "In Fredy öffnen" links; empty = the fredyUrl Fredy sent
     "use_examples": "1",  # learning.py: the newest finished editor texts go into the system prompt as examples
     "use_rules": "1",  # learning.py: active learned rules go into the system prompt; rules are proposed on "Fertig"

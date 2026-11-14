@@ -136,6 +136,9 @@ templates.env.filters["md"] = textfmt.basic_markdown  # Claude's notes only (hin
 templates.env.filters["maps_url"] = portals.maps_url  # {{ listing.address|maps_url }}: "In Google Maps öffnen"
 templates.env.filters["maps_embed_url"] = portals.maps_embed_url  # the iframe behind "🗺 Karte" (listing page)
 templates.env.globals["STATUSES"] = settings.STATUSES
+templates.env.globals["DISCARD_REASONS"] = settings.DISCARD_REASONS
+templates.env.globals["MANUAL_DISCARD"] = settings.MANUAL_DISCARD
+templates.env.globals["STALE_DAYS"] = settings.STALE_DAYS
 # Content hash in the /static URLs: browsers may cache the files for a day, a deploy still takes effect at once.
 templates.env.globals["STATIC_VERSION"] = hashlib.sha256(
     b"".join((STATIC_DIR / name).read_bytes() for name in ("app.css", "app.js"))).hexdigest()[:12]
@@ -560,6 +563,7 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
         "fredy_url": portals.fredy_url(listing, db.get_settings()["fredy_base_url"]),
         "drafts": [_draft_view(d) for d in db.list_drafts(listing["id"])],
         "final_session": db.latest_session(listing["id"], "done"),  # the editor's "Endversion"
+        "auto_dismiss_hours": housekeeping.auto_dismiss_hours(),  # explains an automatic "uninteressant"
         "error": error,
     }
 
@@ -574,12 +578,15 @@ def _listing_cards(rows: list[dict]) -> list[dict]:
     } for row in rows]
 
 
-def card_counts() -> dict[str, int]:
-    """The numbers on the main page that a ❌/↩️ changes (filter chips, "x neu · y gesendet · z ungesehen"), keyed
-    by the data-count names in listings.html."""
-    stats = db.stats()
-    return {"all": stats["listings_total"], **{key: stats["by_status"].get(key, 0) for key in settings.STATUSES},
-            "auto": stats["auto_dismissed"], "unseen": stats["unseen"]}
+def card_counts(stats: dict | None = None) -> dict[str, int]:
+    """The numbers on the main page that a ❌/↩️ changes (filter chips, "x neu · y gesehen · z gesendet"), keyed
+    by the data-count names in listings.html: "all" (not aussortiert), the statuses (not aussortiert), "discarded"
+    (aussortiert), the reasons and "auto" (uninteressant by the job)."""
+    stats = stats or db.stats()
+    return {"all": stats["active_total"], **{key: stats["by_status"].get(key, 0) for key in settings.STATUSES},
+            "discarded": stats["discarded_total"],
+            **{key: stats["by_discard"].get(key, 0) for key in settings.DISCARD_REASONS},
+            "auto": stats["auto_dismissed"]}
 
 
 def _card_html(listing_id: int, back: str) -> str:
@@ -593,13 +600,16 @@ def _wants_json(request: Request) -> bool:
 
 
 def _render_listings(request: Request, listings: list[dict], *, status: str | None = None, add_failed=None,
-                     search_info: dict | None = None, auto: bool = False):
+                     search_info: dict | None = None, discarded: str | None = None, auto: bool = False):
+    stats = db.stats()
     return render(request, "listings.html", {
         "active": "listings",
         "listings": listings,
-        "stats": db.stats(),
+        "stats": stats,
+        "counts": card_counts(stats),
         "costs": cost_overview(),
         "status_filter": status,
+        "discard_filter": discarded,  # "all" or a reason: the "Aussortiert" row
         "auto_filter": auto,
         "auto_dismiss_hours": housekeeping.auto_dismiss_hours(),
         "add_failed": add_failed,
@@ -609,21 +619,30 @@ def _render_listings(request: Request, listings: list[dict], *, status: str | No
 
 @router.get("/", dependencies=PAGE)
 def listings_page(request: Request, status: str | None = None, add: str | None = None, q: str | None = None,
-                  auto: str | None = None):
+                  auto: str | None = None, discarded: str | None = None):
+    """The main page. Without a filter: every listing that isn't aussortiert ("Alle"); status=…: one status of those;
+    discarded=all|<reason> (&auto=1: "davon automatisch"): the aussortiert ones. A search (q) looks at all of them."""
+    if status == "dismissed":  # links and bookmarks from before "aussortiert"
+        status, discarded = None, settings.MANUAL_DISCARD
     if status not in settings.STATUSES:
         status = None
-    only_auto = status == "dismissed" and auto == "1"  # "davon automatisch"
+    if discarded != "all" and discarded not in settings.DISCARD_REASONS:
+        discarded = None
+    if discarded:
+        status = None
+    only_auto = discarded == settings.MANUAL_DISCARD and auto == "1"
     try:  # "Inserat per Link" failed: its message and the URL typed, once (see _add_failed)
         add_failed = json.loads(_take_once(add) or "null") if add else None
     except ValueError:
         add_failed = None
     query = " ".join((q or "").split())[:search.QUERY_MAX]
-    if query:  # word search: free, every meaningful word must appear (search.keyword_search)
+    if query:  # word search: free, every meaningful word must appear (search.keyword_search); aussortiert ones too
         rows = search.keyword_search(query, db.list_listings(status, limit=2000))
         return _render_listings(request, _listing_cards(rows), status=status, add_failed=add_failed,
                                 search_info={"query": query, "no_terms": not search.query_terms(query)})
-    return _render_listings(request, _listing_cards(db.list_listings(status, auto=only_auto)), status=status,
-                            add_failed=add_failed, auto=only_auto)
+    discard = ("any" if discarded == "all" else discarded) if discarded else "none"
+    return _render_listings(request, _listing_cards(db.list_listings(status, auto=only_auto, discard=discard)),
+                            status=status, add_failed=add_failed, discarded=discarded, auto=only_auto)
 
 
 ADDED_MESSAGES = {  # /listing/{id}?neu=… after "Inserat per Link"
@@ -631,13 +650,19 @@ ADDED_MESSAGES = {  # /listing/{id}?neu=… after "Inserat per Link"
     "ohne": "Inserat hinzugefügt. Der Telegram-Bot läuft nicht oder kein Chat ist verbunden – keine Nachricht.",
     "schon": "Dieses Inserat ist schon da – nichts neu angelegt.",
 }
+STATE_MESSAGES = {  # /listing/{id}?m=… after the buttons beside the status
+    "sent": "Als gesendet markiert.",
+    "unsent": "„Gesendet“ zurückgenommen.",
+    "dismissed": "Aussortiert: uninteressant. Mit „Zurückholen“ kommt es wieder in die Liste.",
+    "restored": "Zurückgeholt – das Inserat ist wieder in der Liste.",
+}
 
 
 @router.get("/listing/{listing_id}", dependencies=PAGE)
-def listing_page(request: Request, listing_id: int, neu: str | None = None):
-    db.mark_seen(listing_id)  # the card on the main page stops glowing
+def listing_page(request: Request, listing_id: int, neu: str | None = None, m: str | None = None):
+    db.mark_seen(listing_id)  # "Neu" -> "Gesehen": the card on the main page stops glowing
     context = _listing_context(_listing_or_404(listing_id))
-    context["added"] = ADDED_MESSAGES.get(neu or "")
+    context["added"] = ADDED_MESSAGES.get(neu or "") or STATE_MESSAGES.get(m or "")
     return render(request, "listing.html", context)
 
 
@@ -696,34 +721,55 @@ async def listing_load_media(listing_id: int):
     return RedirectResponse(f"/listing/{listing_id}#bilder", status_code=303)
 
 
-@router.post("/listing/{listing_id}/status", dependencies=ACTION)
-async def listing_set_status(listing_id: int, status: str = Form("")):
-    _listing_or_404(listing_id)
-    if status not in settings.STATUSES:
-        raise HTTPException(status_code=400, detail="Ungültiger Status")
-    db.set_listing_status(listing_id, status)
-    db.mark_seen(listing_id)
-    bot.schedule_refresh(listing_id)  # the Telegram message shows the new state too
-    return RedirectResponse(f"/listing/{listing_id}", status_code=303)
+# What the person can do about a listing's state (the rest just happens, see db.py "status & aussortiert"):
+# ✅ Gesendet / zurücknehmen, ❌ Uninteressant / ↩️ Zurückholen. Each answers with a redirect to `next` (the list
+# with the card, or the listing page) or, for app.js, JSON with the new card and the page's numbers.
 
-
-@router.post("/listing/{listing_id}/toggle-dismissed", dependencies=ACTION)
-async def listing_toggle_dismissed(request: Request, listing_id: int, next: str = Form("")):
-    """The ❌ / ↩️ on a card of the main page: "uninteressant", or back again (to "Entwurf" when it has drafts, else
-    "neu"). A sent listing stays as it is. Without JS: back to the same list (`next`), at the card. app.js asks for
-    JSON instead and gets the new card (it stays in a filtered list, so ↩️ undoes) and the page's new numbers."""
-    listing = _listing_or_404(listing_id)
-    if listing["status"] == "dismissed":
-        db.set_listing_status(listing_id, "drafted" if db.latest_draft(listing_id) else "new")
-    elif listing["status"] != "sent":
-        db.set_listing_status(listing_id, "dismissed")
-    db.mark_seen(listing_id)
-    bot.schedule_refresh(listing_id)
+def _state_answer(request: Request, listing_id: int, next: str, message: str, changed: bool):
+    if changed:
+        bot.schedule_refresh(listing_id)  # the Telegram message shows the new state too
     back = (safe_next(next) or "/").split("#")[0]
     if _wants_json(request):
-        return JSONResponse({"ok": True, "status": db.get_listing(listing_id)["status"],
-                             "card": _card_html(listing_id, back), "counts": card_counts()})
-    return RedirectResponse(f"{back}#l{listing_id}", status_code=303)
+        listing = db.get_listing(listing_id)
+        return JSONResponse({"ok": True, "changed": changed, "status": listing["status"],
+                             "discard_reason": listing["discard_reason"], "card": _card_html(listing_id, back),
+                             "counts": card_counts()})
+    if back.startswith(f"/listing/{listing_id}"):
+        return RedirectResponse(f"/listing/{listing_id}?m={message}#status", status_code=303)
+    return RedirectResponse(f"{back}#l{listing_id}", status_code=303)  # a list: back at the card
+
+
+@router.post("/listing/{listing_id}/sent", dependencies=ACTION)
+async def listing_mark_sent(request: Request, listing_id: int, next: str = Form("")):
+    """"✅ Als gesendet markieren". Not while aussortiert (the page doesn't offer it then)."""
+    _listing_or_404(listing_id)
+    return _state_answer(request, listing_id, next, "sent", db.mark_sent(listing_id))
+
+
+@router.post("/listing/{listing_id}/unsent", dependencies=ACTION)
+async def listing_unmark_sent(request: Request, listing_id: int, next: str = Form("")):
+    """"Gesendet zurücknehmen": back to "Entwurf" (with a draft) or "Gesehen"."""
+    _listing_or_404(listing_id)
+    return _state_answer(request, listing_id, next, "unsent", db.unmark_sent(listing_id))
+
+
+@router.post("/listing/{listing_id}/dismiss", dependencies=ACTION)
+async def listing_dismiss(request: Request, listing_id: int, next: str = Form("")):
+    """"❌ Uninteressant" (card, listing page, its "Interessant?" overlay): aussortiert by hand, the status stays
+    underneath. app.js swaps the card in place (it stays in a filtered list, so ↩️ undoes)."""
+    _listing_or_404(listing_id)
+    changed = db.discard(listing_id)
+    db.mark_seen(listing_id)
+    return _state_answer(request, listing_id, next, "dismissed", changed)
+
+
+@router.post("/listing/{listing_id}/restore", dependencies=ACTION)
+async def listing_restore(request: Request, listing_id: int, next: str = Form("")):
+    """"↩️ Zurückholen": only "uninteressant"; never automatically uninteressant again (db.restore)."""
+    _listing_or_404(listing_id)
+    changed = db.restore(listing_id)
+    db.mark_seen(listing_id)
+    return _state_answer(request, listing_id, next, "restored", changed)
 
 
 @router.post("/listing/{listing_id}/draft", dependencies=ACTION)

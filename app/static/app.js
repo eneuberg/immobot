@@ -118,8 +118,8 @@
   });
   // ---- Einstellungen (end) ----------------------------------------------------------------------------------
 
-  // ---- Hauptseite: ❌/↩️ without reload, "gesehen" (begin) ------------------------------------------------
-  // ❌/↩️ on a card (form.lc-toggle) is sent with fetch: the server answers with the new card (listing_card.html)
+  // ---- Hauptseite: ❌/↩️ without reload, "Gesehen" (begin) ------------------------------------------------
+  // ❌/↩️ on a card (form.lc-toggle: /dismiss or /restore) is sent with fetch: the server answers with the new card
   // and the page's numbers, the card is swapped in place and stays even in a filtered list (↩️ is the undo).
   // Registered after the form handler above, which already set the spinner and form.dataset.sent; a second press
   // meanwhile is blocked there (defaultPrevented). The fresh card brings a fresh form, so the button works again.
@@ -155,31 +155,28 @@
     setCounts(data.counts || {});
   }
 
-  // Elements with data-count="all|new|drafted|sent|dismissed|auto|unseen" (filter chips, "Inserate" stat).
+  // Elements with data-count="all|new|seen|drafted|sent|discarded|<reason>|auto" (filter chips, "Inserate" stat).
   function setCounts(counts) {
     document.querySelectorAll("[data-count]").forEach(function (el) {
       if (counts[el.dataset.count] !== undefined) el.textContent = counts[el.dataset.count];
     });
-    var unseen = document.querySelector("[data-unseen-part]");
-    if (unseen && counts.unseen !== undefined) unseen.hidden = !counts.unseen;
+  }
+  function countOf(key) {
+    var el = document.querySelector('[data-count="' + key + '"]');
+    return el ? parseInt(el.textContent, 10) || 0 : 0;
   }
 
-  // Opening a glowing card: the listing page marks it seen on the server; show that here right away, so going
-  // back (back/forward cache) doesn't show the glow again. Middle click / new tab too.
+  // Opening a glowing card ("Neu"): the listing page moves it to "Gesehen" on the server; show that here right away
+  // (pill and numbers), so going back (back/forward cache) doesn't show the glow again. Middle click / new tab too.
   function markSeen(e) {
     var card = e.target.closest ? e.target.closest("a.listing-card.is-unseen") : null;
     if (!card || (e.type === "auxclick" && e.button !== 1)) return;
     card.classList.remove("is-unseen");
     var hint = card.querySelector(".lc-unseen");
-    if (hint) {
-      var seen = document.createElement("span");
-      seen.className = "lc-seen";
-      seen.title = "Schon angesehen";
-      seen.textContent = "👁 gesehen";
-      hint.replaceWith(seen);
-    }
-    var count = document.querySelector('[data-count="unseen"]');
-    if (count) setCounts({ unseen: Math.max(0, (parseInt(count.textContent, 10) || 0) - 1) });
+    if (hint) hint.remove();
+    var badge = card.querySelector(".badge.st-new");
+    if (badge) { badge.classList.replace("st-new", "st-seen"); badge.textContent = "Gesehen"; }
+    setCounts({ "new": Math.max(0, countOf("new") - 1), seen: countOf("seen") + 1 });
   }
   document.addEventListener("click", markSeen);
   document.addEventListener("auxclick", markSeen);

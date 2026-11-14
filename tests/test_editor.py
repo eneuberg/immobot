@@ -204,7 +204,7 @@ def test_editor_access_matrix(client, lid):
     assert r.status_code == 303 and r.headers["location"] == f"/login?next=/editor/{other}"
     for path in ["/", f"/listing/{lid}", "/settings", "/status", f"/listing/{lid}/media/1"]:
         assert client.get(path).headers["location"] == "/login"
-    assert client.post(f"/listing/{lid}/status", data={"status": "sent"}).headers["location"] == "/login"
+    assert client.post(f"/listing/{lid}/sent").headers["location"] == "/login"
 
     with db.connect() as conn:  # the day is over
         conn.execute("UPDATE editor_access_sessions SET expires_at = ?", (db.now_iso().replace("20", "19", 1),))
@@ -566,10 +566,16 @@ def test_mark_sent(client, lid):
     assert db.get_listing(lid)["status"] == "sent" and client.refreshed == [lid, lid]  # Telegram: Endversion, then "gesendet"
     page = client.get(f"/editor/{lid}").text
     assert "als gesendet markiert" in page and "Hast du die Nachricht abgeschickt?" not in page
+    # pressed by mistake: "zurücknehmen" -> back to "Entwurf"
+    assert f'action="/editor/{lid}/unsent"' in page
+    r = post(client, lid, "unsent", {"token": fields["token"]})
+    assert r.headers["location"] == f"/editor/{lid}?m=unsent#ende" and db.get_listing(lid)["status"] == "drafted"
+    assert "Hast du die Nachricht abgeschickt?" in client.get(f"/editor/{lid}").text
 
 
 def test_mark_dismissed_after_finish(client, lid):
-    """Not sent after all: "Doch uninteressant" in the card and the overlay sets the listing to "dismissed"."""
+    """Not sent after all: "Doch uninteressant" in the card and the overlay sorts the listing out (by hand); the
+    banner then offers "↩️ Zurückholen"."""
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     editor_cookie(client, lid)
     _, fields = open_editor(client, lid)
@@ -579,9 +585,34 @@ def test_mark_dismissed_after_finish(client, lid):
     r = post(client, lid, "dismiss", {"token": fields["token"]})
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=dismissed#ende"
     listing = db.get_listing(lid)
-    assert listing["status"] == "dismissed" and listing["auto_status"] is None and client.refreshed[-1] == lid
+    assert listing["discard_reason"] == "uninteressant" and listing["discard_auto"] == 0
+    assert client.refreshed[-1] == lid
     page = client.get(f"/editor/{lid}").text
-    assert "als uninteressant markiert" in page and "Hast du die Nachricht abgeschickt?" not in page
+    assert "Hast du die Nachricht abgeschickt?" not in page and "Von dir als uninteressant aussortiert" in page
+    assert '<span class="dc-kind">Aussortiert</span><span class="dc-reason">Uninteressant</span>' in page
+    assert f'action="/editor/{lid}/restore"' in page
+    assert post(client, lid, "sent", {"token": fields["token"]}).headers["location"] == f"/editor/{lid}?m=locked"
+    assert db.get_listing(lid)["status"] != "sent"  # locked while aussortiert
+    r = post(client, lid, "restore", {"token": fields["token"]})
+    assert r.headers["location"] == f"/editor/{lid}?m=restored" and db.get_listing(lid)["discard_reason"] is None
+    assert "Hast du die Nachricht abgeschickt?" in client.get(f"/editor/{lid}").text
+
+
+def test_editor_banner_for_offline_listings(client, lid):
+    """Offline (or veraltet): a notice at the top, no Zurückholen, no "abgeschickt?" - the editor stays usable."""
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    listing = db.get_listing(lid)
+    db.mark_offline([listing["fredy_id"]])
+    editor_cookie(client, lid)
+    r, fields = open_editor(client, lid)
+    page = r.text
+    assert "Inserat ist nicht mehr online – von Fredy gemeldet am" in page and "Du kannst hier trotzdem weiterschreiben" in page
+    assert f'action="/editor/{lid}/restore"' not in page and "data-asks-after-open" not in page
+    post(client, lid, "finish", fields, text="Ende")
+    page = client.get(f"/editor/{lid}").text
+    assert "Ende" in page and "Hast du die Nachricht abgeschickt?" not in page
+    post(client, lid, "restore", {"token": fields["token"]})
+    assert db.get_listing(lid)["discard_reason"] == "offline"  # final
 
 
 def test_editor_counts_as_seen(client, lid):
@@ -597,7 +628,7 @@ def test_editor_counts_as_seen(client, lid):
     assert post(client, lid, "dismiss", {"token": "0" * 32}).status_code == 403  # stale token: nothing happens
     assert db.get_listing(lid)["seen_at"] is None
     post(client, lid, "dismiss", {"token": fields["token"]})
-    assert db.get_listing(lid)["status"] == "dismissed" and db.get_listing(lid)["seen_at"]
+    assert db.get_listing(lid)["discard_reason"] == "uninteressant" and db.get_listing(lid)["seen_at"]
 
 
 def test_asks_after_opening_the_listing_while_writing(client, lid):
@@ -608,7 +639,7 @@ def test_asks_after_opening_the_listing_while_writing(client, lid):
     page = r.text
     assert "data-asks-after-open" in page and f'data-after-open="editor-{lid}"' in page and "Weiter anschreiben?" in page
     r = post(client, lid, "dismiss", {"token": fields["token"]})
-    assert r.status_code == 303 and db.get_listing(lid)["status"] == "dismissed"
+    assert r.status_code == 303 and db.get_listing(lid)["discard_reason"] == "uninteressant"
     assert "data-after-open" not in client.get(f"/editor/{lid}").text  # nothing left to decide
 
 

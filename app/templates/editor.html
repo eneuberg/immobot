@@ -1,5 +1,5 @@
 {% extends "editor_base.html" %}
-{% from "macros.html" import flashes, status_badge, text_diff %}
+{% from "macros.html" import flashes, state_badge, discard_note, icon, text_diff %}
 {% from "rule_macros.html" import manual_rule_form %}
 {% from "listing_macros.html" import media_label, details_article %}
 {% block title %}Editor · {{ listing.title or "Inserat" }}{% endblock %}
@@ -33,14 +33,14 @@
 {% block content %}
 <div class="ed">
   <header class="ed-head">
-    <div class="ed-top">{{ status_badge(listing.status) }}<span class="chip">{{ portal }}</span></div>
+    <div class="ed-top">{{ state_badge(listing) }}<span class="chip">{{ portal }}</span></div>
     <h1>{{ listing.title or "(ohne Titel)" }}</h1>
     {% set map_link = listing.address|maps_url %}
     {% if facts %}<p class="ed-facts">{{ facts|join(" · ") }}
       {%- if map_link %} · <a href="{{ map_link }}" target="_blank" rel="noopener noreferrer">In Google Maps öffnen ↗</a>{% endif %}</p>{% endif %}
     {% if contact_url or logged_in %}
     <div class="ed-links">
-      {% set ask_open = contact_url and (not session or session.status != "done") and listing.status not in ("sent", "dismissed") %}
+      {% set ask_open = contact_url and (not session or session.status != "done") and listing.status != "sent" and not listing.discard_reason %}
       {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline"{% if ask_open %} data-asks-after-open{% endif %}>📨 Inserat öffnen ↗</a>{% endif %}
       {% if logged_in %}<a href="/listing/{{ listing.id }}" role="button" class="secondary outline">🔗 Dashboard</a>{% endif %}
     </div>
@@ -53,7 +53,7 @@
           <h2 id="after-open-title">Weiter anschreiben?</h2>
         </header>
         <p class="ed-ask-listing">{{ listing.title or "Dieses Inserat" }}</p>
-        <p class="help">„Uninteressant“ legt das Inserat ab, auch in Telegram. Dein Text bleibt gespeichert.</p>
+        <p class="help">„Uninteressant“ sortiert das Inserat aus, auch in Telegram. Dein Text bleibt gespeichert.</p>
         <footer class="ed-actions">
           <button type="button" data-dialog-close autofocus>✍️ Ja, interessant</button>
           <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit" class="secondary outline">❌ Uninteressant</button></form>
@@ -61,6 +61,17 @@
       </article>
     </dialog>
     {% endif %}
+    {% endif %}
+    {% if listing.discard_reason %}
+    {# Aussortiert: said once at the top; the editor keeps working (a text can still be finished and copied). #}
+    <div class="ed-discarded status-lock dc-{{ listing.discard_reason }}" role="note">
+      <p>{{ icon("archive") }}<span><strong>Aussortiert · {{ DISCARD_REASONS.get(listing.discard_reason, listing.discard_reason) }}.</strong>
+        {{ discard_note(listing) }}
+        {%- if listing.discard_reason != MANUAL_DISCARD %} Du kannst hier trotzdem weiterschreiben.{% endif %}</span></p>
+      {% if listing.discard_reason == MANUAL_DISCARD %}
+      <form method="post" action="/editor/{{ listing.id }}/restore">{{ hidden() }}<button type="submit" class="secondary btn-sm">↩️ Zurückholen</button></form>
+      {% endif %}
+    </div>
     {% endif %}
   </header>
 
@@ -232,17 +243,20 @@
         <div class="ed-actions">
           <button type="button" class="copy-btn" data-copy="ed-final">Kopieren</button>
           {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary" data-opens-listing="{{ listing.id }}">📨 Inserat öffnen ↗</a>{% endif %}
-          {% if listing.status == "sent" %}<span class="badge ok ed-sent">✓ als gesendet markiert</span>
-          {% elif listing.status == "dismissed" %}<span class="badge ed-sent">✕ als uninteressant markiert</span>{% endif %}
+          {% if listing.discard_reason %}<span class="discard-chip ed-sent">{{ icon("archive") }}<span>aussortiert</span></span>
+          {% elif listing.status == "sent" %}<span class="badge ok ed-sent">✓ als gesendet markiert</span>{% endif %}
           <form method="post" action="/editor/{{ listing.id }}/reopen">{{ hidden() }}<button type="submit" class="secondary outline">Weiter bearbeiten</button></form>
         </div>
+        {% if listing.status == "sent" and not listing.discard_reason %}
+        <form method="post" action="/editor/{{ listing.id }}/unsent" class="ed-unsent">{{ hidden() }}<button type="submit" class="linkish">Versehentlich? „Gesendet“ zurücknehmen</button></form>
+        {% endif %}
       </article>
-      {% if listing.status not in ("sent", "dismissed") %}
+      {% if listing.status != "sent" and not listing.discard_reason %}
       {# The same question twice: as a card here, and as an overlay that editor.js opens every time the person comes
          back to this page (other tab, other app); it closes with ✕, "Noch nicht", Esc or a click beside it. #}
       <article class="ed-card ed-ask-sent" id="abgeschickt">
         <h2>Hast du die Nachricht abgeschickt?</h2>
-        <p class="help">Kopieren, im Inserat einfügen und absenden – dann hier bestätigen. Das Inserat steht danach auf „gesendet“, auch in Telegram.</p>
+        <p class="help">Kopieren, im Inserat einfügen und absenden – dann hier bestätigen. Das Inserat steht danach auf „Gesendet“, auch in Telegram.</p>
         <div class="ed-actions">
           <form method="post" action="/editor/{{ listing.id }}/sent">{{ hidden() }}<button type="submit">✅ Ja, abgeschickt</button></form>
           <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit" class="secondary outline">❌ Doch uninteressant</button></form>
@@ -255,7 +269,7 @@
             <h2 id="ask-sent-title">Hast du die Nachricht abgeschickt?</h2>
           </header>
           <p class="ed-ask-listing">{{ listing.title or "Dieses Inserat" }}</p>
-          <p class="help">„Ja“ setzt das Inserat auf „gesendet“, „Doch uninteressant“ auf „uninteressant“ – beides auch in
+          <p class="help">„Ja“ setzt das Inserat auf „Gesendet“, „Doch uninteressant“ sortiert es aus – beides auch in
             Telegram. Willst du noch etwas ändern, schließ das Fenster einfach.</p>
           <footer class="ed-actions">
             <form method="post" action="/editor/{{ listing.id }}/sent">{{ hidden() }}<button type="submit" autofocus>✅ Ja, abgeschickt</button></form>

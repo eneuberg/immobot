@@ -533,6 +533,15 @@ def test_status_other_than_new_is_kept(fresh_db, listing_id, fake_generate):
     assert fresh_db.get_listing(listing_id)["status"] == "sent"
 
 
+def test_draft_moves_seen_forward_also_while_aussortiert(fresh_db, listing_id, fake_generate):
+    """"Gesehen" -> "Entwurf" by itself; aussortiert stays (the status underneath moves, "war: Entwurf")."""
+    fresh_db.mark_seen(listing_id)
+    fresh_db.discard(listing_id, "offline", auto=True)
+    asyncio.run(llm.create_and_store_draft(listing_id, "initial"))
+    listing = fresh_db.get_listing(listing_id)
+    assert listing["status"] == "drafted" and listing["discard_reason"] == "offline"
+
+
 def test_variants_get_latest_non_test_draft(fresh_db, listing_id, fake_generate):
     asyncio.run(llm.create_and_store_draft(listing_id, "initial"))   # Entwurf 1
     asyncio.run(llm.create_and_store_draft(listing_id, "test"))      # Entwurf 2, ignored for variants

@@ -63,7 +63,10 @@ MESSAGES = {
     "revision_kept": "Überarbeitung übernommen.",
     "revision_undone": "Zurück zu deinem Text von vor der Überarbeitung.",
     "sent": "Als gesendet markiert.",
-    "dismissed": "Als uninteressant markiert.",
+    "unsent": "„Gesendet“ zurückgenommen.",
+    "dismissed": "Aussortiert: uninteressant.",
+    "restored": "Zurückgeholt – das Inserat ist wieder in der Liste.",
+    "locked": "Das Inserat ist aussortiert – am Status hat sich nichts geändert.",
     "draft": "Entwurf erzeugt.",
     "media": "Inserat neu geladen.",
     "media_loaded": "Bilder geladen.",
@@ -648,21 +651,44 @@ async def editor_mark_sent(request: Request, listing_id: str, token: str = Form(
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
         return denied
-    db.set_listing_status(listing["id"], "sent")
+    if not db.mark_sent(listing["id"]):  # aussortiert meanwhile (a stale page)
+        return _back(listing["id"], "locked")
     bot.schedule_refresh(listing["id"])
     return _back(listing["id"], "sent", "ende")
 
 
-@router.post("/editor/{listing_id}/dismiss", dependencies=ACTION)
-async def editor_mark_dismissed(request: Request, listing_id: str, token: str = Form("")):
-    """"Uninteressant" after "Fertig" (not sent after all): status "dismissed", the Telegram message collapses like
-    after "❌ Uninteressant"; the person's own choice, so the automatic sorting-out leaves it alone."""
+@router.post("/editor/{listing_id}/unsent", dependencies=ACTION)
+async def editor_unmark_sent(request: Request, listing_id: str, token: str = Form("")):
+    """"zurücknehmen" beside "✓ als gesendet markiert": pressed by mistake, back to "Entwurf"."""
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
         return denied
-    db.set_listing_status(listing["id"], "dismissed")
+    if db.unmark_sent(listing["id"]):
+        bot.schedule_refresh(listing["id"])
+    return _back(listing["id"], "unsent", "ende")
+
+
+@router.post("/editor/{listing_id}/dismiss", dependencies=ACTION)
+async def editor_mark_dismissed(request: Request, listing_id: str, token: str = Form("")):
+    """"Uninteressant" (not sent after all, or before writing): aussortiert by hand, the Telegram message collapses
+    like after "❌ Uninteressant". The status stays underneath; the editor keeps working."""
+    listing, mode, denied = _gate(request, listing_id, token)
+    if denied is not None:
+        return denied
+    db.discard(listing["id"])
     bot.schedule_refresh(listing["id"])
     return _back(listing["id"], "dismissed", "ende")
+
+
+@router.post("/editor/{listing_id}/restore", dependencies=ACTION)
+async def editor_restore(request: Request, listing_id: str, token: str = Form("")):
+    """"↩️ Zurückholen" in the banner of an "uninteressant" listing (offline / veraltet can't be undone)."""
+    listing, mode, denied = _gate(request, listing_id, token)
+    if denied is not None:
+        return denied
+    if db.restore(listing["id"]):
+        bot.schedule_refresh(listing["id"])
+    return _back(listing["id"], "restored")
 
 
 @router.post("/editor/{listing_id}/draft", dependencies=ACTION)

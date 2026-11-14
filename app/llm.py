@@ -728,10 +728,8 @@ async def create_and_store_draft(listing_id: int, kind: str, instruction: str | 
     elif record_feedback and kind == "custom":
         db.add_feedback(listing_id, source, "critique", instruction)
 
-    # Re-read the status: it may have changed (e.g. "sent") while Claude was writing.
+    # Forward only: "Neu"/"Gesehen" -> "Entwurf"; a status that moved on meanwhile (e.g. "sent") stays.
     if kind != "test":
-        current = db.get_listing(listing_id)
-        if current and current["status"] == "new":
-            db.set_listing_status(listing_id, "drafted")
+        db.advance_status(listing_id, "drafted")
 
     return db.get_draft(draft_id)

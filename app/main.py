@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
     # older ImmoScout24 listings without exposé text (warm rent): fetched slowly, their messages updated
     media.schedule_backfill(on_done=None if config.disable_bot else bot.schedule_refresh)
     media.schedule_pending_pictures()
-    dismissing = asyncio.create_task(housekeeping.loop())  # "neu" for too long -> uninteressant
+    dismissing = asyncio.create_task(housekeeping.loop())  # automatically aussortiert: uninteressant / veraltet
     yield
     dismissing.cancel()
     if not config.disable_bot:

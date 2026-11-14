@@ -13,9 +13,38 @@
 {% if error %}<div class="flash err" role="alert">{{ error }}</div>{% endif %}
 {%- endmacro %}
 
-{# Colored status badge of a listing (neu / Entwurf / gesendet / uninteressant). #}
+{# Filled, coloured status pill of a listing (Neu / Gesehen / Entwurf / Gesendet). #}
 {% macro status_badge(status) -%}
 <span class="badge dot st-{{ status }}">{{ STATUSES.get(status, status) }}</span>
+{%- endmacro %}
+
+{# "Aussortiert" is no status: an outlined, neutral chip with the archive icon instead of the pill, in the same
+   spot. short=True (cards): just the reason, "Aussortiert" for screen readers only. #}
+{% macro discard_chip(l, short=False) -%}
+<span class="discard-chip dc-{{ l.discard_reason }}">{{ icon("archive") }}
+  {%- if short %}<span class="sr-only">Aussortiert: </span>{% else %}<span class="dc-kind">Aussortiert</span>{% endif -%}
+  <span class="dc-reason">{{ DISCARD_REASONS.get(l.discard_reason, l.discard_reason) }}</span></span>
+{%- endmacro %}
+
+{# Where a listing stands, for the top line of card, listing page and editor: the status pill, or the
+   aussortiert chip (+ "⏱ automatisch" for an "uninteressant" set by the job). #}
+{% macro state_badge(l, short=False) -%}
+{% if l.discard_reason %}{{ discard_chip(l, short) }}
+  {%- if l.discard_reason == MANUAL_DISCARD and l.discard_auto %}<span class="lc-auto" title="automatisch: angesehen und kein Entwurf">⏱ automatisch</span>{% endif %}
+{%- else %}{{ status_badge(l.status) }}{% endif %}
+{%- endmacro %}
+
+{# Why an aussortiert listing is locked, one sentence (listing page, editor banner). #}
+{% macro discard_note(l, auto_hours=None) -%}
+{% if l.discard_reason == "offline" -%}
+Inserat ist nicht mehr online – von Fredy gemeldet am {{ l.discarded_at|local_time }}.
+{%- elif l.discard_reason == "veraltet" -%}
+Älter als {{ STALE_DAYS }} Tage (eingegangen am {{ l.received_at|local_time }}) – am {{ l.discarded_at|local_time }} automatisch aussortiert.
+{%- elif l.discard_auto -%}
+Automatisch aussortiert am {{ l.discarded_at|local_time }}: {% if auto_hours %}{{ auto_hours }} h {% endif %}nach dem Ansehen kein Entwurf.
+{%- else -%}
+Von dir als uninteressant aussortiert am {{ l.discarded_at|local_time }}.
+{%- endif %}
 {%- endmacro %}
 
 {# Where a credential comes from, as a short badge. Never the value. An unset optional one isn't "missing". #}
@@ -39,6 +68,7 @@
 {% if name == "pin" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
 {%- elif name == "home" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 10.5 12 4l8.5 6.5"/><path d="M5.5 9v10.5h13V9"/><path d="M10 19.5v-5h4v5"/></svg>
 {%- elif name == "inbox" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5l1.5 2.5h5L16 13h5"/><path d="M5.5 5h13L21 13v6H3v-6z"/></svg>
+{%- elif name == "archive" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4.5" rx="1"/><path d="M5 8.5V19a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8.5"/><path d="M10 12.5h4"/></svg>
 {%- elif name == "pen" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg>
 {%- endif %}
 {%- endmacro %}
