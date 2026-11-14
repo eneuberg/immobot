@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import bot, db, editor, housekeeping, media, vault, web
+from . import bot, db, editor, fredy_alive, housekeeping, media, vault, web
 from .config import load_config
 from .web import router, security_headers
 
@@ -33,7 +33,10 @@ async def lifespan(app: FastAPI):
     media.schedule_backfill(on_done=None if config.disable_bot else bot.schedule_refresh)
     media.schedule_pending_pictures()
     dismissing = asyncio.create_task(housekeeping.loop())  # automatically aussortiert: uninteressant / veraltet
+    # Fredy's liveness check (its MCP list_listings): ads gone from the portal are aussortiert "offline"
+    alive = asyncio.create_task(fredy_alive.loop(housekeeping.apply_fredy_states, db.fredy_listing_ids))
     yield
+    alive.cancel()
     dismissing.cancel()
     if not config.disable_bot:
         await bot.stop()

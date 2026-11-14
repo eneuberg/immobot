@@ -447,6 +447,14 @@ def unannounced_listing_ids(hours: int = 24) -> list[int]:
 # unmark_sent) and "❌ Uninteressant" (discard, undone with restore). Aussortiert locks the status as it is until it
 # is undone (restore, mark_online). Every function here changes only the rows it is meant for and says which.
 
+def fredy_listing_ids() -> list[str]:
+    """fredy_ids of the listings Fredy reported (not added by hand) that may still change between online and offline:
+    everything except "veraltet" (final)."""
+    with connect() as conn:
+        return [r[0] for r in conn.execute(
+            "SELECT fredy_id FROM listings WHERE job_id IS NOT NULL AND COALESCE(discard_reason, '') != 'veraltet'")]
+
+
 def set_listing_status(listing_id: int, status: str) -> bool:
     """Low level: set the status as it is (also backwards); any status but "new" counts as seen. Refused while the
     listing is aussortiert (False). The person's actions go through mark_sent / unmark_sent."""

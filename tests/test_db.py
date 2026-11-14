@@ -441,3 +441,12 @@ def test_cost_by_source(fresh_db):
     db.update_settings({"eur_usd_rate": "1.25"})  # dollar rows follow the rate, euro rows stay
     assert db.cost_by_source("2026-09")["drafts"] == pytest.approx(0.11 / 1.25)
     assert db.cost_by_source("2026-08") == dict.fromkeys(db.COST_SOURCES, 0.0)
+
+
+def test_fredy_listing_ids_skips_manual_and_veraltet(fresh_db):
+    fresh_db.insert_listing(_listing("f-a", job_id="j1"))
+    b, _ = fresh_db.insert_listing(_listing("f-b", job_id="j1"))
+    fresh_db.insert_listing(_listing("manual-1", job_id=None))
+    with fresh_db.connect() as conn:
+        conn.execute("UPDATE listings SET discard_reason = 'veraltet' WHERE id = ?", (b,))
+    assert fresh_db.fredy_listing_ids() == ["f-a"]
