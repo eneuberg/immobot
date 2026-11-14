@@ -493,6 +493,25 @@ html:not(.js) .cr-track::-webkit-scrollbar { display: block; height: 8px; }
 @media (hover: none) and (pointer: coarse) { .cr-btn { display: none; } }  /* phones: swipe */
 .cr-empty { display: grid; place-content: center; justify-items: center; gap: .25rem; color: var(--pico-muted-color); font-size: .92rem; }
 .cr-empty > span:first-child { font-size: 2rem; opacity: .55; }
+/* filmstrip above the carousel (.cr-thumbs): all pictures small in one row that scrolls sideways; the current one
+   lit up (aria-current, set by app.js). Without JS no highlight: there it would stay on the first picture. */
+.cr-thumbs {
+  position: relative; display: flex; gap: .35rem; padding: .45rem .5rem; overflow-x: auto; overflow-y: hidden;
+  scroll-behavior: smooth; overscroll-behavior-x: contain; scrollbar-width: none;
+  border-bottom: 1px solid var(--pico-card-border-color);
+}
+.cr-thumbs::-webkit-scrollbar { display: none; }
+html:not(.js) .cr-thumbs { scrollbar-width: thin; }
+html:not(.js) .cr-thumbs::-webkit-scrollbar { display: block; height: 6px; }
+.cr-thumb {
+  flex: 0 0 auto; display: block; height: 3.5rem; aspect-ratio: 4 / 3; border-radius: .4rem; overflow: hidden;
+  background: var(--surface-2); opacity: .6; outline: 2px solid transparent; outline-offset: -2px; transition: opacity .15s ease;
+}
+.cr-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cr-thumb.is-plan img { object-fit: contain; background: #fff; padding: 2px; }
+.cr-thumb:hover, .cr-thumb[aria-current="true"], html:not(.js) .cr-thumb { opacity: 1; }
+.js .cr-thumb[aria-current="true"] { outline-color: var(--accent); }
+.cr-thumb:focus-visible { opacity: 1; outline: 3px solid var(--accent-strong); outline-offset: -3px; }
 /* under the pictures: count and source, "Bilder laden" / "Erneut versuchen", the error, the help text */
 .lh-media > .cr-bar, .lh-media > .flash, .lh-media > .help { margin: .6rem 1rem 0; }
 .lh-media > :last-child:not(.carousel):not(.cr-empty) { margin-bottom: .1rem; }
@@ -503,6 +522,7 @@ html:not(.js) .cr-track::-webkit-scrollbar { display: block; height: 8px; }
 .lh-media > .help { font-size: .82rem; }
 @media (min-width: 900px) {
   .lh-grid.has-image .carousel, .lh-grid.has-image .cr-empty { flex: 1 0 auto; }
+  .cr-thumb { height: 3.75rem; }
   .lh-media > :last-child:not(.carousel):not(.cr-empty) { margin-bottom: 1rem; }
 }
 /* ---- listing detail: picture carousel (end) ---- */

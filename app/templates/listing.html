@@ -16,14 +16,27 @@
        Pictures from Fredy or ImmoScout24 (media.py): stored under DATA_DIR/media, served by
        /listing/{id}/media/{position} behind login. A strip that scrolls sideways (scroll-snap, one picture per view);
        without JS it is just that, every picture a link. app.js adds the arrows, keys and the lightbox (whole set).
+       Above it, from two pictures on, a filmstrip of small pictures to jump to one.
        Only Fredy's external title picture: that as the single slide. Neither: an empty box with the load button. #}
     <div class="lh-media"{% if gallery %} id="bilder"{% endif %}>
       {% if slides or image_url %}
       {% set n = slides|length if slides else 1 %}
-      <div class="carousel" role="region" aria-roledescription="Karussell" aria-label="Bilder zum Inserat" data-carousel>
+      {% if n > 1 %}
+      {# Filmstrip above the carousel: all pictures small in one row, a tap shows that one in the carousel (app.js);
+         without JS the links jump to the slide's anchor. #}
+      <nav class="cr-thumbs" aria-label="Bilder im Überblick" data-carousel-thumbs="carousel-{{ listing.id }}">
+        {% for m in slides %}
+        <a class="cr-thumb{% if m.is_plan %} is-plan{% endif %}" href="#slide-{{ loop.index }}" aria-label="Bild {{ loop.index }}"
+          {%- if loop.first %} aria-current="true"{% endif %}>
+          <img src="/listing/{{ listing.id }}/media/{{ m.position }}" alt="" loading="lazy" decoding="async">
+        </a>
+        {% endfor %}
+      </nav>
+      {% endif %}
+      <div class="carousel" id="carousel-{{ listing.id }}" role="region" aria-roledescription="Karussell" aria-label="Bilder zum Inserat" data-carousel>
         <div class="cr-track" data-lightbox-group>
           {% for m in slides %}
-          <a class="cr-slide{% if m.is_plan %} is-plan{% endif %}" href="/listing/{{ listing.id }}/media/{{ m.position }}"
+          <a class="cr-slide{% if m.is_plan %} is-plan{% endif %}" id="slide-{{ loop.index }}" href="/listing/{{ listing.id }}/media/{{ m.position }}"
             target="_blank" rel="noopener" data-lightbox data-caption="{{ media_label(m) }}"
             aria-label="Bild {{ loop.index }} von {{ n }}: {{ media_label(m) }}">
             <img src="/listing/{{ listing.id }}/media/{{ m.position }}" alt="{{ m.caption or 'Bild ' ~ m.position }}"

@@ -1812,13 +1812,21 @@ def test_listing_page_shows_gallery_and_details(client):
     # floor plan last. Only the first picture loads at once.
     head, rest = page.split('<div class="lh-body">', 1)
     assert 'class="gallery' not in page and "/media/" not in rest
-    slides = re.findall(r'<a class="cr-slide([^"]*)" href="/listing/\d+/media/(\d)"[^>]*>\s*<img ([^>]*)>', head)
-    assert [(cls, pos) for cls, pos, _ in slides] == [("", "2"), ("", "3"), (" is-plan", "1")]
-    assert ['loading="lazy"' in img for _, _, img in slides] == [False, True, True]
+    slides = re.findall(r'<a class="cr-slide([^"]*)" id="slide-(\d)" href="/listing/\d+/media/(\d)"[^>]*>\s*<img ([^>]*)>',
+                        head)
+    assert [(cls, n, pos) for cls, n, pos, _ in slides] == [("", "1", "2"), ("", "2", "3"), (" is-plan", "3", "1")]
+    assert ['loading="lazy"' in img for *_, img in slides] == [False, True, True]
     assert head.count("data-lightbox ") == 3 and "data-lightbox-group" in head
     assert '<span class="cr-count" aria-hidden="true">1 / 3</span>' in head and ">3 / 3</span>" in head
     assert 'aria-label="Bild 3 von 3: 1 · Grundriss"' in head
     assert head.count("data-carousel-prev hidden") == 1 and head.count("data-carousel-next hidden") == 1
+    # The filmstrip above the carousel: one small picture per slide, same order, each a link to its slide's anchor
+    # (app.js scrolls the carousel instead); the first one is the current one.
+    assert head.index('class="cr-thumbs"') < head.index('class="carousel"')
+    assert f'data-carousel-thumbs="carousel-{lid}"' in head and f'<div class="carousel" id="carousel-{lid}"' in head
+    thumbs = re.findall(r'<a class="cr-thumb([^"]*)" href="#slide-(\d)" aria-label="Bild (\d)"( aria-current="true")?>'
+                        r'\s*<img src="/listing/\d+/media/(\d)" alt="" loading="lazy" decoding="async">', head)
+    assert thumbs == [("", "1", "1", ' aria-current="true"', "2"), ("", "2", "2", "", "3"), (" is-plan", "3", "3", "", "1")]
     # Details as a card: contact person and key facts as <dl class="facts">, then the titled sections.
     assert "<dt>Ansprechperson</dt><dd>Frau Erika Mustermann</dd>" in page and "<dt>Zimmer</dt><dd>3</dd>" in page
     assert "<h3>Objektbeschreibung</h3>" in page and "Voller Text" in page
@@ -1837,6 +1845,14 @@ def test_listing_page_without_is24_has_no_gallery(client):
     assert 'class="lh-media"' not in page and "has-image" not in page  # no picture at all: no picture column
 
 
+def test_listing_page_one_stored_picture_has_no_filmstrip(client):
+    login(client)
+    lid = add_listing(provider="immoscout", url=IS24_URL)
+    store_listing_pictures(lid, ["Balkon"])
+    head = client.get(f"/listing/{lid}").text.split('<div class="lh-body">', 1)[0]
+    assert 'id="slide-1"' in head and "cr-thumb" not in head and "cr-count" not in head
+
+
 def test_listing_page_single_slide_from_fredy_image_url(client):
     login(client)
     lid = add_listing(image_url="https://img.example/title.jpg")  # immowelt, no picture source of our own
@@ -1846,6 +1862,7 @@ def test_listing_page_single_slide_from_fredy_image_url(client):
                      r'data-lightbox data-caption="Titelbild">\s*<img src="https://img.example/title.jpg" alt="Bild zum '
                      r'Inserat" referrerpolicy="no-referrer" decoding="async">', head)
     assert "cr-count" not in head and "data-carousel-prev" not in head  # one picture: no counter, no arrows
+    assert "cr-thumbs" not in head and "cr-thumb" not in head  # ... and no filmstrip
     for bad in ("javascript:alert(1)", "/relative.jpg"):  # only http(s) URLs (safe_url)
         lid = add_listing(fredy_id=f"x-{bad}", image_url=bad)
         assert 'class="lh-media"' not in client.get(f"/listing/{lid}").text

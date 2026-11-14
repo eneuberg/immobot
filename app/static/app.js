@@ -346,10 +346,14 @@
   // scrolls by itself (touch, trackpad, without JS too); this adds the arrow buttons, ←/→/Home/End on a focused
   // picture, one tab stop for the whole strip and loading the next picture ahead. A click opens the lightbox with the
   // whole set (group: data-lightbox-group); after it the carousel shows the picture seen last.
+  // The filmstrip above (<nav data-carousel-thumbs="carousel id">, links to #slide-N): a tap shows that picture
+  // instead of jumping to the anchor; the current one gets aria-current and stays in view; ←/→/Home/End there too.
   function setupCarousel(root) {
     var track = root.querySelector(".cr-track");
     var slides = Array.prototype.slice.call(track.querySelectorAll(".cr-slide"));
     var prev = root.querySelector("[data-carousel-prev]"), next = root.querySelector("[data-carousel-next]");
+    var strip = root.id ? document.querySelector('[data-carousel-thumbs="' + root.id + '"]') : null;
+    var thumbs = strip ? Array.prototype.slice.call(strip.querySelectorAll(".cr-thumb")) : [];
     var current = -1;
     if (!slides.length) return;
 
@@ -363,6 +367,16 @@
       if (ahead) ahead.loading = "eager";
       if (prev) prev.hidden = i === 0;
       if (next) next.hidden = i === slides.length - 1;
+      thumbs.forEach(function (thumb, k) {
+        thumb.tabIndex = k === i ? 0 : -1;
+        if (k === i) thumb.setAttribute("aria-current", "true"); else thumb.removeAttribute("aria-current");
+      });
+      var thumb = thumbs[i];
+      // Keep the current one in view (centered) without scrolling the page, as scrollIntoView would.
+      if (thumb && (thumb.offsetLeft < strip.scrollLeft ||
+                    thumb.offsetLeft + thumb.offsetWidth > strip.scrollLeft + strip.clientWidth)) {
+        strip.scrollTo({ left: thumb.offsetLeft - (strip.clientWidth - thumb.offsetWidth) / 2 });
+      }
     }
     function go(i, opts) {
       i = clamp(i);
@@ -385,6 +399,22 @@
       e.preventDefault();
       go(to, { focus: true });
     });
+    if (strip) {
+      strip.addEventListener("click", function (e) {
+        var thumb = e.target.closest(".cr-thumb");
+        if (!thumb || e.metaKey || e.ctrlKey || e.shiftKey) return;
+        e.preventDefault();
+        go(thumbs.indexOf(thumb));  // smooth, instant with prefers-reduced-motion (CSS scroll-behavior)
+      });
+      strip.addEventListener("keydown", function (e) {
+        if (!e.target.closest(".cr-thumb") || e.altKey || e.ctrlKey || e.metaKey) return;
+        var to = { ArrowLeft: current - 1, ArrowRight: current + 1, Home: 0, End: thumbs.length - 1 }[e.key];
+        if (to === undefined) return;
+        e.preventDefault();
+        go(to);
+        thumbs[clamp(to)].focus({ preventScroll: true });
+      });
+    }
     root.addEventListener("lightboxclose", function (e) {
       var i = slides.indexOf(e.target);
       if (i >= 0) go(i, { instant: true, focus: root.contains(document.activeElement) });
