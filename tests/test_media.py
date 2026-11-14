@@ -367,7 +367,7 @@ def test_dashboard_shows_the_source(client, hosts):
     page = client.get(f"/listing/{fredy}").text
     assert "Bilder von Fredy" in page and "Bilder laden" not in page  # done: no button any more
     assert page.count(f'<img src="/listing/{fredy}/media/') >= 3
-    assert f'href="/listing/{fredy}/media/2"' in page  # the hero is the first non-floor-plan picture
+    assert page.index(f'href="/listing/{fredy}/media/2"') < page.index(f'href="/listing/{fredy}/media/1"')  # photos first
     own = add_listing("b")
     page = client.get(f"/listing/{own}").text
     assert "von ImmoScout24 geladen" in page and "Bilder &amp; Details laden" in page

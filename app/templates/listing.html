@@ -10,22 +10,87 @@
 {% if added %}<div class="flash ok" role="status">{{ added }}</div>{% endif %}
 
 <article class="listing-head">
-  <div class="lh-grid{% if hero or image_url %} has-image{% endif %}">
-    {% if hero %}
-    {# A stored picture (served behind login); opens the gallery below in the lightbox. #}
-    <a class="hero" href="/listing/{{ listing.id }}/media/{{ hero.position }}" target="_blank" rel="noopener"
-      data-lightbox data-gallery="#bilder .gallery" data-caption="{{ media_label(hero) }}">
-      <img src="/listing/{{ listing.id }}/media/{{ hero.position }}" alt="{{ hero.caption or 'Bild zum Inserat' }}" decoding="async">
-    </a>
-    {% elif image_url %}
-    <a class="hero" href="{{ image_url }}" target="_blank" rel="noopener noreferrer" data-lightbox data-caption="Titelbild">
-      <img src="{{ image_url }}" alt="Bild zum Inserat" referrerpolicy="no-referrer" loading="lazy" decoding="async">
-    </a>
+  <div class="lh-grid{% if slides or image_url or gallery %} has-image{% endif %}">
+    {% if slides or image_url or gallery %}
+    {# ---- picture carousel (begin) ----
+       Pictures from Fredy or ImmoScout24 (media.py): stored under DATA_DIR/media, served by
+       /listing/{id}/media/{position} behind login. A strip that scrolls sideways (scroll-snap, one picture per view);
+       without JS it is just that, every picture a link. app.js adds the arrows, keys and the lightbox (whole set).
+       Only Fredy's external title picture: that as the single slide. Neither: an empty box with the load button. #}
+    <div class="lh-media"{% if gallery %} id="bilder"{% endif %}>
+      {% if slides or image_url %}
+      {% set n = slides|length if slides else 1 %}
+      <div class="carousel" role="region" aria-roledescription="Karussell" aria-label="Bilder zum Inserat" data-carousel>
+        <div class="cr-track" data-lightbox-group>
+          {% for m in slides %}
+          <a class="cr-slide{% if m.is_plan %} is-plan{% endif %}" href="/listing/{{ listing.id }}/media/{{ m.position }}"
+            target="_blank" rel="noopener" data-lightbox data-caption="{{ media_label(m) }}"
+            aria-label="Bild {{ loop.index }} von {{ n }}: {{ media_label(m) }}">
+            <img src="/listing/{{ listing.id }}/media/{{ m.position }}" alt="{{ m.caption or 'Bild ' ~ m.position }}"
+              {%- if not loop.first %} loading="lazy"{% endif %} decoding="async">
+            {% if n > 1 %}<span class="cr-count" aria-hidden="true">{{ loop.index }} / {{ n }}</span>{% endif %}
+            <span class="cr-caption" aria-hidden="true">{{ media_label(m) }}</span>
+          </a>
+          {% else %}
+          <a class="cr-slide" href="{{ image_url }}" target="_blank" rel="noopener noreferrer" data-lightbox data-caption="Titelbild">
+            <img src="{{ image_url }}" alt="Bild zum Inserat" referrerpolicy="no-referrer" decoding="async">
+          </a>
+          {% endfor %}
+        </div>
+        {% if n > 1 %}
+        <button type="button" class="cr-btn cr-prev" aria-label="Vorheriges Bild" data-carousel-prev hidden>‹</button>
+        <button type="button" class="cr-btn cr-next" aria-label="Nächstes Bild" data-carousel-next hidden>›</button>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="cr-empty">
+        <span aria-hidden="true">🖼</span>
+        <span>{{ "Noch keine Bilder geladen" if can_load_media else "Keine Bilder im Inserat" }}</span>
+      </div>
+      {% endif %}
+      {% if gallery %}
+      <div class="cr-bar">
+        {# "6 Bilder · von ImmoScout24 geladen"; nothing stored yet: only where they come from. #}
+        <p class="cr-source">{% if media %}{{ plural(media|length, "Bild", "Bilder") }}
+          {%- if media_source_label %} <span class="muted">· {{ media_source_label }}</span>{% endif %}
+          {%- else %}<span class="muted">{{ media_source_label or "Bilder" }}</span>{% endif %}</p>
+        {% if can_load_media %}
+        <form method="post" action="/listing/{{ listing.id }}/media" data-once>
+          <button type="submit" class="secondary">{% if listing.media_error %}Erneut versuchen
+            {%- elif media_source == "is24" %}Bilder &amp; Details laden{% else %}Bilder laden{% endif %}</button>
+        </form>
+        {% endif %}
+      </div>
+      {% if listing.media_error %}<div class="flash err bare" role="alert">⚠ {{ listing.media_error }}</div>{% endif %}
+      {% if can_load_media %}
+      <p class="help">{% if media_source == "is24" %}Holt das Exposé und alle Bilder von ImmoScout24 (einige Sekunden).
+        {%- else %}Lädt die Bilder, die Fredy mitgeschickt hat (einige Sekunden).{% endif %}</p>
+      {% endif %}
+      {% endif %}
+    </div>
+    {# ---- picture carousel (end) ---- #}
     {% endif %}
     <div class="lh-body">
       <div class="lh-top">{{ status_badge(listing.status) }}{% if listing.status == "dismissed" and listing.auto_status == "dismissed" %}<span class="chip" title="kein Entwurf, nach der eingestellten Zeit automatisch aussortiert">⏱ automatisch</span>{% endif %}<span class="chip">{{ portal }}</span><span>eingegangen {{ listing.received_at|local_time }}</span></div>
       <h1>{{ listing.title or "(ohne Titel)" }}</h1>
       {% if listing.address %}<p class="lh-addr">{{ icon("pin") }}<span>{{ listing.address }}</span></p>{% endif %}
+      {% set map_link = listing.address|maps_url %}
+      {% if map_link %}
+      {# ---- map (begin) ----
+         "🗺 Karte" opens Google's embedded map; no request to Google before that: app.js puts the iframe in on the
+         first opening (from data-map-src). Without JS the box only offers the link. The link comes first so it can
+         float beside the toggle. #}
+      <div class="lh-map">
+        <a class="map-open" href="{{ map_link }}" target="_blank" rel="noopener noreferrer">In Google Maps öffnen ↗</a>
+        <details class="map-toggle" data-map-src="{{ listing.address|maps_embed_url }}" data-map-title="Karte: {{ listing.address }}">
+          <summary>🗺 Karte</summary>
+          <div class="map-frame">
+            <p class="map-nojs">Die Karte braucht JavaScript. <a href="{{ map_link }}" target="_blank" rel="noopener noreferrer">In Google Maps öffnen ↗</a></p>
+          </div>
+        </details>
+      </div>
+      {# ---- map (end) ---- #}
+      {% endif %}
       <dl class="facts">
         {% set r = listing|rent %}
         <div><dt>{{ "Kaltmiete" if r.warm or r.total else "Preis" }}</dt><dd>{{ listing.price or "–" }}</dd></div>
@@ -71,39 +136,6 @@
     </footer>
   </article>
 </dialog>
-{% endif %}
-
-{% if gallery %}
-{# Pictures from Fredy or ImmoScout24 (media.py): stored under DATA_DIR/media, served by
-   /listing/{id}/media/{position} behind login. #}
-<section id="bilder">
-  <div class="section-head">
-    <h2>Bilder <span class="count">{{ media|length }}</span>
-      {% if media_source_label %}<small class="muted">{{ media_source_label }}</small>{% endif %}</h2>
-    {% if can_load_media %}
-    <form method="post" action="/listing/{{ listing.id }}/media" data-once>
-      <button type="submit" class="secondary">{% if listing.media_error %}Erneut versuchen
-        {%- elif media_source == "is24" %}Bilder &amp; Details laden{% else %}Bilder laden{% endif %}</button>
-    </form>
-    {% endif %}
-  </div>
-  {% if listing.media_error %}<div class="flash err bare" role="alert">⚠ {{ listing.media_error }}</div>{% endif %}
-  {% if media %}
-  <div class="gallery">
-    {% for m in media %}
-    <a class="gallery-item" href="/listing/{{ listing.id }}/media/{{ m.position }}" target="_blank" rel="noopener"
-      data-lightbox data-caption="{{ media_label(m) }}">
-      <img src="/listing/{{ listing.id }}/media/{{ m.position }}" alt="{{ m.caption or 'Bild ' ~ m.position }}" loading="lazy" decoding="async">
-      <span class="gallery-caption">{{ media_label(m) }}</span>
-    </a>
-    {% endfor %}
-  </div>
-  {% endif %}
-  {% if can_load_media %}
-  <p class="help">{% if media_source == "is24" %}Holt das Exposé und alle Bilder von ImmoScout24 (einige Sekunden).
-    {%- else %}Lädt die Bilder, die Fredy mitgeschickt hat (einige Sekunden).{% endif %}</p>
-  {% endif %}
-</section>
 {% endif %}
 
 {% if listing.details %}
