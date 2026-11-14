@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% from "macros.html" import status_badge, icon %}
+{% from "macros.html" import icon %}
+{% from "listing_card.html" import listing_card %}
 {% from "cost_bar.html" import cost_track %}
 {% block title %}Inserate{% endblock %}
 {% block content %}
@@ -55,58 +56,28 @@
     {%- if costs.budget %}{{ cost_track(costs, slim=True) }}{% endif %}
     <span class="sub">{% if costs.over %}Budget erreicht{% elif costs.budget %}von {{ costs.budget|eur }} Budget{% else %}kein Limit{% endif %}</span></div>
   <div class="stat"><span class="label">Kosten gesamt</span><span class="value">{{ stats.cost_total|eur }}</span><span class="sub">seit Beginn</span></div>
-  <div class="stat"><span class="label">Inserate</span><span class="value">{{ stats.listings_total }}</span><span class="sub">{{ stats.by_status.get("new", 0) }} neu · {{ stats.by_status.get("sent", 0) }} gesendet</span></div>
+  <div class="stat"><span class="label">Inserate</span><span class="value">{{ stats.listings_total }}</span><span class="sub">
+    {#- data-count: kept current by app.js after ❌/↩️ (web.card_counts) -#}
+    <span data-count="new">{{ stats.by_status.get("new", 0) }}</span> neu · <span data-count="sent">{{ stats.by_status.get("sent", 0) }}</span> gesendet
+    {%- if stats.unseen %}<span data-unseen-part> · <span data-count="unseen">{{ stats.unseen }}</span> ungesehen</span>{% endif %}</span></div>
   <div class="stat"><span class="label">Entwürfe</span><span class="value">{{ stats.drafts_total }}</span><span class="sub">insgesamt erzeugt</span></div>
 </section>
 
 <nav class="filters" aria-label="Nach Status filtern">
-  <a href="/" {% if not status_filter %}aria-current="page"{% endif %}>Alle <span class="n">{{ stats.listings_total }}</span></a>
+  <a href="/" {% if not status_filter %}aria-current="page"{% endif %}>Alle <span class="n" data-count="all">{{ stats.listings_total }}</span></a>
   {% for key, label in STATUSES.items() %}
-  <a href="/?status={{ key }}" {% if status_filter == key and not auto_filter %}aria-current="page"{% endif %}><span class="dot st-{{ key }}" aria-hidden="true"></span>{{ label }} <span class="n">{{ stats.by_status.get(key, 0) }}</span></a>
+  <a href="/?status={{ key }}" {% if status_filter == key and not auto_filter %}aria-current="page"{% endif %}><span class="dot st-{{ key }}" aria-hidden="true"></span>{{ label }} <span class="n" data-count="{{ key }}">{{ stats.by_status.get(key, 0) }}</span></a>
   {% endfor %}
   {% if stats.auto_dismissed %}
-  <a href="/?status=dismissed&amp;auto=1" {% if auto_filter %}aria-current="page"{% endif %} title="Nach {{ auto_dismiss_hours }} h ohne Entwurf automatisch aussortiert">⏱ davon automatisch <span class="n">{{ stats.auto_dismissed }}</span></a>
+  <a href="/?status=dismissed&amp;auto=1" {% if auto_filter %}aria-current="page"{% endif %} title="Nach {{ auto_dismiss_hours }} h ohne Entwurf automatisch aussortiert">⏱ davon automatisch <span class="n" data-count="auto">{{ stats.auto_dismissed }}</span></a>
   {% endif %}
 </nav>
 {% endif %}
 
 {% if listings %}
 <ul class="listing-list">
-  {% for l in listings %}
-  {# Thumbnail: a locally cached image (thumb_url, set by the server) wins over Fredy's external title image,
-     which is only used if it is a plain http(s) URL. #}
-  {% set thumb = l.thumb_url or (l.image_url|safe_url) %}
-  <li id="l{{ l.id }}">
-    <a class="listing-card{% if l.status == 'dismissed' %} is-dismissed{% endif %}{% if l.status != 'sent' %} has-toggle{% endif %}" href="/listing/{{ l.id }}">
-      <div class="thumb">
-        <span class="thumb-ph" aria-hidden="true">{{ icon("home") }}<span>{{ l.portal }}</span></span>
-        {% if thumb %}<img src="{{ thumb }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-fallback>{% endif %}
-      </div>
-      <div class="lc-body">
-        <div class="lc-top">{{ status_badge(l.status) }}{% if l.status == 'dismissed' and l.auto_status == 'dismissed' %}<span class="lc-auto" title="automatisch, kein Entwurf">⏱ automatisch</span>{% endif %}<span>{{ l.received_at|local_time }}</span></div>
-        <span class="lc-title">{{ l.title or "(ohne Titel)" }}</span>
-        {% if l.address %}<span class="lc-addr">{{ l.address }}</span>{% endif %}
-        <div class="lc-facts">
-          {% for part in l|rent_parts %}<span class="price">{{ part }}</span>{% else %}<span class="price">–</span>{% endfor %}
-          {% if l.size %}<span>{{ l.size }}</span>{% endif %}
-          <span class="portal">{{ l.portal }}</span>
-        </div>
-        {% if l.draft_count %}
-        <span class="lc-meta">{{ l.draft_count }} {{ "Entwurf" if l.draft_count == 1 else "Entwürfe" }} · {{ l.cost_eur|eur }}</span>
-        {% endif %}
-      </div>
-    </a>
-    {% if l.status != "sent" %}
-    <form method="post" action="/listing/{{ l.id }}/toggle-dismissed" class="lc-toggle">
-      <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
-      {% if l.status == "dismissed" %}
-      <button type="submit" class="secondary outline" title="Doch interessant – zurückholen" aria-label="Doch interessant: {{ l.title or 'Inserat' }}">↩️</button>
-      {% else %}
-      <button type="submit" class="secondary outline" title="Uninteressant" aria-label="Uninteressant: {{ l.title or 'Inserat' }}">❌</button>
-      {% endif %}
-    </form>
-    {% endif %}
-  </li>
+  {% set back = request.url.path ~ ("?" ~ request.url.query if request.url.query else "") %}
+  {% for l in listings %}{{ listing_card(l, back) }}
   {% endfor %}
 </ul>
 {% elif status_filter %}

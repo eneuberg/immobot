@@ -569,6 +569,24 @@ def _listing_cards(rows: list[dict]) -> list[dict]:
     } for row in rows]
 
 
+def card_counts() -> dict[str, int]:
+    """The numbers on the main page that a ❌/↩️ changes (filter chips, "x neu · y gesendet · z ungesehen"), keyed
+    by the data-count names in listings.html."""
+    stats = db.stats()
+    return {"all": stats["listings_total"], **{key: stats["by_status"].get(key, 0) for key in settings.STATUSES},
+            "auto": stats["auto_dismissed"], "unseen": stats["unseen"]}
+
+
+def _card_html(listing_id: int, back: str) -> str:
+    """One main-page card (listing_card.html), exactly as the page renders it."""
+    (card,) = _listing_cards(db.list_listings(listing_id=listing_id, limit=1))
+    return str(templates.get_template("listing_card.html").make_module({}).listing_card(card, back)).strip()
+
+
+def _wants_json(request: Request) -> bool:
+    return "application/json" in request.headers.get("accept", "")
+
+
 def _render_listings(request: Request, listings: list[dict], *, status: str | None = None, add_failed=None,
                      search_info: dict | None = None, auto: bool = False):
     return render(request, "listings.html", {
@@ -612,6 +630,7 @@ ADDED_MESSAGES = {  # /listing/{id}?neu=… after "Inserat per Link"
 
 @router.get("/listing/{listing_id}", dependencies=PAGE)
 def listing_page(request: Request, listing_id: int, neu: str | None = None):
+    db.mark_seen(listing_id)  # the card on the main page stops glowing
     context = _listing_context(_listing_or_404(listing_id))
     context["added"] = ADDED_MESSAGES.get(neu or "")
     return render(request, "listing.html", context)
@@ -678,27 +697,34 @@ async def listing_set_status(listing_id: int, status: str = Form("")):
     if status not in settings.STATUSES:
         raise HTTPException(status_code=400, detail="Ungültiger Status")
     db.set_listing_status(listing_id, status)
+    db.mark_seen(listing_id)
     bot.schedule_refresh(listing_id)  # the Telegram message shows the new state too
     return RedirectResponse(f"/listing/{listing_id}", status_code=303)
 
 
 @router.post("/listing/{listing_id}/toggle-dismissed", dependencies=ACTION)
-async def listing_toggle_dismissed(listing_id: int, next: str = Form("")):
+async def listing_toggle_dismissed(request: Request, listing_id: int, next: str = Form("")):
     """The ❌ / ↩️ on a card of the main page: "uninteressant", or back again (to "Entwurf" when it has drafts, else
-    "neu"). A sent listing stays as it is. Back to the same list (`next`), at the card."""
+    "neu"). A sent listing stays as it is. Without JS: back to the same list (`next`), at the card. app.js asks for
+    JSON instead and gets the new card (it stays in a filtered list, so ↩️ undoes) and the page's new numbers."""
     listing = _listing_or_404(listing_id)
     if listing["status"] == "dismissed":
         db.set_listing_status(listing_id, "drafted" if db.latest_draft(listing_id) else "new")
     elif listing["status"] != "sent":
         db.set_listing_status(listing_id, "dismissed")
+    db.mark_seen(listing_id)
     bot.schedule_refresh(listing_id)
-    back = safe_next(next) or "/"
-    return RedirectResponse(f"{back.split('#')[0]}#l{listing_id}", status_code=303)
+    back = (safe_next(next) or "/").split("#")[0]
+    if _wants_json(request):
+        return JSONResponse({"ok": True, "status": db.get_listing(listing_id)["status"],
+                             "card": _card_html(listing_id, back), "counts": card_counts()})
+    return RedirectResponse(f"{back}#l{listing_id}", status_code=303)
 
 
 @router.post("/listing/{listing_id}/draft", dependencies=ACTION)
 async def listing_create_draft(request: Request, listing_id: int):
     _listing_or_404(listing_id)
+    db.mark_seen(listing_id)
     kind = "regenerate" if db.latest_draft(listing_id) else "initial"
     try:
         draft = await llm.create_and_store_draft(listing_id, kind, source="dashboard")

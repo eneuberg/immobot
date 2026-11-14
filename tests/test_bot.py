@@ -677,6 +677,21 @@ def test_sent_skip_and_undo(tg, monkeypatch):
     assert "<pre>Echter Entwurf</pre>" in tg.edits[-1]["text"]
 
 
+def test_any_button_counts_as_seen(tg):
+    """Every button of a listing's message marks it seen (the dashboard card stops glowing) - also one that only
+    answers with a popup, like "🖼 Bilder" without pictures."""
+    db = bot.db
+    first, second = add_listing(db), add_listing(db, "f2", tg_message_id=556)
+    assert db.get_listing(first)["seen_at"] is None
+    query = press(tg, f"img:{first}")
+    assert query.answers == [bot.NO_PICTURES_HERE] and db.get_listing(first)["seen_at"]
+    press(tg, f"skip:{second}")
+    assert db.get_listing(second)["seen_at"] and db.get_listing(second)["status"] == "dismissed"
+    without_message = add_listing(db, "f3", tg_message_id=None)
+    press(tg, f"skip:{without_message}")  # "Inserat nicht gefunden.": nothing happened
+    assert db.get_listing(without_message)["seen_at"] is None
+
+
 def test_unknown_listing_or_missing_message_answers_error(tg):
     db = bot.db
     query = press(tg, "gen:12345")

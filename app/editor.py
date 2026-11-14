@@ -188,6 +188,7 @@ def _gate(request: Request, raw_id: str, form_token: str | None = None):
                                                           _form_token(request, listing_id, mode).encode("utf-8")):
         return None, None, _message_page(request, (403, "Seite veraltet", "Bitte den Editor neu laden und es noch "
                                                                           "einmal versuchen."), listing_id)
+    db.mark_seen(listing_id)  # opened or used in the editor: the main page's card stops glowing
     return listing, mode, None
 
 

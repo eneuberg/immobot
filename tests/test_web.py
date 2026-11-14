@@ -429,6 +429,90 @@ def test_card_toggle_dismissed(client):
     assert client.post("/listing/9999/toggle-dismissed").status_code == 404
 
 
+JSON = {"Accept": "application/json"}
+
+
+def test_card_toggle_answers_json_for_app_js(client):
+    """app.js sends ❌/↩️ with fetch: the answer is the new card (same markup as the page) and the page's numbers."""
+    login(client)
+    lid = add_listing()
+    other = add_listing(fredy_id="x2", title="Andere")
+    db.auto_dismiss("9999")  # both "uninteressant" automatically ("⏱ automatisch")
+    db.set_listing_status(other, "sent")
+    assert "⏱ automatisch</span>" in client.get("/").text
+    r = client.post(f"/listing/{lid}/toggle-dismissed", data={"next": "/?status=dismissed#l3"}, headers=JSON)
+    assert r.status_code == 200 and r.headers["content-type"] == "application/json"
+    data = r.json()
+    assert data["ok"] is True and data["status"] == "new" and db.get_listing(lid)["status"] == "new"
+    card = data["card"]
+    assert card.startswith(f'<li id="l{lid}">') and card.rstrip().endswith("</li>")
+    assert "is-dismissed" not in card and "⏱ automatisch" not in card and "is-unseen" not in card
+    assert '<span class="badge dot st-new">neu</span>' in card and "👁 gesehen" in card  # brought back = seen
+    assert 'value="/?status=dismissed"' in card and 'title="Uninteressant"' in card and "❌</button>" in card
+    assert data["counts"] == {"all": 2, "new": 1, "drafted": 0, "sent": 1, "dismissed": 0, "auto": 0, "unseen": 0}
+    # the same card the page renders (there with that page as `next`)
+    page = client.get("/").text
+    assert re.sub(r"\s+", " ", card.replace("/?status=dismissed", "/")) in re.sub(r"\s+", " ", page)
+
+    data = client.post(f"/listing/{lid}/toggle-dismissed", data={"next": "/"}, headers=JSON).json()
+    assert data["status"] == "dismissed" and "is-dismissed" in data["card"] and "↩️</button>" in data["card"]
+    assert 'aria-label="Doch interessant: 2 Zi"' in data["card"] and "👁 gesehen" not in data["card"]
+    assert data["counts"]["dismissed"] == 1 and data["counts"]["new"] == 0
+    # a sent listing: unchanged, no button in its card
+    data = client.post(f"/listing/{other}/toggle-dismissed", headers=JSON).json()
+    assert data["status"] == "sent" and "lc-toggle" not in data["card"]
+
+
+def test_card_toggle_logged_out_is_not_json(client):
+    """Session expired: no JSON but the login redirect, so app.js falls back to sending the form normally."""
+    lid = add_listing()
+    r = client.post(f"/listing/{lid}/toggle-dismissed", headers=JSON)
+    assert r.status_code == 303 and r.headers["location"] == "/login" and db.get_listing(lid)["status"] == "new"
+
+
+def test_counts_on_the_main_page_are_marked_for_app_js(client):
+    login(client)
+    add_listing()
+    page = client.get("/").text
+    for key in ("all", "new", "drafted", "sent", "dismissed"):
+        assert f'data-count="{key}"' in page
+    assert '<span data-unseen-part> · <span data-count="unseen">1</span> ungesehen</span>' in page
+
+
+def test_unseen_listing_glows_until_opened(client):
+    """A new listing nobody looked at glows on the main page; once its page was opened it shows "👁 gesehen"."""
+    login(client)
+    hook(client, {"provider": "immowelt", "listings": [fredy_listing("f1")]})  # the webhook doesn't count as seen
+    lid = db.list_listings()[0]["id"]
+    page = client.get("/").text
+    assert db.get_listing(lid)["seen_at"] is None and "is-unseen" in page and "noch nicht angesehen" in page
+    assert "👁 gesehen" not in page and "ungesehen</span>" in page
+    assert client.get(f"/listing/{lid}").status_code == 200
+    seen_at = db.get_listing(lid)["seen_at"]
+    page = client.get("/").text
+    assert seen_at and "is-unseen" not in page and '<span class="lc-seen" title="Schon angesehen">👁 gesehen</span>' in page
+    assert "ungesehen</span>" not in page and "data-unseen-part" not in page
+    client.get(f"/listing/{lid}")
+    assert db.get_listing(lid)["seen_at"] == seen_at  # only the first time is kept
+    db.set_listing_status(lid, "drafted")  # other statuses show the interaction already: neither glow nor marker
+    page = client.get("/").text
+    assert "is-unseen" not in page and "👁 gesehen" not in page
+
+
+def test_status_changes_and_drafts_from_the_dashboard_count_as_seen(client, fake_llm):
+    login(client)
+    lid = add_listing()
+    client.post(f"/listing/{lid}/status", data={"status": "drafted"})
+    assert db.get_listing(lid)["seen_at"]
+    second = add_listing(fredy_id="x2")
+    client.post(f"/listing/{second}/draft")
+    assert fake_llm == [(second, "initial")] and db.get_listing(second)["seen_at"]
+    third = add_listing(fredy_id="x3")
+    client.post(f"/listing/{third}/toggle-dismissed")
+    assert db.get_listing(third)["seen_at"]
+    assert db.get_listing(add_listing(fredy_id="x4"))["seen_at"] is None
+
+
 def test_create_draft_initial_then_regenerate(client, fake_llm):
     login(client)
     lid = add_listing()

@@ -1,0 +1,45 @@
+{# One card of the main page (listings.html), also rendered alone for the ❌/↩️ answer without reload
+   (web.listing_toggle_dismissed with Accept: application/json; app.js puts it in place of the old one).
+   l: a row from web._listing_cards; back: the list to return to after ❌/↩️ without JS.
+   Still "neu" and never looked at (db.mark_seen): the card glows; "neu" and seen: a small "👁 gesehen". #}
+{% from "macros.html" import status_badge, icon %}
+{% macro listing_card(l, back) -%}
+{# Thumbnail: a locally cached image (thumb_url, set by the server) wins over Fredy's external title image,
+   which is only used if it is a plain http(s) URL. #}
+{% set thumb = l.thumb_url or (l.image_url|safe_url) %}
+{% set unseen = l.status == "new" and not l.seen_at %}
+<li id="l{{ l.id }}">
+  <a class="listing-card{% if l.status == 'dismissed' %} is-dismissed{% endif %}{% if l.status != 'sent' %} has-toggle{% endif %}{% if unseen %} is-unseen{% endif %}" href="/listing/{{ l.id }}">
+    <div class="thumb">
+      <span class="thumb-ph" aria-hidden="true">{{ icon("home") }}<span>{{ l.portal }}</span></span>
+      {% if thumb %}<img src="{{ thumb }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-fallback>{% endif %}
+    </div>
+    <div class="lc-body">
+      <div class="lc-top">{{ status_badge(l.status) }}
+        {%- if unseen %}<span class="lc-unseen sr-only">noch nicht angesehen</span>
+        {%- elif l.status == "new" %}<span class="lc-seen" title="Schon angesehen">👁 gesehen</span>{% endif %}
+        {%- if l.status == 'dismissed' and l.auto_status == 'dismissed' %}<span class="lc-auto" title="automatisch, kein Entwurf">⏱ automatisch</span>{% endif %}<span>{{ l.received_at|local_time }}</span></div>
+      <span class="lc-title">{{ l.title or "(ohne Titel)" }}</span>
+      {% if l.address %}<span class="lc-addr">{{ l.address }}</span>{% endif %}
+      <div class="lc-facts">
+        {% for part in l|rent_parts %}<span class="price">{{ part }}</span>{% else %}<span class="price">–</span>{% endfor %}
+        {% if l.size %}<span>{{ l.size }}</span>{% endif %}
+        <span class="portal">{{ l.portal }}</span>
+      </div>
+      {% if l.draft_count %}
+      <span class="lc-meta">{{ l.draft_count }} {{ "Entwurf" if l.draft_count == 1 else "Entwürfe" }} · {{ l.cost_eur|eur }}</span>
+      {% endif %}
+    </div>
+  </a>
+  {% if l.status != "sent" %}
+  <form method="post" action="/listing/{{ l.id }}/toggle-dismissed" class="lc-toggle">
+    <input type="hidden" name="next" value="{{ back }}">
+    {% if l.status == "dismissed" %}
+    <button type="submit" class="lc-undo" title="Doch interessant – zurückholen" aria-label="Doch interessant: {{ l.title or 'Inserat' }}">↩️</button>
+    {% else %}
+    <button type="submit" class="lc-dismiss" title="Uninteressant" aria-label="Uninteressant: {{ l.title or 'Inserat' }}">❌</button>
+    {% endif %}
+  </form>
+  {% endif %}
+</li>
+{%- endmacro %}

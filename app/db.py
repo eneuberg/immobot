@@ -3,6 +3,7 @@ FastAPI threadpool and the Telegram bot's event loop.
 
 Tables:
   listings         one row per listing received from Fredy (+ ImmoScout24 details and picture source, see media.py)
+                   and seen_at, when the person first looked at it (mark_seen; NULL = still unseen)
   listing_media    pictures of a listing, from Fredy or ImmoScout24 (files under DATA_DIR/media/<listing id>/;
                    `file` is "" until the picture is downloaded)
   drafts           every generated message, with provider, model, tokens and cost in the provider's currency
@@ -66,7 +67,8 @@ CREATE TABLE IF NOT EXISTS listings (
     media_error TEXT,
     album_message_id INTEGER,
     album_sent_at TEXT,
-    media_source TEXT
+    media_source TEXT,
+    seen_at TEXT
 );
 CREATE TABLE IF NOT EXISTS listing_media (
     listing_id INTEGER NOT NULL REFERENCES listings(id),
@@ -231,6 +233,9 @@ ADDED_COLUMNS = {
         # auto_dismiss: NULL, "dismissed" (set to uninteressant after auto_dismiss_hours without a draft) or "kept"
         # (the user changed the status since, or set it to neu: never automatically again)
         ("auto_status", "TEXT"),
+        # when the person first looked at or acted on the listing (page, editor, a status, a Telegram button);
+        # NULL = never: the dashboard card glows while it is still "neu"
+        ("seen_at", "TEXT"),
     ],
     "listing_media": [("floor_plan", "INTEGER NOT NULL DEFAULT 0")],
     "drafts": [
@@ -287,12 +292,18 @@ def _rate() -> float:
 
 def _add_missing_columns(conn: sqlite3.Connection) -> None:
     """Idempotent migration for databases created by an older version."""
+    added = set()
     for table, columns in ADDED_COLUMNS.items():
         existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         for column, definition in columns:
             if column not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+                added.add((table, column))
     conn.execute("UPDATE drafts SET cost_native = cost_usd WHERE cost_native IS NULL")  # old drafts were USD
+    if ("listings", "seen_at") in added:
+        # Listings from before "seen" existed: the ones the person touched (a status other than "neu", or brought
+        # back to "neu") count as seen; plain "neu" ones stay unseen.
+        conn.execute("UPDATE listings SET seen_at = updated_at WHERE status != 'new' OR auto_status = 'kept'")
 
 
 @contextmanager
@@ -357,9 +368,10 @@ def latest_listing() -> dict | None:
         return _row(conn.execute("SELECT * FROM listings ORDER BY id DESC LIMIT 1").fetchone())
 
 
-def list_listings(status: str | None = None, limit: int = 300, auto: bool = False) -> list[dict]:
+def list_listings(status: str | None = None, limit: int = 300, auto: bool = False,
+                  listing_id: int | None = None) -> list[dict]:
     """Listings newest first, each with draft_count and cost_eur (its drafts plus its learning calls in llm_usage,
-    in euros). auto: only those dismissed automatically."""
+    in euros). auto: only those dismissed automatically. listing_id: just that one (a single card)."""
     sql = """
         SELECT l.*, COUNT(d.id) AS draft_count,
                COALESCE(SUM({cost}), 0)
@@ -376,6 +388,9 @@ def list_listings(status: str | None = None, limit: int = 300, auto: bool = Fals
         params.append(status)
     if auto:
         where += (" AND" if where else "WHERE") + " l.status = 'dismissed' AND l.auto_status = 'dismissed'"
+    if listing_id is not None:
+        where += (" AND" if where else "WHERE") + " l.id = ?"
+        params.append(listing_id)
     params.append(limit)
     sql = sql.format(cost=cost_eur_sql("d"), usage_cost=cost_eur_sql("u"), where=where)
     with connect() as conn:
@@ -400,6 +415,15 @@ def set_listing_status(listing_id: int, status: str) -> None:
         conn.execute("UPDATE listings SET status = ?, updated_at = ?, auto_status = CASE "
                      "WHEN ? = 'new' OR auto_status IS NOT NULL THEN 'kept' END WHERE id = ?",
                      (status, now_iso(), status, listing_id))
+
+
+def mark_seen(listing_id: int) -> bool:
+    """The person looked at or acted on the listing (page, editor, a status change, a Telegram button). Only the
+    first time is stored; automatic changes (auto_dismiss, webhook, picture fetches) never call this.
+    Returns whether it was unseen until now."""
+    with connect() as conn:
+        cur = conn.execute("UPDATE listings SET seen_at = ? WHERE id = ? AND seen_at IS NULL", (now_iso(), listing_id))
+        return cur.rowcount > 0
 
 
 def auto_dismiss(received_before: str) -> list[int]:
@@ -638,6 +662,7 @@ def stats() -> dict:
         by_status = {r["status"]: r["n"] for r in conn.execute("SELECT status, COUNT(*) AS n FROM listings GROUP BY status")}
         auto_dismissed = conn.execute("SELECT COUNT(*) FROM listings WHERE status = 'dismissed' "
                                       "AND auto_status = 'dismissed'").fetchone()[0]
+        unseen = conn.execute("SELECT COUNT(*) FROM listings WHERE status = 'new' AND seen_at IS NULL").fetchone()[0]
     return {
         "listings_total": listings_total,
         "drafts_total": drafts_total,
@@ -646,6 +671,7 @@ def stats() -> dict:
         "month": month_prefix,
         "by_status": by_status,
         "auto_dismissed": auto_dismissed,
+        "unseen": unseen,  # "neu" and never looked at: the glowing cards
     }
 
 

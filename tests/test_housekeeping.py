@@ -28,6 +28,7 @@ def test_only_untouched_new_listings_after_the_set_hours(fresh_db, monkeypatch):
     assert {db.get_listing(i)["status"] for i in (fresh, drafted, sent)} == {"new", "drafted", "sent"}
     assert refreshed == [old]  # Telegram: only the recent messages, the month-old one scrolled away
     assert housekeeping.run_auto_dismiss(NOW) == []  # once
+    assert db.get_listing(old)["seen_at"] is None  # automatic: not something the person looked at
 
 
 def test_undo_keeps_a_listing_and_manual_status_counts_as_manual(fresh_db, monkeypatch):

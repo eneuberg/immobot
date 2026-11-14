@@ -317,10 +317,6 @@ details.howto p { font-size: .88rem; margin: .4rem 0 0; color: var(--pico-muted-
 .listing-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .65rem; }
 .listing-list > li { list-style: none; margin: 0; }
 .listing-list > li { position: relative; scroll-margin-top: 4rem; }
-.listing-card.has-toggle .lc-body { padding-right: 2.5rem; }
-.lc-toggle { position: absolute; top: .45rem; right: .45rem; margin: 0; }
-.lc-toggle button { margin: 0; width: 2.3rem; height: 2.3rem; padding: 0; font-size: .95rem; line-height: 1;
-  background: var(--pico-card-background-color); border-radius: 999px; }
 .listing-card {
   --pico-color: var(--text);
   display: grid; grid-template-columns: 6.25rem minmax(0, 1fr); gap: .8rem; align-items: start;
@@ -349,6 +345,49 @@ details.howto p { font-size: .88rem; margin: .4rem 0 0; color: var(--pico-muted-
   .listing-card { grid-template-columns: 10rem minmax(0, 1fr); gap: 1.1rem; padding: .75rem; }
   .lc-title { font-size: 1.06rem; }
 }
+
+/* ---- Hauptseite: ❌/↩️ column, unseen glow, "gesehen" (begin) ----------------------------------------------
+   The <form> can't sit inside the card's <a>: it lies on top of the card (li is position: relative), vertically
+   centered in a column the card keeps free on its right, so the link still covers everything but the button.
+   Calm at rest (muted emoji on a soft circle), coloured on hover/focus; 2.75rem = 44px tap target. */
+.listing-card.has-toggle { padding-right: 3.75rem; }
+.lc-toggle { position: absolute; top: 50%; right: .55rem; transform: translateY(-50%); margin: 0; }
+.lc-toggle button {
+  display: grid; place-items: center; width: 2.75rem; height: 2.75rem; margin: 0; padding: 0; border-radius: 999px;
+  border: 1px solid var(--pico-card-border-color); background: var(--surface-2); color: var(--pico-muted-color);
+  box-shadow: none; font-size: 1rem; line-height: 1; cursor: pointer;
+  transition: background-color .15s, border-color .15s, transform .15s;
+}
+.lc-toggle button:not([aria-busy=true]) { filter: grayscale(1); opacity: .75; }
+.lc-toggle button:hover, .lc-toggle button:focus-visible { filter: none; opacity: 1; transform: scale(1.06); }
+.lc-toggle .lc-dismiss:hover, .lc-toggle .lc-dismiss:focus-visible { background: var(--err-soft); border-color: var(--err-line); }
+.lc-toggle .lc-undo:hover, .lc-toggle .lc-undo:focus-visible { background: var(--info-soft); border-color: var(--info-line); }
+.lc-toggle button:active { transform: scale(.95); }
+.lc-toggle button[aria-busy=true] { font-size: 0; }  /* Pico's spinner instead of the emoji */
+.lc-toggle button[aria-busy=true]::before { width: 1rem; height: 1rem; background-size: 1rem auto; margin: 0; }
+@media (min-width: 768px) {
+  .listing-card.has-toggle { padding-right: 4.5rem; }
+  .lc-toggle { right: .9rem; }
+}
+
+/* Still "neu" and never looked at (db.mark_seen): a soft ring in the "neu" colour that breathes three times, then
+   stays. Seen and still "neu": a quiet "👁 gesehen" next to the badge. Under reduced motion: ring only. */
+.listing-card.is-unseen {
+  border-color: var(--info-line);
+  box-shadow: 0 0 0 1px var(--info-line), 0 0 16px -3px color-mix(in srgb, var(--info) 45%, transparent);
+  animation: lc-glow 2.6s ease-in-out 3;
+}
+.listing-card.is-unseen:hover {
+  border-color: var(--info);
+  box-shadow: 0 0 0 1px var(--info-line), 0 4px 20px -4px color-mix(in srgb, var(--info) 55%, transparent);
+}
+@keyframes lc-glow {
+  50% { box-shadow: 0 0 0 1px var(--info-line), 0 0 24px 0 color-mix(in srgb, var(--info) 30%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) { .listing-card.is-unseen { animation: none; } }
+.lc-seen { color: var(--pico-muted-color); }
+.stat [data-unseen-part] { white-space: nowrap; }  /* "· 2 ungesehen" wraps as a whole */
+/* ---- Hauptseite (end) ------------------------------------------------------------------------------------ */
 
 /* thumbnails: fixed 4:3 box, placeholder underneath, image on top (removed by app.js when it fails) */
 .thumb {

@@ -118,6 +118,73 @@
   });
   // ---- Einstellungen (end) ----------------------------------------------------------------------------------
 
+  // ---- Hauptseite: ❌/↩️ without reload, "gesehen" (begin) ------------------------------------------------
+  // ❌/↩️ on a card (form.lc-toggle) is sent with fetch: the server answers with the new card (listing_card.html)
+  // and the page's numbers, the card is swapped in place and stays even in a filtered list (↩️ is the undo).
+  // Registered after the form handler above, which already set the spinner and form.dataset.sent; a second press
+  // meanwhile is blocked there (defaultPrevented). The fresh card brings a fresh form, so the button works again.
+  // Logged out (the answer is the login page) or refused: the form is sent the ordinary way; any other failure
+  // (the change may have happened) reloads the page to show the real state.
+  document.addEventListener("submit", function (e) {
+    var form = e.target;
+    if (e.defaultPrevented || !form.matches("form.lc-toggle") || !window.fetch) return;
+    e.preventDefault();
+    var item = form.closest("li");
+    fetch(form.action, { method: "POST", body: new FormData(form), headers: { Accept: "application/json" },
+                         credentials: "same-origin" })
+      .then(function (r) {
+        if (r.redirected || r.status === 401 || r.status === 403) { form.submit(); return null; }
+        if (!r.ok) throw new Error("status " + r.status);
+        return r.json();
+      })
+      .then(function (data) { if (data) swapCard(item, data); })
+      .catch(function () { location.reload(); });
+  });
+
+  function swapCard(item, data) {
+    if (!data.card || !item) throw new Error("no card");
+    var hadFocus = item.contains(document.activeElement);
+    var tpl = document.createElement("template");
+    tpl.innerHTML = data.card.trim();
+    var fresh = tpl.content.firstElementChild;
+    item.replaceWith(fresh);
+    if (hadFocus) {  // keyboard and screen reader users stay on the (new) button, which now says what it does
+      var target = fresh.querySelector(".lc-toggle button") || fresh.querySelector("a");
+      if (target) target.focus();
+    }
+    setCounts(data.counts || {});
+  }
+
+  // Elements with data-count="all|new|drafted|sent|dismissed|auto|unseen" (filter chips, "Inserate" stat).
+  function setCounts(counts) {
+    document.querySelectorAll("[data-count]").forEach(function (el) {
+      if (counts[el.dataset.count] !== undefined) el.textContent = counts[el.dataset.count];
+    });
+    var unseen = document.querySelector("[data-unseen-part]");
+    if (unseen && counts.unseen !== undefined) unseen.hidden = !counts.unseen;
+  }
+
+  // Opening a glowing card: the listing page marks it seen on the server; show that here right away, so going
+  // back (back/forward cache) doesn't show the glow again. Middle click / new tab too.
+  function markSeen(e) {
+    var card = e.target.closest ? e.target.closest("a.listing-card.is-unseen") : null;
+    if (!card || (e.type === "auxclick" && e.button !== 1)) return;
+    card.classList.remove("is-unseen");
+    var hint = card.querySelector(".lc-unseen");
+    if (hint) {
+      var seen = document.createElement("span");
+      seen.className = "lc-seen";
+      seen.title = "Schon angesehen";
+      seen.textContent = "👁 gesehen";
+      hint.replaceWith(seen);
+    }
+    var count = document.querySelector('[data-count="unseen"]');
+    if (count) setCounts({ unseen: Math.max(0, (parseInt(count.textContent, 10) || 0) - 1) });
+  }
+  document.addEventListener("click", markSeen);
+  document.addEventListener("auxclick", markSeen);
+  // ---- Hauptseite (end) -------------------------------------------------------------------------------------
+
   // Thumbnails: an image that fails to load is hidden, so the placeholder underneath shows.
   function markBroken(img) { img.classList.add("is-broken"); }
   document.addEventListener("error", function (e) {

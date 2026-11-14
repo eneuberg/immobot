@@ -154,6 +154,51 @@ def test_migration_of_a_database_from_the_previous_version(tmp_path):
     assert db.stats()["cost_total"] == pytest.approx(0.042 / 1.10 + 0.021)  # totals in euros
 
 
+SCHEMA_BEFORE_SEEN = """
+CREATE TABLE listings (id INTEGER PRIMARY KEY AUTOINCREMENT, fredy_id TEXT NOT NULL UNIQUE, job_id TEXT, provider TEXT,
+    title TEXT, price TEXT, size TEXT, address TEXT, description TEXT, image_url TEXT, url TEXT, fredy_url TEXT,
+    status TEXT NOT NULL DEFAULT 'new', tg_message_id INTEGER, received_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    auto_status TEXT);
+INSERT INTO listings (fredy_id, status, auto_status, received_at, updated_at) VALUES
+    ('untouched', 'new', NULL, '2026-11-01T10:00:00+00:00', '2026-11-01T10:00:00+00:00'),
+    ('brought-back', 'new', 'kept', '2026-11-01T10:00:00+00:00', '2026-11-02T09:00:00+00:00'),
+    ('drafted', 'drafted', NULL, '2026-11-01T10:00:00+00:00', '2026-11-03T08:00:00+00:00'),
+    ('auto', 'dismissed', 'dismissed', '2026-11-01T10:00:00+00:00', '2026-11-04T07:00:00+00:00');
+"""
+
+
+def test_migration_counts_touched_listings_as_seen(tmp_path):
+    """seen_at is new: listings the person had acted on count as seen (at their last change), plain "neu" ones don't.
+    Only when the column is added - a restart doesn't mark anything again."""
+    import sqlite3
+
+    from app import db
+
+    conn = sqlite3.connect(tmp_path / "immobot.db")
+    conn.executescript(SCHEMA_BEFORE_SEEN)
+    conn.close()
+    db.init_db(str(tmp_path))
+    seen = {row["fredy_id"]: row["seen_at"] for row in db.list_listings()}
+    assert seen == {"untouched": None, "brought-back": "2026-11-02T09:00:00+00:00",
+                    "drafted": "2026-11-03T08:00:00+00:00", "auto": "2026-11-04T07:00:00+00:00"}
+    assert db.stats()["unseen"] == 1
+    db.set_listing_status(1, "drafted")  # changed without mark_seen
+    db.init_db(str(tmp_path))
+    assert db.get_listing(1)["seen_at"] is None
+
+
+def test_mark_seen_keeps_the_first_time(fresh_db):
+    listing_id, _ = fresh_db.insert_listing(_listing())
+    assert fresh_db.get_listing(listing_id)["seen_at"] is None and fresh_db.stats()["unseen"] == 1
+    assert fresh_db.mark_seen(listing_id) is True
+    first = fresh_db.get_listing(listing_id)["seen_at"]
+    assert first and fresh_db.mark_seen(listing_id) is False and fresh_db.get_listing(listing_id)["seen_at"] == first
+    assert fresh_db.stats()["unseen"] == 0 and fresh_db.mark_seen(9999) is False
+    other, _ = fresh_db.insert_listing(_listing("other"))
+    fresh_db.set_listing_status(other, "dismissed")
+    assert fresh_db.stats()["unseen"] == 0  # unseen counts only "neu"
+
+
 def test_fresh_database_has_the_new_columns(fresh_db):
     listing_id, _ = fresh_db.insert_listing(_listing())
     fresh_db.add_draft(listing_id, "initial", "x", "claude-opus-5-5", cost_usd=0.01)

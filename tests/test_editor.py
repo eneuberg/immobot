@@ -584,6 +584,22 @@ def test_mark_dismissed_after_finish(client, lid):
     assert "als uninteressant markiert" in page and "Hast du die Nachricht abgeschickt?" not in page
 
 
+def test_editor_counts_as_seen(client, lid):
+    """Opening the editor (from Telegram or the dashboard) and every action in it mark the listing seen; a refused
+    request doesn't."""
+    assert client.get(f"/editor/{lid}").status_code == 303  # no access: login
+    editor_cookie(client, lid)  # the Telegram link only redirects to the editor
+    assert db.get_listing(lid)["seen_at"] is None
+    _, fields = open_editor(client, lid)
+    assert db.get_listing(lid)["seen_at"]
+    with db.connect() as conn:
+        conn.execute("UPDATE listings SET seen_at = NULL")
+    assert post(client, lid, "dismiss", {"token": "0" * 32}).status_code == 403  # stale token: nothing happens
+    assert db.get_listing(lid)["seen_at"] is None
+    post(client, lid, "dismiss", {"token": fields["token"]})
+    assert db.get_listing(lid)["status"] == "dismissed" and db.get_listing(lid)["seen_at"]
+
+
 def test_asks_after_opening_the_listing_while_writing(client, lid):
     """Before "Fertig", "Inserat öffnen" brings "Weiter anschreiben?" on return; "Uninteressant" there dismisses."""
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")

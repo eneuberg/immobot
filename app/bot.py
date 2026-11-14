@@ -699,6 +699,7 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if listing is None or not listing.get("tg_message_id"):
         await _answer(query, NOT_FOUND)
         return
+    db.mark_seen(listing_id)  # any button of the listing counts as seen (the dashboard card stops glowing)
     if action == "img":  # not under the generation lock: pictures may be sent while a draft is being written
         await _send_pictures(context.bot, listing, query)
         return
