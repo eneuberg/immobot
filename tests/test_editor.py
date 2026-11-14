@@ -1016,3 +1016,13 @@ def test_rule_accepted_with_scope_and_strength_and_a_fact(client, lid):
              decision="accept", text="ab sofort")
     assert r.headers["location"] == f"/editor/{lid}?m=fact#regeln"
     assert db.get_settings()["profile"] == "Einzug: ab sofort." and db.get_rule(fact)["status"] == "merged"
+
+
+def test_editor_links_the_address_to_google_maps(client, lid):
+    db.add_draft(lid, "initial", "Guten Tag", "claude-opus-5-5")
+    login(client)
+    r, _ = open_editor(client, lid)
+    link = "https://www.google.com/maps/search/?api=1&amp;query=Musterstr.%2012%2C%20K%C3%B6ln"
+    assert ('<p class="ed-facts">780 € · 54 m² · Musterstr. 12 · <a href="' + link + '" target="_blank" '
+            'rel="noopener noreferrer">In Google Maps öffnen ↗</a></p>') in r.text
+    assert "<iframe" not in r.text and "data-map-src" not in r.text  # only the link here, no map

@@ -1,6 +1,7 @@
 """Portal helpers: URL validation, contact deep links, links into Fredy and display names per Fredy provider id."""
 
 import re
+import unicodedata
 from urllib.parse import quote, urlsplit, urlunsplit
 
 # Fredy provider id -> display name. Unknown ids are shown as-is.
@@ -86,3 +87,37 @@ def provider_label(provider: str | None) -> str:
     if not provider:
         return "?"
     return PROVIDER_LABELS.get(provider, provider)
+
+
+# --- map links (listing page: "🗺 Karte" and "In Google Maps öffnen") -----------------------------------------
+# Listings only carry a free-text address ("Venloer Straße 123, 50823 Köln, Ehrenfeld", "Ehrenfeld, Köln",
+# "50823 Köln - Ehrenfeld"), no coordinates: Google searches for it. All searches are in Köln, so an address without
+# the city gets ", Köln" appended (else "Ehrenfeld" alone may land anywhere).
+MAPS_CITY = "Köln"
+MAPS_QUERY_MAX = 200
+_CITY_WORDS = ("köln", "koeln", "cologne")
+
+
+def maps_query(address: str | None) -> str | None:
+    """The address as a Google Maps search text, or None without an address."""
+    if not isinstance(address, str):
+        return None
+    text = " ".join(unicodedata.normalize("NFC", address).split())[:MAPS_QUERY_MAX].strip()
+    if not text:
+        return None
+    if not any(word in text.lower() for word in _CITY_WORDS):
+        text += f", {MAPS_CITY}"
+    return text
+
+
+def maps_url(address: str | None) -> str | None:
+    """"In Google Maps öffnen": a search link (on Android it opens the Maps app)."""
+    query = maps_query(address)
+    return f"https://www.google.com/maps/search/?api=1&query={quote(query, safe='')}" if query else None
+
+
+def maps_embed_url(address: str | None) -> str | None:
+    """The key-less Google embed for the iframe behind "🗺 Karte" (set only when the map is opened, app.js).
+    Its hosts are the ones allowed in the CSP's frame-src (web.CSP)."""
+    query = maps_query(address)
+    return f"https://maps.google.com/maps?q={quote(query, safe='')}&z=15&output=embed" if query else None

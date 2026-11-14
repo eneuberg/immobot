@@ -133,6 +133,8 @@ templates.env.filters["safe_url"] = portals.safe_url  # untrusted listing URLs -
 templates.env.filters["word_diff"] = textdiff.word_diff  # {{ text_diff(old|word_diff(new)) }}, macros.html
 templates.env.filters["trim_diff"] = textdiff.trim_equal  # {{ text_diff(old|word_diff(new)|trim_diff) }}
 templates.env.filters["md"] = textfmt.basic_markdown  # Claude's notes only (hint, reasons), never a draft
+templates.env.filters["maps_url"] = portals.maps_url  # {{ listing.address|maps_url }}: "In Google Maps öffnen"
+templates.env.filters["maps_embed_url"] = portals.maps_embed_url  # the iframe behind "🗺 Karte" (listing page)
 templates.env.globals["STATUSES"] = settings.STATUSES
 # Content hash in the /static URLs: browsers may cache the files for a day, a deploy still takes effect at once.
 templates.env.globals["STATIC_VERSION"] = hashlib.sha256(
@@ -156,7 +158,9 @@ def redact(request: Request, text: str) -> str:
 
 CSP = (
     "default-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline'; "
-    "img-src 'self' https: data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    "img-src 'self' https: data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; "
+    # "🗺 Karte" on the listing page (portals.maps_embed_url): maps.google.com redirects to www.google.com/maps/embed.
+    "frame-src https://maps.google.com https://www.google.com"
 )
 SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
@@ -545,8 +549,9 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
         # Load/retry only where it can do something: a source, and nothing fetched yet or a failure.
         "can_load_media": media.pictures_missing(listing),
         "media": pictures,
-        # Big picture at the top: the first stored photo that isn't a floor plan (those come first).
-        "hero": next((m for m in pictures if not _is_floorplan(m)), pictures[0] if pictures else None),
+        # The picture carousel at the top: photos first (the first one is the title picture), floor plans after them
+        # (IS24 and Fredy put them first). Captions keep the position number Claude and Telegram use.
+        "slides": [{**m, "is_plan": plan} for plan in (False, True) for m in pictures if _is_floorplan(m) == plan],
         "details": details_sections(listing.get("details")),
         "portal": portals.provider_label(listing["provider"]),
         # Only http(s) URLs become links/images; contact_url's output is checked as well.

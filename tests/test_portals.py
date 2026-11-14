@@ -1,6 +1,7 @@
 import pytest
 
-from app.portals import contact_url, fredy_url, provider_label, safe_url
+from app.portals import (MAPS_QUERY_MAX, contact_url, fredy_url, maps_embed_url, maps_query, maps_url, provider_label,
+                         safe_url)
 
 
 @pytest.mark.parametrize("url", [
@@ -141,3 +142,26 @@ def test_provider_label():
     assert provider_label("brandNewPortal") == "brandNewPortal"
     assert provider_label(None) == "?"
     assert provider_label("") == "?"
+
+
+@pytest.mark.parametrize("address,query", [
+    ("Venloer Straße 123, 50823 Köln, Ehrenfeld", "Venloer Straße 123, 50823 Köln, Ehrenfeld"),
+    ("50823 Koeln - Ehrenfeld", "50823 Koeln - Ehrenfeld"),
+    ("Ehrenfeld, KÖLN", "Ehrenfeld, KÖLN"),
+    ("Ehrenfeld, Köln", "Ehrenfeld, Köln"),  # decomposed umlaut: normalized, still found
+    ("Ehrenfeld", "Ehrenfeld, Köln"),  # all searches are in Köln
+    ("  Neusser   Str. 5\n50670 ", "Neusser Str. 5 50670, Köln"),
+    ("", None), ("   ", None), (None, None), (42, None),
+])
+def test_maps_query(address, query):
+    assert maps_query(address) == query
+
+
+def test_maps_urls_are_encoded():
+    assert maps_url("Venloer Straße 123, 50823 Köln") == (
+        "https://www.google.com/maps/search/?api=1&query=Venloer%20Stra%C3%9Fe%20123%2C%2050823%20K%C3%B6ln")
+    assert maps_embed_url("Ehrenfeld") == "https://maps.google.com/maps?q=Ehrenfeld%2C%20K%C3%B6ln&z=15&output=embed"
+    # Nothing in the address can add parameters or leave the query.
+    assert maps_url("A&b=1#x?/") == "https://www.google.com/maps/search/?api=1&query=A%26b%3D1%23x%3F%2F%2C%20K%C3%B6ln"
+    assert len(maps_query("x" * 1000)) == MAPS_QUERY_MAX + len(", Köln")
+    assert maps_url(None) is None and maps_embed_url("") is None

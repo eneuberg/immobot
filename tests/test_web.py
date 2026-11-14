@@ -110,6 +110,10 @@ def test_security_headers(client):
     assert r.headers["referrer-policy"] == "same-origin"  # no-referrer makes browsers send Origin: null
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
     assert r.headers["strict-transport-security"] == "max-age=31536000; includeSubDomains"
+    # Frames only for the map on the listing page (maps.google.com redirects to www.google.com/maps/embed).
+    directives = dict(d.strip().split(" ", 1) for d in r.headers["content-security-policy"].split(";"))
+    assert directives["frame-src"] == "https://maps.google.com https://www.google.com"
+    assert directives["default-src"] == "'self'" and directives["img-src"] == "'self' https: data:"
 
 
 @pytest.mark.parametrize("method,path", [
@@ -1795,16 +1799,26 @@ def test_listing_page_shows_gallery_and_details(client):
     login(client)
     lid = add_listing(provider="immoscout", url=IS24_URL, description="Kurzer Fredy-Text")
     page = client.get(f"/listing/{lid}").text
-    assert 'Bilder <span class="count">0</span>' in page and "Bilder &amp; Details laden" in page
+    # Nothing loaded yet: the empty box in the picture's place, with the load button and its help text under it.
+    assert 'id="bilder"' in page and "Noch keine Bilder geladen" in page and 'class="carousel"' not in page
+    assert "Bilder &amp; Details laden" in page and "Holt das Exposé und alle Bilder von ImmoScout24" in page
     assert "Kurzer Fredy-Text" in page
-    store_listing_pictures(lid, ["Grundriss", "<b>Balkon</b>"])
+    store_listing_pictures(lid, ["Grundriss", "<b>Balkon</b>", "Bad"])
     db.set_listing_details(lid, "Zimmer: 3\n## Objektbeschreibung\nVoller Text", "Frau Erika Mustermann")
     page = client.get(f"/listing/{lid}").text
-    assert 'Bilder <span class="count">2</span>' in page and "Bilder &amp; Details laden" not in page
-    assert f'<img src="/listing/{lid}/media/1"' in page and f'href="/listing/{lid}/media/2"' in page
+    assert "3 Bilder" in page and "von ImmoScout24 geladen" in page and "Bilder &amp; Details laden" not in page
     assert "1 · Grundriss" in page and "&lt;b&gt;Balkon&lt;/b&gt;" in page and "<b>Balkon</b>" not in page
-    # The big picture at the top skips the floor plan (IS24 sorts floor plans first).
-    assert re.search(rf'class="hero" href="/listing/{lid}/media/2"[^>]*>\s*<img src="/listing/{lid}/media/2"', page)
+    # All pictures in the carousel at the top, none further down; photos first (IS24 sorts floor plans first), the
+    # floor plan last. Only the first picture loads at once.
+    head, rest = page.split('<div class="lh-body">', 1)
+    assert 'class="gallery' not in page and "/media/" not in rest
+    slides = re.findall(r'<a class="cr-slide([^"]*)" href="/listing/\d+/media/(\d)"[^>]*>\s*<img ([^>]*)>', head)
+    assert [(cls, pos) for cls, pos, _ in slides] == [("", "2"), ("", "3"), (" is-plan", "1")]
+    assert ['loading="lazy"' in img for _, _, img in slides] == [False, True, True]
+    assert head.count("data-lightbox ") == 3 and "data-lightbox-group" in head
+    assert '<span class="cr-count" aria-hidden="true">1 / 3</span>' in head and ">3 / 3</span>" in head
+    assert 'aria-label="Bild 3 von 3: 1 · Grundriss"' in head
+    assert head.count("data-carousel-prev hidden") == 1 and head.count("data-carousel-next hidden") == 1
     # Details as a card: contact person and key facts as <dl class="facts">, then the titled sections.
     assert "<dt>Ansprechperson</dt><dd>Frau Erika Mustermann</dd>" in page and "<dt>Zimmer</dt><dd>3</dd>" in page
     assert "<h3>Objektbeschreibung</h3>" in page and "Voller Text" in page
@@ -1812,6 +1826,7 @@ def test_listing_page_shows_gallery_and_details(client):
     db.set_media_state(lid, db.now_iso(), "Bilder-Server lehnt ab (HTTP 429) – abgebrochen.")
     page = client.get(f"/listing/{lid}").text
     assert "⚠ Bilder-Server lehnt ab (HTTP 429)" in page and "Erneut versuchen" in page
+    assert page.index('class="carousel"') < page.index("Bilder-Server lehnt ab") < page.index('<div class="lh-body">')
 
 
 def test_listing_page_without_is24_has_no_gallery(client):
@@ -1819,6 +1834,42 @@ def test_listing_page_without_is24_has_no_gallery(client):
     lid = add_listing()  # immowelt
     page = client.get(f"/listing/{lid}").text
     assert 'id="bilder"' not in page and "Bilder &amp; Details laden" not in page
+    assert 'class="lh-media"' not in page and "has-image" not in page  # no picture at all: no picture column
+
+
+def test_listing_page_single_slide_from_fredy_image_url(client):
+    login(client)
+    lid = add_listing(image_url="https://img.example/title.jpg")  # immowelt, no picture source of our own
+    head = client.get(f"/listing/{lid}").text.split('<div class="lh-body">', 1)[0]
+    assert 'class="lh-grid has-image"' in head and 'id="bilder"' not in head
+    assert re.search(r'<a class="cr-slide" href="https://img.example/title.jpg" target="_blank" rel="noopener noreferrer" '
+                     r'data-lightbox data-caption="Titelbild">\s*<img src="https://img.example/title.jpg" alt="Bild zum '
+                     r'Inserat" referrerpolicy="no-referrer" decoding="async">', head)
+    assert "cr-count" not in head and "data-carousel-prev" not in head  # one picture: no counter, no arrows
+    for bad in ("javascript:alert(1)", "/relative.jpg"):  # only http(s) URLs (safe_url)
+        lid = add_listing(fredy_id=f"x-{bad}", image_url=bad)
+        assert 'class="lh-media"' not in client.get(f"/listing/{lid}").text
+
+
+def test_listing_page_map(client):
+    login(client)
+    lid = add_listing(address="Venloer Straße 123, 50823 Köln, Ehrenfeld")
+    page = client.get(f"/listing/{lid}").text
+    query = "Venloer%20Stra%C3%9Fe%20123%2C%2050823%20K%C3%B6ln%2C%20Ehrenfeld"
+    link = f"https://www.google.com/maps/search/?api=1&amp;query={query}"
+    assert f'<a class="map-open" href="{link}" target="_blank" rel="noopener noreferrer">In Google Maps öffnen ↗</a>' in page
+    # The embed sits only in a data attribute (app.js sets the iframe on opening): no request to Google before.
+    assert f'data-map-src="https://maps.google.com/maps?q={query}&amp;z=15&amp;output=embed"' in page
+    assert "<iframe" not in page and "<summary>🗺 Karte</summary>" in page
+    assert page.index('class="lh-addr"') < page.index('class="lh-map"') < page.index('class="facts"')
+    # Without the city the search would land anywhere: ", Köln" is added.
+    lid = add_listing(fredy_id="x2", address="Ehrenfeld <b>&")
+    page = client.get(f"/listing/{lid}").text
+    assert "query=Ehrenfeld%20%3Cb%3E%26%2C%20K%C3%B6ln" in page and "<b>&" not in page
+    for address in (None, "", "   "):
+        lid = add_listing(fredy_id=f"x-{address!r}", address=address)
+        page = client.get(f"/listing/{lid}").text
+        assert "lh-map" not in page and "google.com" not in page
 
 
 def test_media_route(client):

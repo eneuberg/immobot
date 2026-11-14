@@ -414,8 +414,6 @@ details.howto p { font-size: .88rem; margin: .4rem 0 0; color: var(--pico-muted-
 /* ---------- listing detail ---------- */
 .listing-head { padding: 0; overflow: hidden; }
 .listing-head .lh-grid { display: grid; }
-.hero { display: block; position: relative; aspect-ratio: 16 / 10; background: var(--surface-2); overflow: hidden; }
-.hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .lh-body { padding: 1rem; }
 .lh-top { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .6rem; margin-bottom: .45rem; font-size: .82rem; color: var(--pico-muted-color); }
 .listing-head h1 { --pico-font-size: 1.35rem; margin: 0 0 .3rem; overflow-wrap: anywhere; }
@@ -447,11 +445,90 @@ details.howto p { font-size: .88rem; margin: .4rem 0 0; color: var(--pico-muted-
 }
 @media (min-width: 900px) {
   .listing-head .lh-grid.has-image { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); }
-  .lh-grid.has-image .hero { aspect-ratio: auto; min-height: 100%; }
   .lh-grid.has-image .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lh-body { padding: 1.35rem 1.5rem; }
   .listing-head h1 { --pico-font-size: 1.6rem; }
 }
+
+/* ---- listing detail: picture carousel (begin) -- listing.html .lh-media, app.js "picture carousel" ----
+   One picture per view in a strip that scrolls sideways (scroll-snap; touch and trackpads scroll natively, also
+   without JS). A fixed 4:3 box, so nothing jumps while the pictures load; beside the text (≥ 900px) it fills the
+   column's height. Arrows only with JS (hidden until app.js shows them) and not on touch screens. */
+.lh-media { display: flex; flex-direction: column; min-width: 0; }
+.carousel, .cr-empty { position: relative; aspect-ratio: 4 / 3; background: var(--surface-2); overflow: hidden; }
+.cr-track {
+  position: absolute; inset: 0; display: flex; overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x mandatory; scroll-behavior: smooth; overscroll-behavior-x: contain; scrollbar-width: none;
+}
+.cr-track::-webkit-scrollbar { display: none; }
+html:not(.js) .cr-track { scrollbar-width: thin; }  /* without JS the scrollbar is the way to the next picture */
+html:not(.js) .cr-track::-webkit-scrollbar { display: block; height: 8px; }
+.cr-slide {
+  position: relative; flex: 0 0 100%; height: 100%; display: block; scroll-snap-align: start; scroll-snap-stop: always;
+  color: #fff; text-decoration: none; cursor: zoom-in;
+}
+.cr-slide:hover { color: #fff; }
+.cr-slide img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cr-slide.is-plan img { object-fit: contain; background: #fff; padding: .6rem .6rem 2.2rem; }  /* floor plans whole */
+.cr-slide:focus-visible { outline: none; }
+.cr-slide:focus-visible::after { content: ""; position: absolute; inset: 0; box-shadow: inset 0 0 0 3px var(--accent); }
+.cr-count {
+  position: absolute; top: .6rem; right: .6rem; padding: .1rem .55rem; border-radius: 999px; background: rgba(0, 0, 0, .58);
+  color: #fff; font-size: .78rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.6;
+}
+.cr-caption {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 1.75rem .9rem .55rem; font-size: .85rem; line-height: 1.3;
+  background: linear-gradient(transparent, rgba(0, 0, 0, .66)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cr-btn {
+  position: absolute; top: 50%; transform: translateY(-50%); margin: 0; padding: 0 0 .15rem; width: 2.5rem; height: 2.5rem;
+  display: grid; place-items: center; border: 0; border-radius: 50%; font-size: 1.6rem; line-height: 1;
+  background: rgba(255, 255, 255, .9); color: #1b1f24; box-shadow: 0 1px 5px rgba(0, 0, 0, .3);
+}
+.cr-btn:hover, .cr-btn:active { background: #fff; color: #1b1f24; }
+.cr-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cr-btn[hidden] { display: none; }
+.cr-prev { left: .6rem; }
+.cr-next { right: .6rem; }
+@media (hover: none) and (pointer: coarse) { .cr-btn { display: none; } }  /* phones: swipe */
+.cr-empty { display: grid; place-content: center; justify-items: center; gap: .25rem; color: var(--pico-muted-color); font-size: .92rem; }
+.cr-empty > span:first-child { font-size: 2rem; opacity: .55; }
+/* under the pictures: count and source, "Bilder laden" / "Erneut versuchen", the error, the help text */
+.lh-media > .cr-bar, .lh-media > .flash, .lh-media > .help { margin: .6rem 1rem 0; }
+.lh-media > :last-child:not(.carousel):not(.cr-empty) { margin-bottom: .1rem; }
+.cr-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .4rem .75rem; }
+.cr-source { margin: 0; font-size: .84rem; }
+.cr-bar form { margin: 0; }
+.cr-bar button { margin: 0; padding: .35rem .85rem; font-size: .86rem; width: auto; }
+.lh-media > .help { font-size: .82rem; }
+@media (min-width: 900px) {
+  .lh-grid.has-image .carousel, .lh-grid.has-image .cr-empty { flex: 1 0 auto; }
+  .lh-media > :last-child:not(.carousel):not(.cr-empty) { margin-bottom: 1rem; }
+}
+/* ---- listing detail: picture carousel (end) ---- */
+
+/* ---- listing detail: map (begin) -- listing.html .lh-map, app.js "map" ----
+   "🗺 Karte" (a <details>) with "In Google Maps öffnen ↗" floating beside it; the map opens below both. */
+.lh-map { display: flow-root; margin: -.35rem 0 .95rem; }
+.map-open { float: right; margin-left: .75rem; font-size: .86rem; line-height: 2.1rem; }
+.map-toggle { margin: 0; }
+.map-toggle > summary {
+  display: inline-flex; align-items: center; gap: .3rem; padding: .3rem .8rem; font-size: .86rem; font-weight: 600; line-height: 1.4;
+  border: 1px solid var(--pico-form-element-border-color); border-radius: 999px; color: var(--text); background: var(--pico-card-background-color);
+}
+.map-toggle > summary::after { float: none; margin-inline-start: .1rem; width: .85rem; height: .85rem; background-size: .85rem auto; }
+.map-toggle > summary:hover { background: var(--surface-2); }
+.map-toggle > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.map-toggle[open] > summary { margin-bottom: .6rem; background: var(--accent-soft); border-color: transparent; color: var(--accent-strong); }
+.map-frame {
+  clear: both; height: clamp(240px, 62vw, 300px); border: 1px solid var(--pico-card-border-color); border-radius: var(--radius-sm);
+  overflow: hidden; background: var(--surface-2);
+}
+.map-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
+.map-nojs { margin: 0; padding: 1rem; font-size: .88rem; color: var(--pico-muted-color); }
+.js .map-nojs { display: none; }  /* app.js replaces it with the map */
+/* ---- listing detail: map (end) ---- */
+
 .description { font-size: .95rem; line-height: 1.6; }
 
 /* exposé details (ImmoScout24): key facts, label/value lists, text sections */

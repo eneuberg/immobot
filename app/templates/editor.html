@@ -35,7 +35,9 @@
   <header class="ed-head">
     <div class="ed-top">{{ status_badge(listing.status) }}<span class="chip">{{ portal }}</span></div>
     <h1>{{ listing.title or "(ohne Titel)" }}</h1>
-    {% if facts %}<p class="ed-facts">{{ facts|join(" · ") }}</p>{% endif %}
+    {% set map_link = listing.address|maps_url %}
+    {% if facts %}<p class="ed-facts">{{ facts|join(" · ") }}
+      {%- if map_link %} · <a href="{{ map_link }}" target="_blank" rel="noopener noreferrer">In Google Maps öffnen ↗</a>{% endif %}</p>{% endif %}
     {% if contact_url or logged_in %}
     <div class="ed-links">
       {% set ask_open = contact_url and (not session or session.status != "done") and listing.status not in ("sent", "dismissed") %}

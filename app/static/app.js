@@ -215,6 +215,10 @@
     boxCaption = box.querySelector(".lb-caption");
     boxCount = box.querySelector(".lb-count");
     box.querySelector(".lb-close").addEventListener("click", function () { box.close(); });
+    // Tell the link of the picture shown last (the carousel then shows that one too).
+    box.addEventListener("close", function () {
+      if (group[index]) group[index].dispatchEvent(new CustomEvent("lightboxclose", { bubbles: true }));
+    });
     box.querySelector(".lb-prev").addEventListener("click", function () { show(index - 1); });
     box.querySelector(".lb-next").addEventListener("click", function () { show(index + 1); });
     box.addEventListener("click", function (e) { if (e.target === box || e.target.tagName === "FIGURE") box.close(); });
@@ -254,8 +258,9 @@
   function openLightbox(link) {
     if (typeof HTMLDialogElement !== "function") { window.open(link.href, "_blank", "noopener"); return; }
     if (!box) buildLightbox();
-    // Group: the link's own .gallery, or the one named in data-gallery (the big picture at the top).
-    var scope = link.closest(".gallery") || (link.dataset.gallery ? document.querySelector(link.dataset.gallery) : null);
+    // Group: the link's own .gallery or [data-lightbox-group] (the carousel), or the one named in data-gallery.
+    var scope = link.closest(".gallery, [data-lightbox-group]") ||
+      (link.dataset.gallery ? document.querySelector(link.dataset.gallery) : null);
     group = scope ? Array.prototype.slice.call(scope.querySelectorAll("a[data-lightbox]")) : [link];
     var i = group.indexOf(link);
     if (i < 0) i = group.map(function (a) { return a.href; }).indexOf(link.href);
@@ -335,4 +340,78 @@
     dlg.addEventListener("click", function (e) { if (e.target === dlg) dlg.close(); });
     back();
   });
+
+  // ---- Listing page: picture carousel (begin) ----------------------------------------------------------------
+  // <div data-carousel> around a scroll-snap strip (.cr-track) of <a data-lightbox> slides (listing.html). The strip
+  // scrolls by itself (touch, trackpad, without JS too); this adds the arrow buttons, ←/→/Home/End on a focused
+  // picture, one tab stop for the whole strip and loading the next picture ahead. A click opens the lightbox with the
+  // whole set (group: data-lightbox-group); after it the carousel shows the picture seen last.
+  function setupCarousel(root) {
+    var track = root.querySelector(".cr-track");
+    var slides = Array.prototype.slice.call(track.querySelectorAll(".cr-slide"));
+    var prev = root.querySelector("[data-carousel-prev]"), next = root.querySelector("[data-carousel-next]");
+    var current = -1;
+    if (!slides.length) return;
+
+    function clamp(i) { return Math.max(0, Math.min(slides.length - 1, i)); }
+    function update() {
+      var i = clamp(Math.round(track.scrollLeft / (track.clientWidth || 1)));
+      if (i === current) return;
+      current = i;
+      slides.forEach(function (slide, k) { slide.tabIndex = k === i ? 0 : -1; });
+      var ahead = slides[i + 1] && slides[i + 1].querySelector("img[loading=lazy]");
+      if (ahead) ahead.loading = "eager";
+      if (prev) prev.hidden = i === 0;
+      if (next) next.hidden = i === slides.length - 1;
+    }
+    function go(i, opts) {
+      i = clamp(i);
+      track.scrollTo({ left: i * track.clientWidth, behavior: opts && opts.instant ? "instant" : "auto" });  // auto: CSS (smooth)
+      if (opts && opts.focus) slides[i].focus({ preventScroll: true });
+    }
+    function step(button, delta) {
+      var target = clamp(current + delta);
+      // The button disappears at either end: then the picture keeps the focus.
+      go(target, { focus: target === 0 || target === slides.length - 1 ? document.activeElement === button : false });
+    }
+
+    track.addEventListener("scroll", update, { passive: true });
+    if (prev) prev.addEventListener("click", function () { step(prev, -1); });
+    if (next) next.addEventListener("click", function () { step(next, 1); });
+    root.addEventListener("keydown", function (e) {
+      if (!e.target.closest(".cr-slide") || e.altKey || e.ctrlKey || e.metaKey) return;
+      var to = { ArrowLeft: current - 1, ArrowRight: current + 1, Home: 0, End: slides.length - 1 }[e.key];
+      if (to === undefined) return;
+      e.preventDefault();
+      go(to, { focus: true });
+    });
+    root.addEventListener("lightboxclose", function (e) {
+      var i = slides.indexOf(e.target);
+      if (i >= 0) go(i, { instant: true, focus: root.contains(document.activeElement) });
+    });
+    if (slides.length > 1) [prev, next].forEach(function (b) { if (b) b.hidden = false; });
+    update();
+  }
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("[data-carousel]").forEach(setupCarousel);
+  });
+  // ---- Listing page: picture carousel (end) ------------------------------------------------------------------
+
+  // ---- Listing page: map (begin) -----------------------------------------------------------------------------
+  // <details data-map-src> ("🗺 Karte", listing.html): Google's iframe goes in only when it is opened, so loading the
+  // page sends nothing to Google. "toggle" doesn't bubble: caught in the capture phase.
+  document.addEventListener("toggle", function (e) {
+    var details = e.target;
+    if (!details.open || !details.matches || !details.matches("details[data-map-src]") || details.querySelector("iframe")) return;
+    var frame = details.querySelector(".map-frame");
+    var iframe = document.createElement("iframe");
+    iframe.title = details.dataset.mapTitle || "Karte";
+    iframe.setAttribute("referrerpolicy", "no-referrer");
+    iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox");
+    iframe.setAttribute("allowfullscreen", "");
+    iframe.src = details.dataset.mapSrc;
+    frame.textContent = "";
+    frame.appendChild(iframe);
+  }, true);
+  // ---- Listing page: map (end) -------------------------------------------------------------------------------
 })();
