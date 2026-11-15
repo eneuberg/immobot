@@ -432,14 +432,32 @@ AUTOSAVE_DENIED = {
 AUTOSAVE_STALE = "Seite nicht mehr aktuell."
 
 
-# "Überarbeiten lassen" with only ❤️ / "Was weißt/magst du?" changed: the request Claude gets (and the Verlauf shows).
-PERSONAL_REVISION = ("Greif im ersten Absatz auf, was ich selbst zu dieser Wohnung sage (siehe <persoenlich>). "
-                     "Der Rest bleibt, wie er ist.")
+# "Überarbeiten lassen" with only "Wie viel Mühe?" / "Was findest du gut?" changed: the request Claude gets (and the
+# Verlauf shows), by the new level and whether she wrote a line. Only the first paragraph changes.
+PERSONAL_REVISION_KEEP = " Der Rest bleibt, wie er ist."
+PERSONAL_REVISION = {
+    1: "Schreib den ersten Absatz ehrlicher und sachlicher (siehe <persoenlich>): echtes Interesse, aber keine "
+       "Begeisterung, die ich nicht habe.",
+    2: "Greif im ersten Absatz auf, was ich selbst zu dieser Wohnung sage (siehe <persoenlich>).",
+    3: "Gib dir im ersten Absatz mehr Mühe (siehe <persoenlich>): Nenn konkret, was an dieser Wohnung gut ist{words}.",
+}
+PERSONAL_REVISION_PLAIN = ("Schreib den ersten Absatz in normalem Ton, ohne besondere Zurückhaltung und ohne extra "
+                           "Persönliches.")
 
 
-def _store_personal(listing_id: int, personal: str, own_words: str, dream: str) -> bool:
-    """The form had the ❤️ / "Was weißt/magst du?" fields (personal=1): store them. Returns whether they changed."""
-    return personal == "1" and db.set_personal(listing_id, own_words, dream == "1")
+def personal_revision(listing: dict) -> str:
+    """The request for a changed level / line alone (PERSONAL_REVISION)."""
+    level, words = db.effort_of(listing), bool((listing.get("own_words") or "").strip())
+    if level == 2 and not words:  # back to normal without a line: no <persoenlich> block to point at
+        return PERSONAL_REVISION_PLAIN + PERSONAL_REVISION_KEEP
+    text = PERSONAL_REVISION[level].replace("{words}", ", und bring ein, was ich selbst dazu sage" if words else "")
+    return text + PERSONAL_REVISION_KEEP
+
+
+def _store_personal(listing_id: int, personal: str, own_words: str, effort_level: str) -> bool:
+    """The form had the "Wie viel Mühe?" / "Was findest du gut?" fields (personal=1): store them. Returns whether
+    they changed."""
+    return personal == "1" and db.set_personal(listing_id, own_words, db.parse_effort(effort_level))
 
 
 def _wants_json(request: Request) -> bool:
@@ -472,7 +490,7 @@ async def editor_load_media(request: Request, listing_id: str, token: str = Form
 
 @router.post("/editor/{listing_id}/save", dependencies=ACTION)
 def editor_save(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
-                text: str = Form(""), personal: str = Form(""), own_words: str = Form(""), dream: str = Form("")):
+                text: str = Form(""), personal: str = Form(""), own_words: str = Form(""), effort_level: str = Form("")):
     """Autosave from editor.js (JSON in, see _autosave_answer), or "Zwischenspeichern" without JS (redirect)."""
     autosave = _wants_json(request)
     listing, mode, denied = _gate(request, listing_id, token)
@@ -481,7 +499,7 @@ def editor_save(request: Request, listing_id: str, token: str = Form(""), sessio
             return denied
         status = 401 if isinstance(denied, RedirectResponse) else denied.status_code  # redirect: not logged in
         return _autosave_answer(status, AUTOSAVE_DENIED.get(status, AUTOSAVE_DENIED[403]))
-    _store_personal(listing["id"], personal, own_words, dream)
+    _store_personal(listing["id"], personal, own_words, effort_level)
     session = _current_session(listing, session_id)
     if session is None or session["status"] != "open":  # another tab started a new round or pressed "Fertig"
         return _autosave_answer(409, AUTOSAVE_STALE, stale=True) if autosave else _stale(request, listing, mode, text)
@@ -499,18 +517,18 @@ def editor_save(request: Request, listing_id: str, token: str = Form(""), sessio
 @router.post("/editor/{listing_id}/revise", dependencies=ACTION)
 async def editor_revise(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
                         text: str = Form(""), critique: str = Form(""), personal: str = Form(""),
-                        own_words: str = Form(""), dream: str = Form("")):
+                        own_words: str = Form(""), effort_level: str = Form("")):
     """"Überarbeiten lassen": synchronous, a draft takes 10-60 s. The hand edits are saved first in any case.
-    A changed ❤️ / "Was weißt/magst du?" goes into the prompt (llm.personal_block); changed without a critique,
-    Claude is asked to work it into the first paragraph (PERSONAL_REVISION)."""
+    A changed "Wie viel Mühe?" / "Was findest du gut?" goes into the prompt (llm.personal_block); changed without a
+    critique, Claude is asked to rework the first paragraph for it (personal_revision)."""
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
         return denied
     session = _current_session(listing, session_id)
     if session is None:
         return _stale(request, listing, mode, text)
-    if _store_personal(listing["id"], personal, own_words, dream) and not critique.strip():
-        critique = PERSONAL_REVISION
+    if _store_personal(listing["id"], personal, own_words, effort_level) and not critique.strip():
+        critique = personal_revision(db.get_listing(listing["id"]))
     try:
         learning.save_text(session["id"], text)
         await learning.revise_in_editor(session["id"], text, critique)
@@ -543,7 +561,7 @@ def editor_revision(request: Request, listing_id: str, token: str = Form(""), se
 @router.post("/editor/{listing_id}/quick", dependencies=ACTION)
 async def editor_quick(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
                        text: str = Form(""), critique: str = Form(""), kind: str = Form(""),
-                       personal: str = Form(""), own_words: str = Form(""), dream: str = Form("")):
+                       personal: str = Form(""), own_words: str = Form(""), effort_level: str = Form("")):
     """A quick button (learning.quick_in_editor): Claude shortens or formalises the current text like Telegram's
     buttons, or writes a new draft that starts a new round. Hand edits are saved first; a critique typed into the
     field but not sent stays there afterwards."""
@@ -553,7 +571,7 @@ async def editor_quick(request: Request, listing_id: str, token: str = Form(""),
     session = _current_session(listing, session_id)
     if session is None:
         return _stale(request, listing, mode, text)
-    _store_personal(listing["id"], personal, own_words, dream)
+    _store_personal(listing["id"], personal, own_words, effort_level)
     try:
         learning.save_text(session["id"], text)
         await learning.quick_in_editor(session["id"], text, kind)
@@ -588,7 +606,7 @@ async def _propose_rules(session_id: int) -> None:
 @router.post("/editor/{listing_id}/finish", dependencies=ACTION)
 async def editor_finish(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
                         text: str = Form(""), critique: str = Form(""), copied: str = Form(""),
-                        personal: str = Form(""), own_words: str = Form(""), dream: str = Form("")):
+                        personal: str = Form(""), own_words: str = Form(""), effort_level: str = Form("")):
     """"Kopieren & Inserat öffnen" (copied=1: editor.js copied the text and opened the ad first): store the final
     version; with "Gelernte Regeln nutzen" on, Claude looks for rules in the background. A critique still in its
     field (typed, but "Überarbeiten lassen" not pressed) is kept as a note for learning."""
@@ -598,7 +616,7 @@ async def editor_finish(request: Request, listing_id: str, token: str = Form("")
     session = _current_session(listing, session_id)
     if session is None:
         return _stale(request, listing, mode, text)
-    _store_personal(listing["id"], personal, own_words, dream)
+    _store_personal(listing["id"], personal, own_words, effort_level)
     try:
         session = learning.finish(session["id"], text, note=critique)
     except Exception as exc:
@@ -762,11 +780,11 @@ async def editor_restore(request: Request, listing_id: str, token: str = Form(""
 
 @router.post("/editor/{listing_id}/draft", dependencies=ACTION)
 async def editor_create_draft(request: Request, listing_id: str, token: str = Form(""), personal: str = Form(""),
-                              own_words: str = Form(""), dream: str = Form("")):
+                              own_words: str = Form(""), effort_level: str = Form("")):
     """Start the first draft in the background (drafting.start: nothing if there is one or it is being written).
     editor.js posts it as soon as the page shows "no draft yet" (and for "Nochmal versuchen") and gets the job's
     status as JSON; without JS the button "Anschreiben schreiben lassen" posts it and comes back to the progress
-    bar. The optional ❤️ and "Was weißt/magst du?" are stored first, so this first draft already uses them."""
+    bar. The optional "Wie viel Mühe?" and "Was findest du gut?" are stored first, so this first draft uses them."""
     wants_json = _wants_json(request)
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
@@ -775,7 +793,7 @@ async def editor_create_draft(request: Request, listing_id: str, token: str = Fo
         status = 401 if isinstance(denied, RedirectResponse) else denied.status_code
         return JSONResponse({"state": "denied", "error": AUTOSAVE_DENIED.get(status, AUTOSAVE_DENIED[403])},
                             status_code=status)
-    _store_personal(listing["id"], personal, own_words, dream)
+    _store_personal(listing["id"], personal, own_words, effort_level)
     drafting.start(listing["id"])
     if wants_json:
         return editor_draft_status(request, str(listing["id"]))

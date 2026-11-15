@@ -30,10 +30,10 @@
         {%- if l.size %}<span>{{ l.size }}</span>{% endif %}
       </div>
       {% if c.district %}<span class="lc-addr">{{ icon("pin") }}{{ c.district }}</span>{% endif %}
-      {% if c.tags or c.dream %}
-      {# Word flags from the ad (triage.py): what speaks against it first, then good to know. ❤️: set by the person. #}
+      {% if c.tags or c.effort %}
+      {# Word flags from the ad (triage.py): what speaks against it first, then good to know. "Volle Mühe": set by the person. #}
       <ul class="lc-tags" aria-label="Auffällig im Inserat">
-        {%- if c.dream %}<li class="lc-tag is-dream">❤️ Traumwohnung</li>{% endif %}
+        {%- if c.effort %}<li class="lc-tag is-effort">{{ c.effort }}</li>{% endif %}
         {%- for t in c.tags %}<li class="lc-tag is-{{ t.kind }}">{{ t.label }}</li>{% endfor %}
       </ul>
       {% endif %}

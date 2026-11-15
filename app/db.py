@@ -276,9 +276,12 @@ ADDED_COLUMNS = {
         ("discard_auto", "INTEGER NOT NULL DEFAULT 0"),
         ("discard_prev", "TEXT"),
         # What only the person knows, for this one letter (listing page, editor; llm.build_user_text <persoenlich>):
-        # one line in her own words ("kenne die Ecke, Garten ist super") and ❤️ Traumwohnung (1) or not (0).
+        # one line in her own words ("kenne die Ecke, Garten ist super") and "Wie viel Mühe?" (EFFORT_LEVELS:
+        # 1 Ehrlich, 2 Normal, 3 Volle Mühe; NULL = 2). dream (❤️ Traumwohnung, 1/0) came before effort_level and is
+        # only read once, by the migration (dream 1 -> level 3); kept so older versions still find their column.
         ("own_words", "TEXT"),
         ("dream", "INTEGER NOT NULL DEFAULT 0"),
+        ("effort_level", "INTEGER"),
     ],
     "listing_media": [("floor_plan", "INTEGER NOT NULL DEFAULT 0")],
     "drafts": [
@@ -352,6 +355,8 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE listings SET seen_at = updated_at WHERE status != 'new' OR auto_status = 'kept'")
     if ("listings", "sent_at") in added:  # until now the last change was the best date of sending
         conn.execute("UPDATE listings SET sent_at = updated_at WHERE status = 'sent'")
+    if ("listings", "effort_level") in added:  # ❤️ Traumwohnung became "Volle Mühe"
+        conn.execute("UPDATE listings SET effort_level = 3 WHERE dream = 1")
     if ("listings", "discard_reason") in added:
         # "uninteressant" was a status until now: it becomes aussortiert (automatically if auto_status said so), and the
         # status underneath is the best guess of where the listing was: "Entwurf" with drafts, else "Gesehen" if it
@@ -610,14 +615,37 @@ def restore(listing_id: int) -> bool:
 OWN_WORDS_MAX = 300
 
 
-def set_personal(listing_id: int, own_words: str | None, dream: bool) -> bool:
-    """The listing's ❤️ and "Was weißt/magst du?" line (one line, at most OWN_WORDS_MAX characters; "" = none).
-    Returns whether anything changed."""
+# "Wie viel Mühe?" per listing (macros.personal_fields, llm.personal_block): how much personality the first
+# paragraph gets, from honest and matter-of-fact to concrete about what is great and something of her own.
+EFFORT_LEVELS = {1: "Ehrlich", 2: "Normal", 3: "Volle Mühe"}
+EFFORT_DEFAULT = 2
+
+
+def effort_of(listing: dict | None) -> int:
+    """The listing's level (EFFORT_LEVELS); NULL or anything odd counts as normal."""
+    value = (listing or {}).get("effort_level")
+    return value if value in EFFORT_LEVELS else EFFORT_DEFAULT
+
+
+def parse_effort(raw) -> int | None:
+    """A form value -> a level, or None when it isn't one ("", "7", "x": the stored level stays)."""
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value in EFFORT_LEVELS else None
+
+
+def set_personal(listing_id: int, own_words: str | None, effort: int | None = None) -> bool:
+    """The listing's "Was findest du gut?" line (one line, at most OWN_WORDS_MAX characters; "" = none) and its
+    "Wie viel Mühe?" level (None or not a level: stays as it is). Returns whether anything changed."""
     words = " ".join((own_words or "").split())[:OWN_WORDS_MAX] or None
+    level = effort if effort in EFFORT_LEVELS else None
     with connect() as conn:
-        cur = conn.execute("UPDATE listings SET own_words = ?, dream = ? WHERE id = ? "
-                           "AND (COALESCE(own_words, '') != COALESCE(?, '') OR dream != ?)",
-                           (words, 1 if dream else 0, listing_id, words, 1 if dream else 0))
+        cur = conn.execute("UPDATE listings SET own_words = ?, effort_level = COALESCE(?, effort_level) WHERE id = ? "
+                           "AND (COALESCE(own_words, '') != COALESCE(?, '') "
+                           "OR COALESCE(?, effort_level, ?) != COALESCE(effort_level, ?))",
+                           (words, level, listing_id, words, level, EFFORT_DEFAULT, EFFORT_DEFAULT))
         return cur.rowcount > 0
 
 

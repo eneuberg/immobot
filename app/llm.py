@@ -66,7 +66,8 @@ Die Nachricht soll klingen, als hätte die Person sie selbst am Handy geschriebe
 - Nichts aufbauschen („findet man selten“, „auf Anhieb verliebt“) und keine Erlebnisse erfinden („als ich die Bilder sah …“). Nur was im Profil oder im Inserat steht.
 - Selbstbewusst statt entschuldigend: Was nicht ganz passt, sachlich nennen oder weglassen.
 - Einfache Sätze mittlerer Länge, Kommas statt Gedankenstriche. Kein Satzmuster mehrmals hintereinander.
-- Die gelernten Vorlieben sind Tendenzen der Person, keine starren Regeln: Wende sie an, wo sie zum Inserat und zum Vermieter passen (privat und locker oder Hausverwaltung und seriös). Steht „immer“ davor, gilt sie immer."""
+- Der Ton richtet sich nach dem Inserat und dem Vermieter: Schreibt eine Firma oder Hausverwaltung, oder ist das Inserat steif und förmlich, dann seriös und höflich in Sie-Form. Schreibt eine Privatperson locker und persönlich, darf die Nachricht lockerer und wärmer klingen, bleibt aber höflich. Per Du nur, wenn das Inserat selbst duzt.
+- Die gelernten Vorlieben sind Tendenzen der Person, keine starren Regeln: Wende sie innerhalb dieses Tons an, wo sie zum Inserat und zum Vermieter passen. Steht „immer“ davor, gilt sie immer."""
 WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
 
 IMAGE_MAX_BYTES = 10 * 1024 * 1024
@@ -350,23 +351,39 @@ def today_line(now: datetime | None = None) -> str:
 _ANGLE = re.compile(r"[<>]")
 
 
+# "Wie viel Mühe?" (db.EFFORT_LEVELS) as guidance for the first paragraph. It describes how to write, never a
+# feeling to hand on to the landlord: he doesn't care whether it is her dream flat, only how the letter reads.
+# Level 2 (normal) adds nothing; level 3 asks for something personal from her own words when she gave some.
+EFFORT_GUIDANCE = {
+    1: ("Wie viel Mühe: ehrlich. Zeig echtes Interesse, aber keine Begeisterung, die sie nicht hat. Kurz und sachlich, mit "
+        "einem ehrlichen, konkreten Grund, warum die Wohnung zu ihr passt. Keine Superlative, keine Ausrufezeichen, "
+        "kein Schwärmen."),
+    3: ("Wie viel Mühe: volle Mühe. Nenn konkret, was an genau dieser Wohnung gut ist (aus dem Inserat), und bring etwas "
+        "Persönliches von ihr ein{words}. Der erste Absatz darf mehr Mühe und Persönlichkeit zeigen als sonst, "
+        "bleibt aber glaubwürdig: nichts übertreiben, nicht schwärmen."),
+}
+
+
 def personal_block(listing: dict) -> str | None:
-    """What only the person knows about this flat (listings.own_words, one line) and whether it is her ❤️
-    Traumwohnung (listings.dream), as a <persoenlich> block - or None when she gave neither. The AI evaluation
-    (ai-judge: own one-line context + love level won 6/10 openings, 9/10 sendable) showed this is the input that
-    makes a first paragraph sound like her; the rule against inventing keeps it from turning into a biography."""
+    """What only the person knows about this flat (listings.own_words, one line) and how much effort the letter
+    gets (listings.effort_level, EFFORT_GUIDANCE), as a <persoenlich> block - or None when she gave no words and
+    left the level at normal. The AI evaluation (ai-judge: own one-line context + love level won 6/10 openings,
+    9/10 sendable) showed this is the input that makes a first paragraph sound like her; the rule against
+    inventing keeps it from turning into a biography."""
     words = _ANGLE.sub("", " ".join(str(listing.get("own_words") or "").split()))
-    dream = bool(listing.get("dream"))
-    if not words and not dream:
+    guidance = EFFORT_GUIDANCE.get(db.effort_of(listing))
+    if not words and not guidance:
         return None
     lines = ["Das sagt die suchende Person selbst zu genau diesem Inserat:"]
-    if dream:
-        lines.append("- Das ist ihre Traumwohnung. Der Einstieg darf spürbar begeistert und persönlich sein, "
-                     "ohne zu übertreiben.")
     if words:
         lines.append("- In ihren Worten: „" + words + "“")
-    lines.append("Greif das im ersten Absatz in deinen eigenen Worten auf (nicht wörtlich abschreiben). Nutze nur diese "
-                 "Fakten – erfinde nichts dazu und dichte keine Erlebnisse, Gefühle oder Details an.")
+    if guidance:
+        lines.append("- " + guidance.replace("{words}", " (aus ihren Worten oben)" if words else
+                                             " (nur was im Profil steht und zu dieser Wohnung passt)"))
+    lines.append(("Greif ihre Worte im ersten Absatz in deinen eigenen Worten auf (nicht wörtlich abschreiben). "
+                  if words else "")
+                 + "Nutze nur diese Fakten, das Inserat und das Profil – erfinde nichts dazu und dichte keine "
+                 "Erlebnisse, Gefühle oder Details an.")
     return "<persoenlich>\n" + "\n".join(lines) + "\n</persoenlich>"
 
 

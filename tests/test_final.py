@@ -1,4 +1,4 @@
-"""ui-final: word flags on cards (triage.py), ❤️ + "Was weißt/magst du?" into the prompt (llm.personal_block),
+"""ui-final: word flags on cards (triage.py), "Wie viel Mühe?" + "Was findest du gut?" into the prompt (llm.personal_block),
 "Bewerbungen" (db.listing_outcomes, flow.py) and "So schreibe ich" (/stil, flow.py)."""
 
 from datetime import datetime, timedelta, timezone
@@ -55,39 +55,95 @@ def test_duplicates_by_street_and_price(fresh_db):
     assert triage.duplicates([]) == {}
 
 
-def test_card_shows_word_flags_and_heart(client):
+def test_card_shows_word_flags_and_the_effort_tag(client):
     login(client)
     lid_ = db.insert_listing({"fredy_id": "t1", "provider": "immoscout", "title": "Tauschwohnung mit Balkon",
                               "price": "700 €", "url": "https://portal.example/expose/9"})[0]
-    db.set_personal(lid_, "", True)
+    db.set_personal(lid_, "", 3)
     page = client.get("/").text
     card = page.split(f'id="l{lid_}"')[1].split('class="lc-toggle"')[0]
-    assert '<li class="lc-tag is-dream">❤️ Traumwohnung</li>' in card
+    assert '<li class="lc-tag is-effort">Volle Mühe</li>' in card and "Traumwohnung" not in card
     assert '<li class="lc-tag is-warn">Tauschwohnung</li>' in card and '<li class="lc-tag is-good">Balkon/Terrasse</li>' in card
+    for level in (1, 2):  # honest and normal: no tag
+        db.set_personal(lid_, "", level)
+        card = client.get("/").text.split(f'id="l{lid_}"')[1].split('class="lc-toggle"')[0]
+        assert "is-effort" not in card
 
 
-# --- ❤️ and "Was weißt/magst du?" ----------------------------------------------------------------------------------
+# --- "Wie viel Mühe?" and "Was findest du gut?" --------------------------------------------------------------------
 
 def test_personal_block_only_when_given():
     assert llm.personal_block(listing()) is None
-    block = llm.personal_block(listing(own_words="  kenne die Ecke,\n Garten <b>super</b> ", dream=1))
+    assert llm.personal_block(listing(effort_level=2)) is None  # normal and no words: nothing extra
+    block = llm.personal_block(listing(own_words="  kenne die Ecke,\n Garten <b>super</b> ", effort_level=3))
     assert block.startswith("<persoenlich>\n") and block.endswith("\n</persoenlich>")
-    assert "Traumwohnung" in block and "„kenne die Ecke, Garten bsuper/b“" in block  # one line, no tags
-    assert "erfinde nichts dazu" in block
+    assert "„kenne die Ecke, Garten bsuper/b“" in block  # one line, no tags
+    assert "Volle Mühe" not in block and "volle Mühe" in block and "erfinde nichts dazu" in block
     text = llm.build_user_text(listing(own_words="schon öfter in der Naumannsiedlung"), "initial")
     assert text.index("</inserat>") < text.index("<persoenlich>") < text.index("## Aufgabe")
-    assert "Traumwohnung" not in text
+    assert "Mühe" not in text  # words alone: the block as before, no level line
     assert "<persoenlich>" not in llm.build_user_text(listing(), "initial")
+
+
+def test_personal_block_per_level():
+    honest = llm.personal_block(listing(effort_level=1))
+    assert llm.EFFORT_GUIDANCE[1] in honest and "keine Begeisterung, die sie nicht hat" in honest
+    assert "Keine Superlative, keine Ausrufezeichen" in honest and "In ihren Worten" not in honest
+    assert "erfinde nichts dazu" in honest and "Greif ihre Worte" not in honest
+    full = llm.personal_block(listing(effort_level=3))
+    assert "Nenn konkret, was an genau dieser Wohnung gut ist (aus dem Inserat)" in full
+    assert "(nur was im Profil steht und zu dieser Wohnung passt)" in full and "nichts übertreiben" in full
+    full_words = llm.personal_block(listing(effort_level=3, own_words="Garten ist super"))
+    assert "(aus ihren Worten oben)" in full_words and "- In ihren Worten: „Garten ist super“" in full_words
+    assert llm.personal_block(listing(effort_level=2, own_words="Garten ist super")) == \
+        llm.personal_block(listing(own_words="Garten ist super"))
+    assert llm.personal_block(listing(effort_level=9)) is None  # odd values count as normal
+    for level in (1, 2, 3):
+        for words in ("", "Garten ist super"):
+            block = llm.personal_block(listing(effort_level=level, own_words=words)) or ""
+            assert "Traumwohnung" not in block and "begeistert" not in block
 
 
 def test_set_personal(fresh_db):
     lid_ = db.insert_listing({"fredy_id": "p1", "title": "A"})[0]
-    assert db.set_personal(lid_, "  Garten   ist super ", True) is True
+    assert db.effort_of(db.get_listing(lid_)) == 2  # NULL = normal
+    assert db.set_personal(lid_, "  Garten   ist super ", 3) is True
     row = db.get_listing(lid_)
-    assert (row["own_words"], row["dream"]) == ("Garten ist super", 1)
-    assert db.set_personal(lid_, "Garten ist super", True) is False  # nothing changed
-    assert db.set_personal(lid_, "x" * 500, False) is True and len(db.get_listing(lid_)["own_words"]) == db.OWN_WORDS_MAX
-    assert db.set_personal(lid_, " ", False) is True and db.get_listing(lid_)["own_words"] is None
+    assert (row["own_words"], row["effort_level"]) == ("Garten ist super", 3)
+    assert db.set_personal(lid_, "Garten ist super", 3) is False  # nothing changed
+    assert db.set_personal(lid_, "Garten ist super", None) is False  # no level: it stays
+    assert db.get_listing(lid_)["effort_level"] == 3
+    assert db.set_personal(lid_, "Garten ist super", 1) is True and db.get_listing(lid_)["effort_level"] == 1
+    assert db.set_personal(lid_, "x" * 500, 1) is True and len(db.get_listing(lid_)["own_words"]) == db.OWN_WORDS_MAX
+    assert db.set_personal(lid_, " ", 1) is True and db.get_listing(lid_)["own_words"] is None
+    other = db.insert_listing({"fredy_id": "p2", "title": "B"})[0]
+    assert db.set_personal(other, "", 2) is False  # NULL and normal are the same
+
+
+def test_effort_values_from_the_form():
+    assert [db.parse_effort(v) for v in ("1", " 2 ", "3")] == [1, 2, 3]
+    assert [db.parse_effort(v) for v in ("", "0", "4", "-1", "x", "2.5", None)] == [None] * 7
+    assert [db.effort_of({"effort_level": v}) for v in (None, 1, 3, 7, "3")] == [2, 1, 3, 2, 2]
+    assert db.effort_of(None) == 2
+
+
+def test_migration_turns_the_heart_into_full_effort(tmp_path):
+    """❤️ Traumwohnung (dream=1) becomes "Volle Mühe" on the run that adds effort_level; dream stays as it was."""
+    import sqlite3
+
+    db.init_db(str(tmp_path))
+    hearts = [db.insert_listing({"fredy_id": f"m{i}", "title": str(i)})[0] for i in range(3)]
+    conn = sqlite3.connect(tmp_path / "immobot.db")
+    conn.execute("ALTER TABLE listings DROP COLUMN effort_level")  # the database of the previous version
+    conn.execute("UPDATE listings SET dream = 1 WHERE id IN (?, ?)", (hearts[0], hearts[2]))
+    conn.commit()
+    conn.close()
+    db.init_db(str(tmp_path))
+    assert [db.get_listing(i)["effort_level"] for i in hearts] == [3, None, 3]
+    assert [db.get_listing(i)["dream"] for i in hearts] == [1, 0, 1]
+    db.set_personal(hearts[0], "", 1)
+    db.init_db(str(tmp_path))  # a restart: nothing migrated again
+    assert db.get_listing(hearts[0])["effort_level"] == 1
 
 
 def test_listing_page_main_action_takes_the_personal_input(client, lid, monkeypatch):
@@ -102,20 +158,28 @@ def test_listing_page_main_action_takes_the_personal_input(client, lid, monkeypa
     monkeypatch.setattr(llm, "create_and_store_draft", create)
     page = client.get(f"/listing/{lid}").text
     form = page.split(f'action="/listing/{lid}/draft"')[1].split("</form>")[0]
-    assert 'name="personal" value="1"' in form and 'name="dream"' in form and 'name="own_words"' in form
-    assert "Was weißt/magst du? (optional)" in form
-    r = client.post(f"/listing/{lid}/draft", data={"then": "editor", "personal": "1", "dream": "1",
+    assert 'name="personal" value="1"' in form and 'name="own_words"' in form and "Traumwohnung" not in form
+    assert "<legend>Wie viel Mühe?</legend>" in form
+    for value, label in ((1, "Ehrlich"), (2, "Normal"), (3, "Volle Mühe")):
+        assert f'id="lp-effort-{value}" name="effort_level" value="{value}"' in form
+        assert f'<label for="lp-effort-{value}">{label}</label>' in form
+    assert 'value="2" checked' in form and form.count(" checked") == 1  # normal by default
+    assert "Was findest du gut? Was soll Claude wissen? (optional)" in form
+    r = client.post(f"/listing/{lid}/draft", data={"then": "editor", "personal": "1", "effort_level": "3",
                                                    "own_words": "kenne die Ecke"})
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}#text"
-    assert "Traumwohnung" in seen[0] and "„kenne die Ecke“" in seen[0]  # stored before Claude was asked
+    assert "volle Mühe" in seen[0] and "„kenne die Ecke“" in seen[0]  # stored before Claude was asked
+    assert db.get_listing(lid)["effort_level"] == 3
     client.post(f"/listing/{lid}/draft", data={})  # "Neues Anschreiben erzeugen" (no fields): stays as it was
-    assert db.get_listing(lid)["own_words"] == "kenne die Ecke"
+    assert db.get_listing(lid)["own_words"] == "kenne die Ecke" and db.get_listing(lid)["effort_level"] == 3
+    client.post(f"/listing/{lid}/draft", data={"personal": "1", "effort_level": "9", "own_words": "kenne die Ecke"})
+    assert db.get_listing(lid)["effort_level"] == 3  # not a level: rejected, the stored one stays
 
 
 def test_editor_first_draft_and_revision_use_the_personal_input(client, lid, fake_generate, monkeypatch):
     editor_cookie(client, lid)
     r, fields = open_editor(client, lid)
-    assert 'id="en-words"' in r.text  # no draft yet: asked before the first draft
+    assert 'id="en-words"' in r.text and 'id="en-effort-1"' in r.text  # no draft yet: asked before the first draft
     prompts = []
     real = llm.build_user_text
     monkeypatch.setattr(llm, "build_user_text", lambda *a, **k: prompts.append(real(*a, **k)) or prompts[-1])
@@ -126,19 +190,46 @@ def test_editor_first_draft_and_revision_use_the_personal_input(client, lid, fak
         return db.latest_draft(listing_id)
 
     monkeypatch.setattr(llm, "create_and_store_draft", create)
-    r = post(client, lid, "draft", fields, personal="1", own_words="Garten ist super")
+    r = post(client, lid, "draft", fields, personal="1", own_words="Garten ist super", effort_level="2")
     assert r.status_code == 303 and "„Garten ist super“" in prompts[-1]
 
     r, fields = open_editor(client, lid)
     assert 'id="ed-words"' in r.text and 'value="Garten ist super"' in r.text
-    r = post(client, lid, "revise", fields, text="Guten Tag", critique="", personal="1", dream="1",
+    assert 'id="ed-effort-2" name="effort_level" value="2" checked' in r.text
+    r = post(client, lid, "revise", fields, text="Guten Tag", critique="", personal="1", effort_level="3",
              own_words="Garten ist super")
-    assert r.status_code == 303  # only ❤️ changed: a revision without a typed critique
-    assert fake_generate[-1]["instruction"] == editor.PERSONAL_REVISION
-    assert db.get_listing(lid)["dream"] == 1
-    r = post(client, lid, "revise", fields, text="Fassung von Claude 1", critique="", personal="1", dream="1",
+    assert r.status_code == 303  # only the level changed: a revision without a typed critique
+    request = fake_generate[-1]["instruction"]
+    assert request == editor.personal_revision(db.get_listing(lid)) and request.startswith("Gib dir im ersten Absatz mehr Mühe")
+    assert "bring ein, was ich selbst dazu sage" in request and request.endswith("Der Rest bleibt, wie er ist.")
+    assert db.get_listing(lid)["effort_level"] == 3
+    r = post(client, lid, "revise", fields, text="Fassung von Claude 1", critique="", personal="1", effort_level="3",
              own_words="Garten ist super")
     assert r.status_code == 400  # nothing changed and no critique: as before
+    r = post(client, lid, "revise", fields, text="Fassung von Claude 1", critique="", personal="1", effort_level="x",
+             own_words="Garten ist super")
+    assert r.status_code == 400 and db.get_listing(lid)["effort_level"] == 3  # not a level: nothing changed
+    r = post(client, lid, "revise", fields, text="Fassung von Claude 1", critique="Kürzer bitte", personal="1",
+             effort_level="1", own_words="Garten ist super")
+    assert r.status_code == 303 and fake_generate[-1]["instruction"] == "Kürzer bitte"  # her critique wins
+    assert db.get_listing(lid)["effort_level"] == 1
+
+
+def test_personal_revision_fits_the_level():
+    keep = editor.PERSONAL_REVISION_KEEP
+    honest = editor.personal_revision({"effort_level": 1})
+    assert honest.startswith("Schreib den ersten Absatz ehrlicher und sachlicher (siehe <persoenlich>)") and honest.endswith(keep)
+    assert editor.personal_revision({"effort_level": 2, "own_words": "kenne die Ecke"}) == \
+        "Greif im ersten Absatz auf, was ich selbst zu dieser Wohnung sage (siehe <persoenlich>)." + keep
+    plain = editor.personal_revision({"effort_level": 2, "own_words": " "})  # no <persoenlich> block to point at
+    assert plain == editor.PERSONAL_REVISION_PLAIN + keep and "<persoenlich>" not in plain
+    assert editor.personal_revision({"effort_level": 3}) == \
+        "Gib dir im ersten Absatz mehr Mühe (siehe <persoenlich>): Nenn konkret, was an dieser Wohnung gut ist." + keep
+
+
+def test_voice_guide_mirrors_the_register_of_the_ad():
+    assert "Schreibt eine Firma oder Hausverwaltung" in llm.VOICE_GUIDE and "Per Du nur, wenn das Inserat selbst duzt" in llm.VOICE_GUIDE
+    assert "innerhalb dieses Tons" in llm.VOICE_GUIDE
 
 
 # --- Bewerbungen --------------------------------------------------------------------------------------------------

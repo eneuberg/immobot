@@ -190,18 +190,27 @@ Von dir als uninteressant aussortiert am {{ l.discarded_at|local_time }}.
 </div>
 {% endmacro %}
 
-{# The optional personal input for a letter (db.set_personal, llm.personal_block): ❤️ Traumwohnung and one line in
-   the person's own words. Inside a form that posts personal=1 with it (listing page, editor). Never required. #}
+{# The optional personal input for a letter (db.set_personal, llm.personal_block): "Wie viel Mühe?" (three radio
+   steps, db.EFFORT_LEVELS; works without JS) and one line in the person's own words. Inside a form that posts
+   personal=1 with it (listing page, editor). Never required. #}
 {% macro personal_fields(listing, id_prefix="p") -%}
+{%- set level = listing.effort_level if listing.effort_level in EFFORT_LEVELS else 2 %}
 <div class="personal">
   <input type="hidden" name="personal" value="1">
-  <label class="heart-toggle" for="{{ id_prefix }}-dream">
-    <input type="checkbox" id="{{ id_prefix }}-dream" name="dream" value="1"{% if listing.dream %} checked{% endif %}>
-    <span>❤️ Traumwohnung</span></label>
-  <label class="sr-only" for="{{ id_prefix }}-words">Was weißt oder magst du an der Wohnung? (optional)</label>
+  <fieldset class="effort" aria-describedby="{{ id_prefix }}-effort-help">
+    <legend>Wie viel Mühe?</legend>
+    <div class="effort-steps">
+      {%- for value, label in EFFORT_LEVELS.items() %}
+      <input type="radio" id="{{ id_prefix }}-effort-{{ value }}" name="effort_level" value="{{ value }}"{% if value == level %} checked{% endif %}>
+      <label for="{{ id_prefix }}-effort-{{ value }}">{{ label }}</label>
+      {%- endfor %}
+    </div>
+  </fieldset>
+  <label class="sr-only" for="{{ id_prefix }}-words">Was findest du gut? Was soll Claude wissen? (optional)</label>
   <input type="text" id="{{ id_prefix }}-words" name="own_words" maxlength="{{ OWN_WORDS_MAX }}" value="{{ listing.own_words or '' }}"
-    placeholder="Was weißt/magst du? (optional)" autocomplete="off" enterkeyhint="done"
-    title="z. B. „kenne die Ecke“, „Garten ist super“, „Anzeige schon offline?“ – Claude greift das auf und erfindet nichts dazu">
+    placeholder="Was findest du gut? Was soll Claude wissen? (optional)" autocomplete="off" enterkeyhint="done"
+    title="z. B. „kenne die Ecke“, „Garten ist super“, „habe schon angerufen“ – Claude greift das auf und erfindet nichts dazu">
+  <p class="help personal-help" id="{{ id_prefix }}-effort-help">Fließt in den ersten Absatz ein.</p>
 </div>
 {%- endmacro %}
 

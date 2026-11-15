@@ -5,13 +5,13 @@ draft, the duplicate count), so the card stays one line of facts and the tests n
 
 facts(listing, hint, duplicate_count) -> {"rent": "810 € warm" | "750 €" | None, "rooms": "2 Zimmer" | None,
     "district": "Mülheim" | None, "flag": {"label", "count", "alarm"} | None, "tags": [{"label", "kind"}],
-    "dream": bool}
+    "effort": "Volle Mühe" | None}
 """
 
 import re
 from datetime import datetime, timezone
 
-from . import rent, triage
+from . import db, rent, triage
 from .settings import OUTCOME_WAITING, OUTCOMES, QUIET_DAYS
 
 _ROOMS_LINE = re.compile(r"^Zimmer:\s*([0-9]+(?:[.,][0-9]+)?)\s*$", re.MULTILINE)
@@ -84,7 +84,12 @@ def flag(hint: str | None) -> dict | None:
 
 def facts(listing: dict, hint: str | None = None, duplicate_count: int = 0) -> dict:
     return {"rent": rent_text(listing), "rooms": rooms(listing), "district": district(listing), "flag": flag(hint),
-            "tags": triage.flags(listing, duplicate_count)[:triage.SHOWN], "dream": bool(listing.get("dream"))}
+            "tags": triage.flags(listing, duplicate_count)[:triage.SHOWN], "effort": _effort_tag(listing)}
+
+
+def _effort_tag(listing: dict) -> str | None:
+    """A small tag only for "Volle Mühe" (db.EFFORT_LEVELS): honest and normal are the usual case."""
+    return db.EFFORT_LEVELS[3] if db.effort_of(listing) == 3 else None
 
 
 # --- "Bewerbungen": one sent listing and what happened since (db.listing_outcomes) --------------------------------

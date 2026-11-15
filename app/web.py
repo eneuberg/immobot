@@ -147,6 +147,7 @@ templates.env.globals["STALE_DAYS"] = settings.STALE_DAYS
 templates.env.globals["SENT_VISIBLE_HOURS"] = settings.SENT_VISIBLE_HOURS
 templates.env.globals["OUTCOMES"] = settings.OUTCOMES  # "Bewerbungen": Antwort, Besichtigung, Zusage, Absage
 templates.env.globals["OWN_WORDS_MAX"] = db.OWN_WORDS_MAX
+templates.env.globals["EFFORT_LEVELS"] = db.EFFORT_LEVELS
 templates.env.globals["open_path"] = editor_access.make_open_path  # "Inserat öffnen" via /go (records it)
 # Content hash in the /static URLs: browsers may cache the files for a day, a deploy still takes effect at once.
 templates.env.globals["STATIC_VERSION"] = hashlib.sha256(
@@ -858,13 +859,13 @@ async def listing_restore(request: Request, listing_id: int, next: str = Form(""
 
 @router.post("/listing/{listing_id}/draft", dependencies=ACTION)
 async def listing_create_draft(request: Request, listing_id: int, personal: str = Form(""), own_words: str = Form(""),
-                               dream: str = Form("")):
+                               effort_level: str = Form("")):
     """"✍️ Anschreiben" without a draft: Claude starts writing in the background (drafting.start) and the editor
-    opens at once with a progress bar. personal=1: the form had the optional ❤️ and "Was weißt/magst du?" fields;
+    opens at once with a progress bar. personal=1: the form had the optional "Wie viel Mühe?" and "Was findest du gut?";
     they are stored first, so Claude gets them (llm.personal_block). With a draft already there it only opens it."""
     _listing_or_404(listing_id)
     if personal == "1":
-        db.set_personal(listing_id, own_words, dream == "1")
+        db.set_personal(listing_id, own_words, db.parse_effort(effort_level))
     db.mark_seen(listing_id)
     drafting.start(listing_id)
     return RedirectResponse(f"/editor/{listing_id}#text", status_code=303)

@@ -845,9 +845,9 @@ def test_listing_page_starts_the_draft_and_opens_the_editor(client, lid, monkeyp
     login(client)
     page = client.get(f"/listing/{lid}").text
     assert f'action="/listing/{lid}/draft"' in page and "Anschreiben</button>" in page
-    r = client.post(f"/listing/{lid}/draft", data={"personal": "1", "own_words": "kenne die Ecke", "dream": "1"})
+    r = client.post(f"/listing/{lid}/draft", data={"personal": "1", "own_words": "kenne die Ecke", "effort_level": "3"})
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}#text"
-    assert db.get_listing(lid)["own_words"] == "kenne die Ecke" and db.get_listing(lid)["dream"]
+    assert db.get_listing(lid)["own_words"] == "kenne die Ecke" and db.get_listing(lid)["effort_level"] == 3
     assert "Claude schreibt … – ansehen" in client.get(f"/listing/{lid}").text  # while it runs
     assert wait_for_draft(client, lid)["state"] == "done" and len(calls) == 1
     r = client.post(f"/listing/{lid}/draft")  # with a draft: only opens the editor

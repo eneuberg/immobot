@@ -298,8 +298,8 @@
     <div class="ed-side">
       <article class="ed-card" id="kritik">
         <h2><label for="ed-critique">Was soll Claude ändern?</label></h2>
-        {# ❤️ and one line of her own: go into every revision (llm.personal_block); changed alone, "Überarbeiten
-           lassen" works them into the first paragraph (editor.PERSONAL_REVISION). #}
+        {# "Wie viel Mühe?" and one line of her own: go into every revision (llm.personal_block); changed alone,
+           "Überarbeiten lassen" reworks the first paragraph for them (editor.personal_revision). #}
         {{ personal_fields(listing, "ed") }}
         <textarea id="ed-critique" name="critique" rows="2" placeholder="z. B. Homeoffice erwähnen, Balkon weglassen, persönlicher">{{ critique or "" }}</textarea>
         {% if calls_today >= calls_shown_from %}<p class="help">Heute schon {{ calls_today }} von {{ calls_limit }} Claude-Aufrufen für dieses Inserat.</p>{% endif %}

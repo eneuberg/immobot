@@ -1327,7 +1327,7 @@ body:has(.ed-card > .ed-bar) { --ask-lift: calc(4.2rem + 1px); }
 .lh-price span + span { font-weight: 600; color: var(--text); }
 .lh-body details.ed-hints { margin-bottom: .85rem; }
 .lh-body details.ed-hints > summary { white-space: normal; }
-/* The actions: the main one ("Anschreiben", with ❤️ and the own line above it) on its own row, the others share the
+/* The actions: the main one ("Anschreiben", with "Wie viel Mühe?" and the own line above it) on its own row, the others share the
    next row (.lh-actions-row) in equal parts, each label on one line and centred (stacked on very narrow screens).
    Not wider than 36rem, so the buttons don't stretch across a desktop. */
 .lh-actions { display: grid; gap: .5rem; max-width: 36rem; margin-bottom: .5rem; }
@@ -1373,7 +1373,7 @@ details.rule-why > summary { min-height: 2.75rem; color: var(--pico-muted-color)
 .details-section.is-list > summary { min-height: 2.75rem; }
 
 /* ======================================================================================================
-   ui-final: four tabs (gear = Einstellungen), word flags on cards, ❤️ + own words, Bewerbungen, Stil
+   ui-final: four tabs (gear = Einstellungen), word flags on cards, "Wie viel Mühe?" + own words, Bewerbungen, Stil
    ====================================================================================================== */
 .tabs a.tab-gear { gap: .35rem; }
 .tabs a.tab-gear .icon { width: 1.15rem; height: 1.15rem; }
@@ -1389,18 +1389,27 @@ details.rule-why > summary { min-height: 2.75rem; color: var(--pico-muted-color)
   background: var(--neutral-soft); color: var(--neutral); white-space: nowrap; }
 .lc-tags .lc-tag.is-warn { background: var(--err-soft); color: var(--err); }
 .lc-tags .lc-tag.is-good { background: var(--accent-soft); color: var(--accent-strong); }
-.lc-tags .lc-tag.is-dream { background: var(--err-soft); color: var(--err); }
+.lc-tags .lc-tag.is-effort { background: var(--accent-soft); color: var(--accent-strong); }
 
-/* ❤️ Traumwohnung + "Was weißt/magst du?" (macros.personal_fields) */
-.personal { display: flex; flex-wrap: wrap; align-items: stretch; gap: .5rem; margin: 0 0 .6rem; }
-.personal .heart-toggle {
-  display: inline-flex; align-items: center; gap: .4rem; margin: 0; min-height: 2.75rem; padding: 0 .8rem;
+/* "Wie viel Mühe?" + "Was findest du gut?" (macros.personal_fields): three radios as one segmented control, its
+   legend small above it; the line beside it (below on a phone), one help line under both */
+.personal { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .35rem .5rem; margin: 0 0 .6rem; }
+.personal fieldset.effort { flex: 0 0 auto; min-width: 0; margin: 0; padding: 0; border: 0; }
+.personal .effort legend { float: left; width: 100%; margin: 0 0 .2rem; padding: 0; font-size: .8rem; font-weight: 600;
+  color: var(--pico-muted-color); }
+.effort-steps {
+  clear: both; position: relative; display: inline-flex; gap: 2px; padding: 2px;
   border: 1px solid var(--pico-form-element-border-color); border-radius: 999px; background: var(--pico-form-element-background-color);
+}
+.effort-steps input[type=radio] { position: absolute; width: 1px; height: 1px; margin: 0; padding: 0; border: 0; opacity: 0; pointer-events: none; }
+.effort-steps label {
+  display: inline-flex; align-items: center; margin: 0; min-height: 2.45rem; padding: 0 .75rem; border-radius: 999px;
   font-size: .9rem; font-weight: 600; white-space: nowrap; cursor: pointer; color: var(--pico-muted-color);
 }
-.personal .heart-toggle input { margin: 0; width: 1.05rem; height: 1.05rem; }
-.personal .heart-toggle:has(input:checked) { background: var(--err-soft); border-color: var(--err-line); color: var(--err); }
-.personal .heart-toggle:focus-within { outline: 2px solid var(--pico-primary-focus); outline-offset: 1px; }
+.effort-steps label:hover { color: var(--pico-color); }
+.effort-steps input:checked + label { background: var(--accent-soft); color: var(--accent-strong); box-shadow: inset 0 0 0 1px var(--accent); }
+.effort-steps input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 1px; }
+.personal .personal-help { flex: 1 0 100%; margin: 0; font-size: .8rem; }
 .personal input[type=text] { flex: 1 1 12rem; min-width: 0; margin: 0; min-height: 2.75rem; }
 .lh-actions > form.lh-write { display: grid; gap: .5rem; }
 .lh-actions form.lh-write > .personal { margin: 0; }
