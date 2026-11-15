@@ -379,8 +379,30 @@
     var dlg = document.querySelector("[data-ask-return]");
     var isDialog = dlg && dlg.tagName === "DIALOG";
     if (!dlg || (isDialog && typeof dlg.showModal !== "function")) return;
+    // The chevron folds it into a pill and back (a short morph of its size); only while the person stays here.
+    var folder = dlg.querySelector("[data-ask-fold]"), pill = dlg.querySelector("[data-ask-unfold]");
+    var setFolded = function (on, animate) {
+      var before = dlg.getBoundingClientRect();
+      if (on) dlg.setAttribute("data-collapsed", ""); else dlg.removeAttribute("data-collapsed");
+      if (folder) folder.setAttribute("aria-expanded", on ? "false" : "true");
+      if (pill) pill.setAttribute("aria-expanded", on ? "false" : "true");
+      if (!animate || reducedMotion() || !dlg.animate || dlg.hidden) return;
+      var after = dlg.getBoundingClientRect();
+      dlg.animate([{ width: before.width + "px", height: before.height + "px", overflow: "hidden" },
+                   { width: after.width + "px", height: after.height + "px", overflow: "hidden" }],
+                  { duration: 220, easing: "cubic-bezier(.2, .7, .2, 1)" });
+      var inner = on ? pill : dlg.querySelector(".ask-sheet-in") || dlg;
+      if (inner && inner.animate) inner.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 220, easing: "ease-out" });
+    };
+    if (folder) folder.addEventListener("click", function () { setFolded(true, true); if (pill) pill.focus(); });
+    if (pill) pill.addEventListener("click", function () { setFolded(false, true); if (folder) folder.focus(); });
     var show = function () {
       if (isDialog) { window.immobotShowModal(dlg); return; }
+      if (dlg.hasAttribute("data-collapsed")) {  // coming back: up from the bottom again, unfolded
+        setFolded(false, false);
+        dlg.hidden = true;
+        dlg.removeAttribute("data-anim");
+      }
       if (!dlg.hidden && dlg.getAttribute("data-anim") !== "out") return;
       var toast = document.querySelector("[data-toast]");
       if (toast) { toast.hidden = true; toast.removeAttribute("data-anim"); }  // same place: the question wins

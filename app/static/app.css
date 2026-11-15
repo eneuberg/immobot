@@ -976,11 +976,9 @@ details.notes-box .notes { margin: 0; font-size: .9rem; }
    itself; without JS "Zwischenspeichern" next to the heading does). */
 .ed-brand-note { grid-area: out; font-size: .85rem; font-weight: 500; color: var(--pico-muted-color); }
 .ed-head { margin: 0 0 1rem; }
-.ed-info { margin: 0 0 1rem; }
-.ed-info > details { margin: 0 0 .5rem; }
 .ed-media-load { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .75rem; margin: .75rem 0 0; }
 .ed-media-load button { margin: 0; width: auto; }
-.ed-info article.details { margin: 0; padding: 0; border: 0; box-shadow: none; background: none; }
+.ed-sheet article.details { margin: 0; padding: 0; border: 0; box-shadow: none; background: none; }
 .ed-top { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .5rem; margin-bottom: .4rem; }
 .ed-head h1 { --pico-font-size: 1.3rem; margin: 0 0 .2rem; overflow-wrap: anywhere; }
 @media (min-width: 768px) { .ed-head h1 { --pico-font-size: 1.55rem; } }
@@ -1018,31 +1016,16 @@ details.notes-box .notes { margin: 0; font-size: .9rem; }
 .ed-bar-note { grid-column: 1 / -1; margin: 0; font-size: .76rem; line-height: 1.35; color: var(--pico-muted-color); text-align: center; }
 .ed-bar button.copied { color: var(--ok); border-color: var(--ok); }
 @media (max-width: 359px) { .ed-bar button { padding: .55rem .2rem; font-size: .85rem; } }
-.ed-diff { margin: 0 0 1rem; }
-.ed-diff > summary .badge { font-weight: 600; }
-.ed-diff .diff { font-size: .93rem; }
+body:has(.ed-drawer-handle) .ed-card > .ed-bar { bottom: var(--drawer-h); padding-bottom: .6rem; }
 .ed-nodiff { margin: 0; font-size: .9rem; }
 .ed-card #ed-critique { margin-bottom: .5rem; }
 .ed-ask-row { display: flex; gap: .45rem; }
 .ed-ask-row button { margin: 0; }
 .ed-card .ed-ask-row .ed-revise { flex: 1 1 auto; width: auto; }
 .ed-card .ed-ask-row .ed-ask-btn { flex: 0 1 auto; width: auto; white-space: nowrap; }
+.ed-ask-row button { padding-left: .6rem; padding-right: .6rem; white-space: nowrap; }
+@media (max-width: 400px) { .ed-ask-row button { font-size: .92rem; } }
 .ed button[type=button] { font-weight: 600; }  /* Pico's [type=button] rule would make "Kopieren" thinner */
-.ed-card > .ed-history-title:first-child { margin-top: 0; }
-.ed-history-title { margin: 1.1rem 0 .35rem; font-size: .76rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--pico-muted-color); }
-.ed-history { list-style: none; margin: 0; padding: 0; font-size: .88rem; }
-.ed-history li {
-  list-style: none; margin: 0; padding: .35rem 0; display: grid; grid-template-columns: 1.5rem minmax(0, 1fr) auto;
-  gap: .5rem; align-items: baseline; border-top: 1px solid var(--pico-muted-border-color);
-}
-.ed-history .n {
-  display: inline-grid; place-items: center; width: 1.4rem; height: 1.4rem; border-radius: 50%;
-  background: var(--surface-2); color: var(--pico-muted-color); font-size: .72rem; font-weight: 700;
-}
-.ed-history li:last-child .n { background: var(--accent-soft); color: var(--accent-strong); }
-.ed-history .t { overflow-wrap: anywhere; }
-.ed-history .when { font-size: .74rem; color: var(--pico-muted-color); white-space: nowrap; }
-.ed-history .is-note .n { background: var(--warn-soft); color: var(--warn); }
 .ed-intro { margin: -.3rem 0 .75rem; }
 .ed-ask { margin: .6rem 0 0; }
 .ed-ask button { width: auto; margin: 0; }
@@ -1098,9 +1081,6 @@ details.rule-add button { width: auto; margin: 0; }
 .draft-final { border-color: var(--ok-line); }
 .draft-card > footer a { font-size: .88rem; }
 /* Editor: quick buttons next to the critique field ("Kürzer", "Förmlicher", "Ganz neu schreiben"). */
-.ed-quick { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; margin: .8rem 0 0; }
-.ed-quick-label { flex: 1 0 100%; font-size: .8rem; color: var(--pico-muted-color); }
-.ed-quick button { flex: 1 1 auto; width: auto; margin: 0; padding: .45rem .7rem; font-size: .88rem; white-space: nowrap; }
 
 /* Listings: "Inserat per Link hinzufügen" */
 .add-listing, .search-listings { margin: 0 0 1.25rem; padding: .85rem 1rem; border: 1px solid var(--pico-card-border-color); border-radius: var(--radius-sm); background: var(--pico-card-background-color); }
@@ -1213,7 +1193,6 @@ details.add-listing > form { padding: 0 1rem .85rem; margin: 0; }
 .ed-back { margin-left: auto; font-size: .88rem; min-height: 2.75rem; display: inline-flex; align-items: center; }
 .ed-head h1 { --pico-font-size: 1.12rem; margin: 0 0 .15rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 @media (min-width: 768px) { .ed-head h1 { --pico-font-size: 1.4rem; } }
-.ed-facts { margin: 0; font-size: .88rem; }
 .ed-letter .ed-card-head { margin-bottom: .5rem; }
 .ed-letter .ed-card-head h2 { font-size: 1.02rem; }
 details.ed-hints { margin: 0 0 .6rem; border: 1px solid var(--warn-line); background: var(--warn-soft); border-radius: var(--radius-sm); }
@@ -1229,10 +1208,7 @@ details.ed-hints.is-alarm > summary { color: var(--err); }
 .ed-card > .ed-bar { grid-template-columns: minmax(0, 1fr); }
 .ed-bar button { min-height: 3rem; font-size: 1rem; }
 .ed-side #kritik h2 { font-size: 1rem; }
-.ed-card .ed-revise small { font-weight: 400; opacity: .8; }
-.ed-quick button { min-height: 2.75rem; }
-.ed-info { margin: 0 0 1rem; }
-.ed-info > details > summary, .ed-diff > summary { min-height: 2.75rem; }
+.ed-verlauf > summary { min-height: 2.75rem; }
 .ed-learn-link { margin: 0 0 .75rem; font-size: .95rem; }
 .ed-learn-link a { display: inline-flex; align-items: center; min-height: 2.75rem; }
 .ed-learn-back { margin: 0 0 .5rem; }
@@ -1251,7 +1227,7 @@ details.ed-hints.is-alarm > summary { color: var(--err); }
    app.js slides them up (data-anim=in) and down (data-anim=out); the toast after "Aussortieren" (.undo-toast) uses
    the same place and motion. In the editor they sit above its sticky action bar (--ask-lift). */
 .ask-sheet {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  position: fixed; left: 0; right: 0; bottom: var(--drawer-h, 0px); z-index: 30;
   padding: .75rem 1rem calc(.75rem + env(safe-area-inset-bottom));
   background: var(--pico-card-background-color); border-top: 1px solid var(--pico-card-border-color);
   box-shadow: 0 -6px 24px rgba(16, 24, 40, .12);
@@ -1265,15 +1241,17 @@ details.ed-hints.is-alarm > summary { color: var(--err); }
 .ask-sheet[data-cooling] .ask-sheet-actions { opacity: .45; transition: opacity .2s; }
 html:not(.js) .js-only { display: none !important; }
 body:has(.ask-sheet:not([hidden], .ask-bar)) main.container { padding-bottom: 12rem; }
+body:has(.ed-drawer-handle) main.container { padding-bottom: calc(var(--drawer-h) + 1.5rem); }
+body:has(.ed-drawer-handle):has(.ask-bar:not([hidden]), .undo-toast:not([hidden])) main.container { padding-bottom: calc(var(--drawer-h) + 6rem); }
+body:has(.ed-drawer-handle):has(.ask-sheet:not([hidden], .ask-bar)) main.container { padding-bottom: calc(var(--drawer-h) + 12rem); }
 body:has(.ask-bar:not([hidden])) main.container, .js body:has(.undo-toast:not([hidden])) main.container { padding-bottom: 6rem; }
 .ask-bar[hidden], .undo-toast[hidden] { display: none !important; }
-/* the editor's sticky "Kopieren & Inserat öffnen" - from 1024 px on it is in the left column, away from the bar */
+/* the editor's sticky "Kopieren & Inserat öffnen": the dock in the middle sits above it at every width */
 body:has(.ed-card > .ed-bar) { --ask-lift: calc(4.2rem + 1px); }
-@media (min-width: 1024px) { body:has(.ed-card > .ed-bar) { --ask-lift: 0px; } }
 
 .ask-bar, .js .undo-toast {
   position: fixed; z-index: 30; left: .5rem; right: .5rem; top: auto;
-  bottom: calc(.5rem + var(--ask-lift, 0px) + env(safe-area-inset-bottom));
+  bottom: calc(.5rem + var(--ask-lift, 0px) + var(--drawer-h, 0px) + env(safe-area-inset-bottom));
   display: flex; align-items: center; gap: .5rem; margin: 0; padding: .3rem .3rem .3rem 1rem;
   background: var(--pico-card-background-color); color: var(--text);
   border: 1px solid var(--pico-card-border-color); border-radius: var(--radius);
@@ -1305,10 +1283,40 @@ body:has(.ed-card > .ed-bar) { --ask-lift: calc(4.2rem + 1px); }
 .js .undo-toast .flash-dismiss::before { content: "·"; color: var(--pico-muted-color); }
 .js .undo-toast .linkish { min-height: 2.75rem; padding: 0 .5rem; color: var(--pico-primary); font-weight: 600; }
 
+/* From 768 px one dock in the middle at the bottom, on the axis of the editor's "Inserat ansehen" handle. */
 @media (min-width: 768px) {
-  .ask-sheet:not(.ask-bar) { left: auto; right: 1.25rem; bottom: 1.25rem; width: 26rem; border: 1px solid var(--pico-card-border-color); border-radius: var(--radius); }
-  .ask-bar, .js .undo-toast { left: auto; right: 1.25rem; bottom: calc(1.25rem + var(--ask-lift, 0px)); width: auto; min-width: 20rem; max-width: 28rem; }
+  .ask-sheet:not(.ask-bar) { left: 0; right: 0; margin: 0 auto; bottom: calc(.75rem + var(--ask-lift, 0px) + var(--drawer-h, 0px));
+    width: 26rem; max-width: calc(100% - 2rem); border: 1px solid var(--pico-card-border-color); border-radius: var(--radius); }
+  .ask-bar, .js .undo-toast { left: 0; right: 0; margin: 0 auto; bottom: calc(.75rem + var(--ask-lift, 0px) + var(--drawer-h, 0px));
+    width: fit-content; min-width: 20rem; max-width: min(36rem, calc(100% - 2rem)); }
 }
+/* Folded (app.js, the chevron; sessionStorage per listing): only a pill with the question, in the same place. */
+.ask-pill { display: none; }
+.ask-sheet[data-collapsed] { left: 0; right: 0; margin: 0 auto; width: fit-content; min-width: 0; max-width: calc(100% - 2rem);
+  padding: .2rem; border: 1px solid var(--pico-card-border-color); border-radius: 999px; box-shadow: var(--shadow-lift, 0 4px 16px rgba(16, 24, 40, .12)); }
+.ask-sheet[data-collapsed]:not(.ask-bar) { bottom: calc(.5rem + var(--drawer-h, 0px) + env(safe-area-inset-bottom)); }
+.ask-sheet[data-collapsed] > :not(.ask-pill) { display: none !important; }
+.ask-sheet[data-collapsed] > .ask-pill { display: inline-flex; }
+.ask-pill {
+  align-items: center; gap: .45rem; width: auto; margin: 0; min-height: 2.5rem; padding: 0 1rem; border: 0; border-radius: 999px;
+  background: transparent; color: var(--text); font-size: .95rem; font-weight: 600; white-space: nowrap; box-shadow: none;
+}
+.ask-pill:hover, .ask-pill:focus-visible { background: var(--surface-2); }
+.ask-pill .chev, .ask-min { color: var(--pico-muted-color); }
+.ask-min {
+  flex: none; display: inline-grid; place-items: center; width: 2.75rem; height: 2.75rem; margin: 0; padding: 0;
+  background: transparent; border: 0; border-radius: var(--radius-sm); font-size: 1.1rem; line-height: 1; box-shadow: none;
+}
+.ask-min:hover, .ask-min:focus-visible { background: var(--surface-2); color: var(--text); }
+@media (max-width: 420px) {  /* question, action, fold and ✕ in one line on a phone */
+  .ask-bar { gap: .2rem; padding-left: .75rem; }
+  .ask-bar-title { font-size: .95rem; }
+  .ask-bar .ask-bar-act { padding: .4rem .6rem; font-size: .88rem; }
+  .ask-bar .ask-min, .ask-bar .ask-bar-close { width: 2.4rem; }
+}
+.ask-sheet-top { display: flex; align-items: center; gap: .5rem; }
+.ask-sheet-top .ask-sheet-title { flex: 1 1 auto; }
+.ask-sheet-top .ask-min { margin: -.4rem -.4rem -.4rem 0; }
 
 /* Slide up / down (app.js sets data-anim); with reduced motion they just appear and go. */
 @keyframes ask-in { from { transform: translateY(calc(100% + 1.5rem)); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -1580,3 +1588,97 @@ details.st-more { margin: .5rem 0 0; }
 @media (min-width: 1024px) {
   .st-proposals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ---- editor: "Verlauf" (begin) -- editor.html verlauf(), history.py: one entry per version, newest first, a line
+   down the left like a commit graph; Claude's versions teal, hers amber, notes grey; the newest diff open. ---- */
+.ed-verlauf { margin: 0 0 1rem; }
+.ed-verlauf > summary { font-weight: 600; }
+.ed-verlauf > summary .count { font-weight: 500; color: var(--pico-muted-color); }
+.ed-verlauf > summary .badge { font-weight: 600; }
+.vl { list-style: none; margin: 0; padding: 0 0 0 .35rem; }
+.vl-item { position: relative; list-style: none; min-width: 0; margin: 0; padding: .55rem 0 .7rem 1rem;
+  border-left: 2px solid var(--pico-muted-border-color); }
+.vl-item:last-child { border-left-color: transparent; }
+.vl-item::before { content: ""; position: absolute; left: -7px; top: .8rem; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--surface-2); border: 2px solid var(--pico-muted-border-color); }
+.vl-item.is-claude::before { background: var(--accent-soft); border-color: var(--accent); }
+.vl-item.is-you::before { background: var(--warn-soft); border-color: var(--warn); }
+.vl-item.is-live::before { background: var(--pico-card-background-color); border-style: dashed; }
+.vl-head { margin: 0; font-size: .9rem; line-height: 1.4; overflow-wrap: anywhere; }
+.vl-who { font-weight: 700; }
+.vl-what q { quotes: "„" "“"; font-style: italic; }
+.vl-head .badge { font-size: .72rem; vertical-align: .1em; }
+.vl-meta { margin: .1rem 0 .25rem; font-size: .76rem; color: var(--pico-muted-color); }
+.vl-add { color: var(--ok); font-weight: 600; }
+.vl-del { color: var(--err); font-weight: 600; }
+.vl-quote { margin: .15rem 0 0; font-size: .88rem; overflow-wrap: anywhere; }
+.vl details { margin: .2rem 0 0; }
+.vl details > summary { font-size: .82rem; color: var(--pico-muted-color); }
+.vl .diff, .vl-diff-live .diff { margin: .3rem 0 0; font-size: .88rem; max-height: 24rem; overflow: auto; overflow-wrap: anywhere; }
+.vl-diff-live { margin-top: .3rem; }
+.vl-hint .md { margin-top: .3rem; padding: .45rem .65rem; border-radius: var(--radius-sm); background: var(--warn-soft); font-size: .86rem; }
+.vl-hint .md > :last-child { margin-bottom: 0; }
+/* ---- editor: "Verlauf" (end) ---- */
+
+/* ---- editor: the ad in a bottom drawer (begin) -- editor.html listing_drawer(), editor.js -------------------------
+   A slim handle fixed to the bottom edge (centred, at most 900 px), everything else stacks above it: the sticky action
+   bar and the return question / toast are lifted by --drawer-h. Opened, a modal <dialog> (Pico: a full-screen
+   overlay) with the sheet at its bottom, 85 % high, scrolling inside. Without JS the dialog is a plain section at the
+   end of the page and the handle links to it. */
+body:has(.ed-drawer-handle) { --drawer-h: 3rem; }
+a.ed-drawer-handle {  /* a.… : over Pico's a[role=button] (editor.js gives it the role) */
+  position: fixed; z-index: 25; left: 0; right: 0; bottom: 0; margin: 0 auto; width: min(100%, 900px);
+  height: calc(var(--drawer-h) + env(safe-area-inset-bottom)); padding: 0 1rem env(safe-area-inset-bottom);
+  display: flex; align-items: center; gap: .55rem; text-decoration: none; color: var(--pico-muted-color); font-size: .9rem;
+  font-weight: 400; line-height: 1.3; text-align: left;
+  background: var(--pico-card-background-color); border: 1px solid var(--pico-card-border-color); border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0; box-shadow: 0 -4px 18px rgba(16, 24, 40, .1);
+}
+a.ed-drawer-handle:hover { color: var(--text); }
+a.ed-drawer-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; box-shadow: none; }
+.ed-drawer-chev { flex: none; color: var(--accent); font-weight: 700; font-size: 1.05rem; line-height: 1; }
+.ed-drawer-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ed-drawer-label strong { color: var(--text); }
+dialog.ed-sheet { align-items: flex-end; justify-content: center; overscroll-behavior: contain; }
+.ed-sheet-in {
+  display: flex; flex-direction: column; width: min(100%, 900px); height: 85vh; height: 85dvh;
+  background: var(--pico-card-background-color); color: var(--text);
+  border-radius: var(--radius) var(--radius) 0 0; box-shadow: 0 -10px 40px rgba(16, 24, 40, .25); overflow: hidden;
+}
+.ed-sheet-head { flex: none; display: flex; align-items: center; gap: .25rem; padding: .2rem .35rem;
+  border-bottom: 1px solid var(--pico-card-border-color); }
+.ed-sheet-head h2 { flex: 1 1 auto; margin: 0; font-size: 1rem; }
+.ed-sheet-head button {
+  flex: none; display: inline-grid; place-items: center; width: 2.75rem; height: 2.75rem; margin: 0; padding: 0;
+  background: transparent; border: 0; border-radius: var(--radius-sm); color: var(--pico-muted-color); font-size: 1.1rem; box-shadow: none;
+}
+.ed-sheet-head button:hover, .ed-sheet-head button:focus-visible { background: var(--surface-2); color: var(--text); }
+.ed-sheet-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: .75rem 1rem calc(1.25rem + env(safe-area-inset-bottom)); }
+.ed-sheet .ed-facts { margin: 0 0 .5rem; line-height: 1.5; }
+.ed-sheet .ed-facts a { min-height: 0; display: inline; }  /* a link in running text: the line stays a line */
+.ed-sheet-acts { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 1rem; }
+.ed-sheet-acts form { margin: 0; }
+.ed-sheet-acts button { width: auto; margin: 0; min-height: 2.5rem; }
+.ed-sheet-dismiss { background: transparent; color: var(--err); border: 1px solid var(--err-line); box-shadow: none; }
+.ed-sheet-dismiss:hover, .ed-sheet-dismiss:focus-visible { background: var(--err-soft); border-color: var(--err); color: var(--err); }
+.ed-sheet-sec { margin: 0 0 1.25rem; }
+.ed-sheet-sec h3 { margin: 0 0 .5rem; font-size: .95rem; }
+.ed-sheet-sec h3 .count { font-weight: 500; color: var(--pico-muted-color); }
+html:has(dialog.ed-sheet[open]) { overflow: hidden; }
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes sheet-down { from { transform: none; } to { transform: translateY(100%); } }
+@keyframes sheet-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheet-fade-out { from { opacity: 1; } to { opacity: 0; } }
+dialog.ed-sheet[data-anim=in] { animation: sheet-fade-in .25s ease-out; }
+dialog.ed-sheet[data-anim=in] .ed-sheet-in { animation: sheet-up .25s ease-out; }
+dialog.ed-sheet[data-anim=out] { animation: sheet-fade-out .25s ease-in forwards; }
+dialog.ed-sheet[data-anim=out] .ed-sheet-in { animation: sheet-down .25s ease-in forwards; }
+@media (prefers-reduced-motion: reduce) {
+  dialog.ed-sheet[data-anim], dialog.ed-sheet[data-anim] .ed-sheet-in { animation: none; }
+}
+html:not(.js) dialog.ed-sheet { display: block; position: static; z-index: auto; min-width: 0; min-height: 0; width: auto; height: auto;
+  margin: 1.5rem 0 0; background: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+html:not(.js) .ed-sheet-head { padding: .55rem 1rem; }
+html:not(.js) .ed-sheet-in { width: auto; height: auto; border: 1px solid var(--pico-card-border-color); border-radius: var(--radius); box-shadow: none; }
+/* ---- editor: bottom drawer (end) ---- */

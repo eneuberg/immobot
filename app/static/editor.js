@@ -1,7 +1,7 @@
 // immobot draft editor (/editor/{id}): comfort on top of plain forms, which work without JS.
 // Autosize, "Kopieren" for the text field, "Kopieren & Inserat öffnen", autosave of the text (with a warning on leaving while it isn't saved),
-// a live word diff against Claude's original, polling while Claude looks for rules, and the progress bar while Claude
-// writes the first draft, revises the letter or answers a question. Loaded with defer, only on this page.
+// a live word diff against the newest version ("Verlauf"), the ad in a bottom drawer, polling while Claude looks for rules,
+// and the progress bar while Claude writes the first draft, revises the letter or answers a question. Loaded with defer.
 (function () {
   "use strict";
 
@@ -231,7 +231,7 @@
     document.querySelectorAll("textarea").forEach(function (field) { field.readOnly = false; });
   });
 
-  // --- live word diff against Claude's original (same look as textdiff.word_diff + trim_equal) -----------------
+  // --- live word diff against the newest version ("Verlauf": "Du – jetzt"; same look as textdiff.word_diff + trim_equal)
   var diffBox = document.querySelector("[data-diff]");
   var diffState = document.querySelector("[data-diff-state]");
   var TOKEN = /[\p{L}\p{N}_]+|[^\p{L}\p{N}_\s]|\s+/gu;
@@ -329,7 +329,7 @@
     } else {
       var p = document.createElement("p");
       p.className = "muted ed-nodiff";
-      p.textContent = "Noch keine Änderungen – der Text ist Claudes Entwurf.";
+      p.textContent = "Keine Änderungen seit der letzten Fassung.";
       diffBox.appendChild(p);
     }
     if (diffState) {
@@ -673,16 +673,39 @@
     text.focus({ preventScroll: true });
   }
 
-  // --- quick buttons: "Ganz neu schreiben" asks first while the text differs from Claude's original ----------------
-  // (the server sets data-confirm for the saved text; app.js asks on click, here it follows the typing)
-  var regen = document.querySelector("[data-confirm-changed]");
-  var original = diffBox ? diffBox.dataset.original || "" : null;
-  if (regen && text && original !== null) {
-    var syncConfirm = function () {
-      if (text.value !== original) regen.dataset.confirm = regen.dataset.confirmChanged;
-      else delete regen.dataset.confirm;
+  // --- the ad in a drawer at the bottom (editor.html listing_drawer) -----------------------------------------------
+  // The handle opens the sheet as a modal <dialog>: the page behind stays put and inert, focus goes into the sheet and
+  // back to the handle afterwards. Closing: the grip, ✕, Escape or a tap beside the sheet; it slides (250 ms, none
+  // with reduced motion). Without JS (or <dialog>) the sheet is a section at the end and the handle links to it.
+  var sheet = document.getElementById("inserat");
+  var handle = document.querySelector("[data-drawer-open]");
+  if (sheet && handle && typeof sheet.showModal === "function") {
+    handle.setAttribute("role", "button");
+    var openSheet = function () {
+      if (sheet.open) return;
+      sheet.removeAttribute("data-anim");
+      sheet.showModal();
+      handle.setAttribute("aria-expanded", "true");
+      if (!reduce) { void sheet.offsetWidth; sheet.setAttribute("data-anim", "in"); }
+      var close = sheet.querySelector(".ed-sheet-close");
+      if (close) close.focus({ preventScroll: true });
     };
-    text.addEventListener("input", syncConfirm);
-    syncConfirm();
+    var closed = function () {
+      sheet.removeAttribute("data-anim");
+      handle.setAttribute("aria-expanded", "false");
+    };
+    var closeSheet = function () {
+      if (!sheet.open || sheet.getAttribute("data-anim") === "out") return;
+      if (reduce) { sheet.close(); return; }
+      sheet.setAttribute("data-anim", "out");
+      setTimeout(function () { sheet.close(); }, 240);
+    };
+    handle.addEventListener("click", function (e) { e.preventDefault(); openSheet(); });
+    handle.addEventListener("keydown", function (e) { if (e.key === " ") { e.preventDefault(); openSheet(); } });  // a link-button
+    sheet.addEventListener("cancel", function (e) { e.preventDefault(); closeSheet(); });  // Escape
+    sheet.addEventListener("close", function () { closed(); handle.focus({ preventScroll: true }); });
+    sheet.addEventListener("click", function (e) { if (e.target === sheet) closeSheet(); });  // the overlay beside it
+    sheet.querySelectorAll("[data-drawer-close]").forEach(function (btn) { btn.addEventListener("click", closeSheet); });
+    if (sheet.hasAttribute("data-open")) openSheet();  // back from "Bilder laden" / "Inserat neu laden"
   }
 })();

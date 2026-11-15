@@ -35,7 +35,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
-from . import bot, cards, db, drafting, editor_access, learning, llm, media, portals, rent, settings, textdiff, web
+from . import (bot, cards, db, drafting, editor_access, history, learning, llm, media, portals, rent, settings,
+               textdiff, web)
 
 log = logging.getLogger(__name__)
 
@@ -286,10 +287,8 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
     else:
         drafting.forget(listing_id)
         text = session["final_text"] if session["status"] == "done" else session["current_text"]
-        feedback = list(reversed(db.list_feedback(session_id=session["id"])))  # oldest first
-        history = [{**f, "quick_label": learning.QUICK_LABELS.get(f["text"]) if f["kind"] == "quick" else None}
-                   for f in feedback if f["kind"] in ("critique", "quick")]  # one per revision by Claude
-        notes = [f for f in feedback if f["kind"] == "note"]  # typed but not sent before "Fertig"
+        feedback = db.list_feedback(session_id=session["id"])
+        revisions = [f for f in feedback if f["kind"] in ("critique", "quick")]  # one per revision by Claude
         last_draft = db.get_draft(session["last_draft_id"]) if session["last_draft_id"] else None
         newer = learning.newer_draft(session)
         proposals, decided = _proposals(session)
@@ -308,12 +307,17 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
             editor_job = None
         if editor_job and editor_job.get("error"):
             editor_job = {**editor_job, "error": web.redact(request, editor_job["error"])}
+        versions, base = history.timeline(listing_id, web.DRAFT_KIND_LABELS)
+        live = None
+        if session["status"] == "open" and base is not None:  # her edits since the newest version, live in editor.js
+            segments = textdiff.word_diff(base, text)
+            live = {"base": base, "diff": textdiff.trim_equal(segments), "changed": textdiff.has_changes(segments)}
         context.update(
             text=text,
             changed=textdiff.has_changes(textdiff.word_diff(session["original_text"], text)),
-            history=history,
-            notes=notes,
-            version_no=len(history) + 1,
+            versions=list(reversed(versions)),  # newest first, like a commit log
+            live=live,
+            version_no=len(revisions) + 1,
             hint=last_draft.get("hint") if last_draft else None,
             hint_flag=cards.flag(last_draft.get("hint")) if last_draft else None,  # the hint box's one line
             newer={**newer, "kind_label": web.DRAFT_KIND_LABELS.get(newer["kind"], newer["kind"])} if newer else None,

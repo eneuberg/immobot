@@ -204,7 +204,7 @@ def test_question_answer_shown_when_coming_back(client, lid, fake_answer):
     while drafting.editor_running(lid):
         time.sleep(0.02)
     page = client.get(f"/editor/{lid}").text  # left the page while Claude answered
-    answer = page.split('class="ed-card ed-answer"')[1].split("</section>")[0]
+    answer = page.split('class="ed-card ed-answer"')[1].split("</article>")[0]
     assert "hidden" not in answer.split(">")[0] and "Ab wann frei?" in answer and "<strong>Kontaktformular</strong>" in answer
     assert '<textarea id="ed-critique" name="critique" rows="2" placeholder' in page and "Ab wann frei?</textarea>" not in page
     assert 'class="ed-card ed-answer" data-answer aria-labelledby="ed-answer-title" aria-live="polite" hidden' in \

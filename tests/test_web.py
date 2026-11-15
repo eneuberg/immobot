@@ -475,13 +475,13 @@ def test_listing_page_asks_after_opening_the_listing(client):
     bar = _return_question(page, lid)
     assert not bar.startswith(" data-opened")  # never opened: only a click here arms it
     assert bar.startswith(" hidden\n")  # only app.js shows it: nothing without JS
-    assert f'<aside class="ask-sheet ask-bar" data-ask-return="listing-{lid}" hidden' in page
+    assert f'<aside class="ask-sheet ask-bar" id="listing-{lid}-ask" data-ask-return="listing-{lid}" hidden' in page
     assert "<strong>Uninteressant?</strong>" in bar
     assert f'action="/listing/{lid}/dismiss"' in bar
     assert '<button type="submit" class="ask-bar-act is-dismiss">Aussortieren</button>' in bar  # not the green primary
     assert 'data-sheet-close aria-label="Schließen"' in bar and "✕" in bar
     assert "Ja, aussortieren" not in bar and ">Nein<" not in bar and "Später" not in bar and "anschreiben" not in bar
-    assert bar.count("<button") == 2
+    assert bar.count("<button") == 4 and "data-ask-fold" in bar and "data-ask-unfold" in bar  # + fold and its pill
     assert "<dialog" not in page
     db.mark_opened(lid)
     bar = _return_question(client.get(f"/listing/{lid}").text, lid)
@@ -490,17 +490,17 @@ def test_listing_page_asks_after_opening_the_listing(client):
     db.advance_status(lid, "drafted")
     page = client.get(f"/listing/{lid}").text
     sheet = _return_question(page, lid)
-    assert f'<aside class="ask-sheet" data-ask-return="listing-{lid}" data-opened hidden' in page  # the sheet
+    assert f'<aside class="ask-sheet" id="listing-{lid}-ask" data-ask-return="listing-{lid}" data-opened hidden' in page  # the sheet
     assert "<strong>Abgeschickt?</strong>" in sheet and f'action="/listing/{lid}/sent"' in sheet
     assert "✅ Ja, abgeschickt</button>" in sheet and "data-sheet-close>Noch nicht</button>" in sheet
     assert "ussortieren" not in sheet and "ask-bar" not in sheet
     db.discard(lid)
     page = client.get(f"/listing/{lid}").text
     bar = _return_question(page, lid)
-    assert f'<aside class="ask-sheet ask-bar" data-ask-return="listing-{lid}" data-opened hidden' in page
+    assert f'<aside class="ask-sheet ask-bar" id="listing-{lid}-ask" data-ask-return="listing-{lid}" data-opened hidden' in page
     assert "<strong>Doch interessant?</strong>" in bar and "ussortieren" not in bar
     assert f'action="/listing/{lid}/restore"' in bar and '<button type="submit" class="ask-bar-act">↩️ Zurückholen</button>' in bar
-    assert 'aria-label="Schließen"' in bar and bar.count("<button") == 2
+    assert 'aria-label="Schließen"' in bar and bar.count("<button") == 4  # + fold and its pill
     db.restore(lid)
     db.mark_sent(lid)
     assert "data-ask-return" not in client.get(f"/listing/{lid}").text

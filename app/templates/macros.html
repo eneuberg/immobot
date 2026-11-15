@@ -160,23 +160,34 @@ Von dir als uninteressant aussortiert am {{ l.discarded_at|local_time }}.
    - ask_bar: one slim line for a question that is easy to ignore ("Uninteressant?", "Doch interessant?"): the
      question, one muted action (caller) and ✕ (keep it as it is). Only app.js shows it, so without JS it renders
      nothing.
+   Both fold into a small pill with the chevron (app.js, [data-ask-fold] / [data-ask-unfold]) for as long as the
+   person stays on the page; coming back brings them up unfolded again.
    No title of the listing, no help text in either. #}
+{% macro ask_fold(key, title) -%}
+<button type="button" class="ask-pill" data-ask-unfold aria-expanded="false" aria-controls="{{ key }}-ask"><span>{{ title }}</span><span class="chev" aria-hidden="true">⌃</span></button>
+{%- endmacro %}
 {% macro ask_sheet(key, title, no="Nein", shown=False, opened=False) %}
-<aside class="ask-sheet" data-ask-return="{{ key }}"{% if opened or shown %} data-opened{% endif %}{% if not shown %} hidden{% endif %}
+<aside class="ask-sheet" id="{{ key }}-ask" data-ask-return="{{ key }}"{% if opened or shown %} data-opened{% endif %}{% if not shown %} hidden{% endif %}
   role="region" aria-labelledby="{{ key }}-title" aria-live="polite">
   <div class="ask-sheet-in">
-    <p class="ask-sheet-title" id="{{ key }}-title"><strong>{{ title }}</strong></p>
+    <div class="ask-sheet-top">
+      <p class="ask-sheet-title" id="{{ key }}-title"><strong>{{ title }}</strong></p>
+      <button type="button" class="ask-min js-only" data-ask-fold aria-expanded="true" aria-label="Einklappen" title="Einklappen"><span aria-hidden="true">⌄</span></button>
+    </div>
     <div class="ask-sheet-actions">{{ caller() }}<button type="button" class="secondary outline js-only" data-sheet-close>{{ no }}</button></div>
   </div>
+  {{ ask_fold(key, title) }}
 </aside>
 {% endmacro %}
 
 {% macro ask_bar(key, title, opened=False) %}
-<aside class="ask-sheet ask-bar" data-ask-return="{{ key }}"{% if opened %} data-opened{% endif %} hidden
+<aside class="ask-sheet ask-bar" id="{{ key }}-ask" data-ask-return="{{ key }}"{% if opened %} data-opened{% endif %} hidden
   role="region" aria-labelledby="{{ key }}-title" aria-live="polite">
   <p class="ask-bar-title" id="{{ key }}-title"><strong>{{ title }}</strong></p>
   {{ caller() }}
+  <button type="button" class="ask-min" data-ask-fold aria-expanded="true" aria-label="Einklappen" title="Einklappen"><span aria-hidden="true">⌄</span></button>
   <button type="button" class="ask-bar-close" data-sheet-close aria-label="Schließen" title="Schließen"><span aria-hidden="true">✕</span></button>
+  {{ ask_fold(key, title) }}
 </aside>
 {% endmacro %}
 

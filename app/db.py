@@ -1303,6 +1303,13 @@ def latest_session(listing_id: int, status: str | None = None) -> dict | None:
                                  (listing_id, status) if status else (listing_id,)).fetchone())
 
 
+def list_sessions(listing_id: int) -> list[dict]:
+    """All of the listing's sessions (rounds), oldest first."""
+    with connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM edit_sessions WHERE listing_id = ? ORDER BY id",
+                                              (listing_id,))]
+
+
 def update_session(session_id: int, **fields) -> None:
     """Set columns of SESSION_UPDATE_COLUMNS; updated_at is set too. Raises sqlite3.IntegrityError when
     status 'open' would give the listing a second open session."""

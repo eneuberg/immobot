@@ -16,65 +16,122 @@
 <input type="hidden" name="token" value="{{ token }}">{% if session %}<input type="hidden" name="session_id" value="{{ session.id }}">{% endif %}
 {%- endmacro %}
 
-{# "Verlauf": Claude's draft, then one numbered Fassung per critique sent to Claude; a critique only noted when
-   finishing (not sent) comes last, without a number. #}
-{% macro history_list() %}
-<h3 class="ed-history-title">Verlauf</h3>
-<ol class="ed-history">
-  <li><span class="n">1</span><span class="t">Claudes Entwurf</span></li>
-  {% for f in history %}
-  <li><span class="n">{{ loop.index + 1 }}</span><span class="t">{% if f.quick_label %}{{ f.quick_label }} <small class="muted">(Schnellbutton)</small>{% else %}„{{ f.text }}“{% endif %}</span><span class="when">{{ f.created_at|local_time }}</span></li>
-  {% endfor %}
-  {% for f in notes %}
-  <li class="is-note"><span class="n" aria-hidden="true">✎</span><span class="t">„{{ f.text }}“ <small class="muted">– beim Abschließen notiert, nicht an Claude geschickt</small></span><span class="when">{{ f.created_at|local_time }}</span></li>
-  {% endfor %}
-</ol>
+{# "Verlauf" (history.timeline): every version like a commit log, newest first - who made it, when, the word diff to
+   the version before (the newest one open), Claude's note for it. In the open text her edits since the newest
+   version come first, live (editor.js renders [data-diff] while she types). Collapsed at the bottom of the column. #}
+{% macro verlauf() %}
+<details class="disclosure ed-verlauf" id="verlauf">
+  <summary><span>Verlauf</span> <span class="count">{{ versions|selectattr("who", "ne", "note")|list|length }}</span>
+    {%- if live %} <span class="badge {{ 'warn' if live.changed else '' }}" data-diff-state>{{ "geändert" if live.changed else "keine" }}</span>{% endif %}</summary>
+  <div class="disclosure-body">
+    <ol class="vl">
+      {% if live %}
+      <li class="vl-item is-you is-live">
+        <p class="vl-head"><span class="vl-who">Du</span> <span class="vl-what">jetzt – noch nicht an Claude geschickt</span></p>
+        <div class="vl-diff-live" data-diff data-original="{{ live.base }}">
+          {%- if live.changed %}{{ text_diff(live.diff) }}
+          {%- else %}<p class="muted ed-nodiff">Keine Änderungen seit der letzten Fassung.</p>{% endif %}</div>
+      </li>
+      {% endif %}
+      {% for e in versions %}
+      {% if e.who == "note" %}
+      <li class="vl-item is-note">
+        <p class="vl-head"><span class="vl-who">Notiz</span> <span class="vl-what">{{ e.label }}</span></p>
+        <p class="vl-meta">{{ e.when|local_time }}</p>
+        <p class="vl-quote">„{{ e.quote }}“</p>
+      </li>
+      {% else %}
+      <li class="vl-item is-{{ e.who }}">
+        <p class="vl-head"><span class="vl-who">{{ "Claude" if e.who == "claude" else "Du" }}</span>
+          <span class="vl-what">{{ e.label }}{% if e.quote %} <q>{{ e.quote }}</q>{% endif %}</span>
+          {%- if e.decision %} <span class="badge{% if e.decision == 'verworfen' %} err{% endif %}">{{ e.decision }}</span>{% endif %}</p>
+        <p class="vl-meta">{{ e.when|local_time }}
+          {%- if e.diff is not none %} · <span class="vl-stat" aria-label="{{ e.added }} Wörter dazu, {{ e.removed }} weg"><span class="vl-add">+{{ e.added }}</span> / <span class="vl-del">−{{ e.removed }}</span> Wörter</span>{% endif %}</p>
+        {% if e.diff is not none %}
+        <details class="vl-diff"{% if loop.first %} open{% endif %}><summary>Änderungen</summary>{{ text_diff(e.diff) }}</details>
+        {% else %}
+        <details class="vl-diff"><summary>Text</summary><div class="diff">{{ e.text }}</div></details>
+        {% endif %}
+        {% if e.hint %}<details class="vl-hint"><summary>Hinweis von Claude</summary><div class="md">{{ e.hint|md }}</div></details>{% endif %}
+      </li>
+      {% endif %}
+      {% endfor %}
+    </ol>
+  </div>
+</details>
 {% endmacro %}
 
-{# The rest of the listing, collapsed below the letter. Pictures load only when opened (lazy). #}
-{% macro listing_info() %}
-<div class="ed-info">
-  {% if media or has_gallery %}
-  <details class="disclosure" id="bilder"{% if open_media %} open{% endif %}>
-    <summary>Bilder <span class="count">{{ media|length }}</span></summary>
-    <div class="disclosure-body">
-      {% if listing.media_error %}<div class="flash err bare" role="alert">⚠ {{ listing.media_error }}</div>{% endif %}
-      {% if media %}
-      <div class="gallery">
-        {% for m in media %}
-        <a class="gallery-item" href="/editor/{{ listing.id }}/media/{{ m.position }}" target="_blank" rel="noopener"
-          data-lightbox data-caption="{{ media_label(m) }}">
-          <img src="/editor/{{ listing.id }}/media/{{ m.position }}" alt="{{ m.caption or 'Bild ' ~ m.position }}" loading="lazy" decoding="async">
-          <span class="gallery-caption">{{ media_label(m) }}</span>
-        </a>
-        {% endfor %}
-      </div>
-      {% elif not listing.media_error %}
-      <p class="help">{{ "Noch keine Bilder geladen." if pictures_missing else "Keine Bilder im Inserat." }}</p>
-      {% endif %}
-      {% if has_gallery %}
-      <form method="post" action="/editor/{{ listing.id }}/media" class="ed-media-load">
-        {{ hidden() }}
-        {% if pictures_missing %}
-        <button type="submit" data-busy-label="Lädt …">{% if listing.media_error %}Erneut versuchen{% else %}Bilder laden{% endif %}</button>
-        {% else %}
-        <input type="hidden" name="reload" value="1">
-        <button type="submit" class="secondary outline" data-busy-label="Lädt …">Inserat neu laden</button>
-        <small class="muted">Holt Exposé, Miete und alle Bilder noch einmal.</small>
+{# The ad itself in a drawer pinned to the bottom of the screen ("Inserat ansehen"): the handle opens a sheet over
+   the page (editor.js, a modal <dialog>) with the facts, "Uninteressant" / "Zurückholen", the pictures (they load
+   only when it is open) and the text. Without JS the sheet is a plain section at the end of the page and the handle
+   a link to it. Outside every other form. #}
+{% macro listing_drawer() %}
+{% set map_link = listing.address|maps_url %}
+<a class="ed-drawer-handle" href="#inserat" data-drawer-open aria-controls="inserat" aria-expanded="false">
+  <span class="ed-drawer-chev" aria-hidden="true">⌃</span>
+  <span class="ed-drawer-label"><strong>Inserat ansehen</strong>{% for f in facts[:2] %} · {{ f }}{% endfor %}
+    {%- if media %} · {{ media|length }} Bilder{% endif %}</span>
+</a>
+<dialog class="ed-sheet" id="inserat" aria-labelledby="ed-sheet-title"{% if open_media %} data-open{% endif %}>
+  <div class="ed-sheet-in">
+    <header class="ed-sheet-head">
+      <button type="button" class="ed-sheet-grip js-only" data-drawer-close aria-label="Inserat einklappen"><span aria-hidden="true">⌄</span></button>
+      <h2 id="ed-sheet-title">Inserat</h2>
+      <button type="button" class="ed-sheet-close js-only" data-drawer-close aria-label="Schließen" title="Schließen"><span aria-hidden="true">✕</span></button>
+    </header>
+    <div class="ed-sheet-body">
+      {% if facts or map_link %}<p class="ed-facts">{{ facts|join(" · ") }}
+        {%- if map_link %}{% if facts %} · {% endif %}<a href="{{ map_link }}" target="_blank" rel="noopener noreferrer">Karte ↗</a>{% endif %}</p>{% endif %}
+      {% if listing.discard_reason == MANUAL_DISCARD or (not listing.discard_reason and listing.status != "sent"
+                                                           and not (session and session.status == "done")) %}
+      <div class="ed-sheet-acts">
+        {% if listing.discard_reason == MANUAL_DISCARD %}
+        <form method="post" action="/editor/{{ listing.id }}/restore">{{ hidden() }}<button type="submit" class="secondary outline btn-sm">↩️ Zurückholen</button></form>
+        {% elif not listing.discard_reason and listing.status != "sent" and not (session and session.status == "done") %}
+        {# the finished text has its own "❌ Doch uninteressant" in its card #}
+        <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit" class="ed-sheet-dismiss btn-sm">❌ Uninteressant</button></form>
         {% endif %}
-      </form>
+      </div>
       {% endif %}
+      {% if media or has_gallery %}
+      <section class="ed-sheet-sec" id="bilder" aria-labelledby="ed-sheet-pics">
+        <h3 id="ed-sheet-pics">Bilder <span class="count">{{ media|length }}</span></h3>
+        {% if listing.media_error %}<div class="flash err bare" role="alert">⚠ {{ listing.media_error }}</div>{% endif %}
+        {% if media %}
+        <div class="gallery">
+          {% for m in media %}
+          <a class="gallery-item" href="/editor/{{ listing.id }}/media/{{ m.position }}" target="_blank" rel="noopener"
+            data-lightbox data-caption="{{ media_label(m) }}">
+            <img src="/editor/{{ listing.id }}/media/{{ m.position }}" alt="{{ m.caption or 'Bild ' ~ m.position }}" loading="lazy" decoding="async">
+            <span class="gallery-caption">{{ media_label(m) }}</span>
+          </a>
+          {% endfor %}
+        </div>
+        {% elif not listing.media_error %}
+        <p class="help">{{ "Noch keine Bilder geladen." if pictures_missing else "Keine Bilder im Inserat." }}</p>
+        {% endif %}
+        {% if has_gallery %}
+        <form method="post" action="/editor/{{ listing.id }}/media" class="ed-media-load">
+          {{ hidden() }}
+          {% if pictures_missing %}
+          <button type="submit" data-busy-label="Lädt …">{% if listing.media_error %}Erneut versuchen{% else %}Bilder laden{% endif %}</button>
+          {% else %}
+          <input type="hidden" name="reload" value="1">
+          <button type="submit" class="secondary outline" data-busy-label="Lädt …">Inserat neu laden</button>
+          <small class="muted">Holt Exposé, Miete und alle Bilder noch einmal.</small>
+          {% endif %}
+        </form>
+        {% endif %}
+      </section>
+      {% endif %}
+      <section class="ed-sheet-sec" aria-labelledby="ed-sheet-text">
+        <h3 id="ed-sheet-text">{% if listing.details %}Beschreibung &amp; Details{% else %}Beschreibung{% endif %}</h3>
+        {% if listing.details %}{{ details_article(listing, details) }}
+        {% else %}<p class="description pre-wrap">{{ listing.description or "–" }}</p>{% endif %}
+      </section>
     </div>
-  </details>
-  {% endif %}
-  <details class="disclosure">
-    <summary>{% if listing.details %}Beschreibung &amp; Details{% else %}Beschreibung{% endif %}</summary>
-    <div class="disclosure-body">
-      {% if listing.details %}{{ details_article(listing, details) }}
-      {% else %}<p class="description pre-wrap">{{ listing.description or "–" }}</p>{% endif %}
-    </div>
-  </details>
-</div>
+  </div>
+</dialog>
 {% endmacro %}
 
 {% block content %}
@@ -83,9 +140,6 @@
     <div class="ed-top">{{ state_badge(listing) }}
       {%- if logged_in %}<a class="ed-back" href="/listing/{{ listing.id }}">Zum Inserat</a>{% endif %}</div>
     <h1>{{ listing.title or "(ohne Titel)" }}</h1>
-    {% set map_link = listing.address|maps_url %}
-    {% if facts %}<p class="ed-facts">{{ facts|join(" · ") }}
-      {%- if map_link %} · <a href="{{ map_link }}" target="_blank" rel="noopener noreferrer">Karte ↗</a>{% endif %}</p>{% endif %}
     {% if listing.discard_reason %}
     {# Aussortiert: said once at the top; the editor keeps working (a text can still be finished and copied). #}
     <div class="ed-discarded status-lock dc-{{ listing.discard_reason }}" role="note">
@@ -225,14 +279,7 @@
       </article>
     </div>
     <div class="ed-side">
-      <details class="disclosure ed-diff">
-        <summary>Deine Änderungen an Claudes Entwurf <span class="badge {{ 'warn' if changed else '' }}">{{ "geändert" if changed else "keine" }}</span></summary>
-        <div class="disclosure-body">
-          {% if changed %}{{ text_diff(session.original_text|word_diff(text)|trim_diff) }}
-          {%- else %}<p class="muted ed-nodiff">Keine Änderungen – der Text ist Claudes Entwurf.</p>{% endif %}
-        </div>
-      </details>
-      {% if history or notes %}<article class="ed-card">{{ history_list() }}</article>{% endif %}
+      {{ verlauf() }}
     </div>
   </div>
   {% endif %}
@@ -339,35 +386,14 @@
           <p class="help draftbar-away" data-job-away>Du kannst die Seite verlassen – Claude arbeitet weiter.</p>
           {% if ej and ej.state == "running" %}<noscript><p class="help">Seite gleich neu laden, um das Ergebnis zu sehen.</p></noscript>{% endif %}
         </div>
-        {# Quick buttons (editor.py editor_quick), like Telegram's. "Ganz neu schreiben" starts a new round: it asks
-           first when the text differs from Claude's original (editor.js keeps data-confirm up to date while typing). #}
-        {% set regen_question = "Dein Text samt deinen Änderungen wird durch ein ganz neues Anschreiben ersetzt. Trotzdem neu schreiben?" %}
-        <div class="ed-quick" role="group" aria-labelledby="ed-quick-label">
-          <span class="ed-quick-label" id="ed-quick-label">Oder mit einem Tipp:</span>
-          <button type="submit" formaction="/editor/{{ listing.id }}/quick" name="kind" value="shorter" class="secondary outline" data-job="shorter"
-                  title="Auf etwa 60 % kürzen" data-busy-label="Claude kürzt …">Kürzer</button>
-          <button type="submit" formaction="/editor/{{ listing.id }}/quick" name="kind" value="formal" class="secondary outline" data-job="formal"
-                  title="Sie-Form, sachlich-höflicher Ton" data-busy-label="Claude schreibt …">Förmlicher</button>
-          <button type="submit" formaction="/editor/{{ listing.id }}/quick" name="kind" value="regenerate" class="secondary outline" data-job="regenerate"
-                  title="Neues Anschreiben, deutlich anders als dieses" data-busy-label="Claude schreibt neu …"
-                  data-confirm-changed="{{ regen_question }}"{% if changed %} data-confirm="{{ regen_question }}"{% endif %}>Ganz neu schreiben</button>
-        </div>
-        {% if history or notes %}{{ history_list() }}{% endif %}
       </article>
       {# The last answer to "Nur fragen": until the next question or reload; never part of the letter or of learning #}
-      <section class="ed-card ed-answer" data-answer aria-labelledby="ed-answer-title" aria-live="polite"{% if not answer %} hidden{% endif %}>
+      <article class="ed-card ed-answer" data-answer aria-labelledby="ed-answer-title" aria-live="polite"{% if not answer %} hidden{% endif %}>
         <h2 id="ed-answer-title">Claudes Antwort</h2>
         <p class="ed-answer-q"><span class="muted">Deine Frage:</span> <span data-answer-q>{{ answer.question if answer else "" }}</span></p>
         <div class="md ed-answer-a" data-answer-a>{% if answer %}{{ answer.answer|md }}{% endif %}</div>
-      </section>
-      <details class="disclosure ed-diff">
-        <summary>Deine Änderungen an Claudes Entwurf <span class="badge {{ 'warn' if changed else '' }}" data-diff-state>{{ "geändert" if changed else "keine" }}</span></summary>
-        <div class="disclosure-body" data-diff data-original="{{ session.original_text }}">
-          {% if changed %}{{ text_diff(session.original_text|word_diff(text)|trim_diff) }}
-          {%- else %}<p class="muted ed-nodiff">Noch keine Änderungen – der Text ist Claudes Entwurf.</p>{% endif %}
-        </div>
-      </details>
-      {{ listing_info() }}
+      </article>
+      {{ verlauf() }}
     </div>
   </form>
   {% if contact_url and listing.status != "sent" and not listing.discard_reason %}
@@ -414,16 +440,8 @@
       {% if logged_in %}<p class="ed-learn-link">{% if listing.status == "sent" %}<a href="/bewerbungen#b{{ listing.id }}">Zu deinen Bewerbungen →</a> · {% endif %}<a href="/">← Zur Liste</a></p>{% endif %}
     </div>
     <div class="ed-side">
-      <details class="disclosure ed-diff">
-        <summary>Deine Änderungen an Claudes Entwurf <span class="badge {{ 'warn' if changed else '' }}">{{ "geändert" if changed else "keine" }}</span></summary>
-        <div class="disclosure-body">
-          {% if changed %}{{ text_diff(session.original_text|word_diff(text)|trim_diff) }}
-          {%- else %}<p class="muted ed-nodiff">Keine Änderungen – der Text ist Claudes Entwurf.</p>{% endif %}
-        </div>
-      </details>
       {% if hint %}{{ hints_box(hint, hint_flag) }}{% endif %}
-      {% if history or notes %}<article class="ed-card">{{ history_list() }}</article>{% endif %}
-      {{ listing_info() }}
+      {{ verlauf() }}
     </div>
   </div>
   {% if listing.status != "sent" and not listing.discard_reason %}
@@ -433,6 +451,6 @@
   {% endif %}
   {% endif %}
   {% endif %}
-  {% if not session %}{{ listing_info() }}{% endif %}
+  {{ listing_drawer() }}
 </div>
 {% endblock %}

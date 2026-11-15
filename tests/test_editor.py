@@ -298,7 +298,7 @@ def test_revise_with_critique_and_history(client, lid, fake_generate):
     assert fake_generate == [{"kind": "custom", "previous_text": "Original von Hand", "instruction": "Kürzer bitte"}]
     page = client.get(f"/editor/{lid}").text
     assert "Fassung von Claude 1</textarea>" in page and "Fassung 2" in page
-    assert "„Kürzer bitte“" in page and "Claudes Entwurf" in page  # history
+    assert "<q>Kürzer bitte</q>" in page and "erster Entwurf" in page  # Verlauf
     assert "Codewort Linde" in page  # Claude's hint for this text
     assert "Es gibt einen neueren Entwurf" not in page  # its own revision isn't a newer draft
     assert "Claude-Aufrufen" not in page  # the daily count only shows when the limit comes near
@@ -318,20 +318,16 @@ def test_quick_buttons_shorter_and_formal(client, lid, fake_generate):
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     editor_cookie(client, lid)
     r, fields = open_editor(client, lid)
-    quick = r.text.split('class="ed-quick"')[1].split("</div>")[0]
-    for kind, label in [("shorter", "Kürzer"), ("formal", "Förmlicher"), ("regenerate", "Ganz neu schreiben")]:
-        assert re.search(rf'formaction="/editor/{lid}/quick" name="kind" value="{kind}"[^>]*>{label}</button>', quick)
-    assert "data-confirm=" not in quick and "data-confirm-changed=" in quick  # Claude's text unchanged: no question
+    assert "/quick" not in r.text  # the editor has no quick buttons any more; the route stays (Telegram's kinds)
 
     r = post(client, lid, "quick", fields, text="Original von Hand", critique="", kind="shorter")
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=shorter#text"
     assert fake_generate == [{"kind": "shorter", "previous_text": "Original von Hand", "instruction": None}]
     page = client.get(r.headers["location"]).text
     assert "Claude hat den Text gekürzt." in page and "Fassung von Claude 1</textarea>" in page and "Fassung 2" in page
-    assert "Kürzer <small class=\"muted\">(Schnellbutton)</small>" in page  # in the history
+    assert "überarbeitet: Kürzer" in page  # in the Verlauf
     (feedback,) = db.list_feedback()
     assert (feedback["source"], feedback["kind"], feedback["text"]) == ("editor", "quick", "shorter")
-    assert 'value="regenerate"' in page and "data-confirm=" in page.split('class="ed-quick"')[1].split("</div>")[0]
 
     # a critique typed but not sent stays in its field (by a one-time id, never in the URL)
     r = post(client, lid, "quick", fields, text="Fassung von Claude 1", critique="Balkon erwähnen", kind="formal")
@@ -361,7 +357,7 @@ def test_quick_button_regenerate_starts_a_new_round(client, lid, fake_generate):
     assert old["status"] == "superseded" and new["status"] == "open" and new["original_text"] == "Fassung von Claude 1"
     page = client.get(r.headers["location"]).text
     assert "ganz neu geschrieben" in page and "Fassung von Claude 1</textarea>" in page and "Fassung 1" in page
-    assert "Es gibt einen neueren Entwurf" not in page and "Noch keine Änderungen" in page  # the diff starts afresh
+    assert "Es gibt einen neueren Entwurf" not in page and "Keine Änderungen seit der letzten Fassung" in page
     assert post(client, lid, "quick", fields, text="Alter Tab", kind="shorter").status_code == 409  # old round's form
     assert len(fake_generate) == 1
 
@@ -445,8 +441,8 @@ def test_unsent_critique_on_fertig_is_kept(client, lid, fake_rules):
     assert wait_for_rules(client, lid) == "done"
     page = client.get(r.headers["location"]).text
     assert "hat Claude nicht mehr umgesetzt" in page and "als Rückmeldung gespeichert" in page
-    assert "„Den Balkon nicht erwähnen“" in page and "nicht an Claude geschickt" in page  # in the Verlauf
-    assert "Fassung" not in page.split('class="ed-history"')[1]  # no numbered Fassung for it
+    assert "„Den Balkon nicht erwähnen“" in page and "nicht an Claude geschickt" in page  # in the Verlauf, as a note
+    assert "Den Balkon nicht erwähnen" in page.split('id="verlauf"')[1].split('class="vl-item is-note"')[1]
 
 
 def test_finished_session_without_proposals_offers_to_ask(client, lid, fake_rules):
@@ -567,9 +563,10 @@ def test_mark_sent(client, lid):
     post(client, lid, "finish", fields, text="Ende")
     page = client.get(f"/editor/{lid}").text
     assert "<strong>Abgeschickt?</strong>" in page and "✅ Ja, abgeschickt" in page
-    assert f'<aside class="ask-sheet" data-ask-return="editor-{lid}" data-opened\n' in page  # the sheet, shown
+    assert f'<aside class="ask-sheet" id="editor-{lid}-ask" data-ask-return="editor-{lid}" data-opened\n' in page  # the sheet, shown
     sheet = page.split('class="ask-sheet"')[1].split("</aside>")[0]
-    assert 'class="secondary outline js-only" data-sheet-close>Noch nicht</button>' in sheet and "<dialog" not in page
+    assert 'class="secondary outline js-only" data-sheet-close>Noch nicht</button>' in sheet
+    assert "<dialog" not in page.replace('<dialog class="ed-sheet"', "") and "data-ask-fold" in sheet
     assert "ask-later" not in sheet and "uninteressant" not in sheet  # two buttons, only what she'd not do anyway
     assert page.count(f'action="/editor/{lid}/sent"') == 1  # asked once
     r = post(client, lid, "sent", {"token": fields["token"]})
@@ -652,13 +649,15 @@ def test_asks_after_opening_the_listing_while_writing(client, lid):
     r, fields = open_editor(client, lid)
     page = r.text
     assert f'data-go="{editor_access.make_open_path(lid)}"' in page  # "Kopieren & Inserat öffnen"
-    assert f'<aside class="ask-sheet ask-bar" data-ask-return="editor-{lid}" hidden' in page  # not armed
+    assert f'<aside class="ask-sheet ask-bar" id="editor-{lid}-ask" data-ask-return="editor-{lid}" hidden' in page  # not armed
     bar = page.split('class="ask-sheet ask-bar"')[1].split("</aside>")[0]
     assert "<strong>Uninteressant?</strong>" in bar and f'action="/editor/{lid}/dismiss"' in bar
     assert '<button type="submit" class="ask-bar-act is-dismiss">Aussortieren</button>' in bar
-    assert 'data-sheet-close aria-label="Schließen"' in bar and bar.count("<button") == 2
+    assert 'data-sheet-close aria-label="Schließen"' in bar and bar.count("<button") == 4  # + fold and its pill
+    assert "data-ask-fold" in bar and "data-ask-unfold" in bar
     assert f'name="token" value="{fields["token"]}"' in bar
-    assert "Ja, aussortieren" not in bar and ">Nein<" not in bar and "ask-later" not in bar and "<dialog" not in page
+    assert "Ja, aussortieren" not in bar and ">Nein<" not in bar and "ask-later" not in bar
+    assert "<dialog" not in page.replace('<dialog class="ed-sheet"', "")  # not modal (the drawer is the only dialog)
     db.mark_opened(lid)
     _, fields = open_editor(client, lid)
     assert f'data-ask-return="editor-{lid}" data-opened hidden' in client.get(f"/editor/{lid}").text
@@ -1059,7 +1058,7 @@ def test_editor_shows_pictures_and_details_collapsed(client, lid):
     page = client.get(f"/editor/{lid}").text
     assert 'Bilder <span class="count">1</span>' in page and f'src="/editor/{lid}/media/1"' in page
     assert "Beschreibung &amp; Details" in page and "Sonnig und ruhig." in page and "Frau Muster" in page
-    assert "<details class=\"disclosure\" open" not in page.split('class="ed-info"')[1].split("</div>\n\n")[0]
+    assert '<dialog class="ed-sheet" id="inserat" aria-labelledby="ed-sheet-title">' in page  # the drawer, closed
     r = client.get(f"/editor/{lid}/media/1")
     assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
     assert r.headers["cache-control"] == "no-store"
@@ -1076,7 +1075,7 @@ def test_editor_without_exposé_shows_fredys_description(client, lid):
     with db.connect() as conn:
         conn.execute("UPDATE listings SET description = ? WHERE id = ?", ("Kurzer Fredy-Text", lid))
     page = client.get(f"/editor/{lid}").text
-    assert ">Beschreibung</summary>" in page and "Kurzer Fredy-Text" in page
+    assert 'id="ed-sheet-text">Beschreibung</h3>' in page and "Kurzer Fredy-Text" in page
 
 
 def test_first_editor_visit_fetches_pictures(client, lid, monkeypatch):
@@ -1139,12 +1138,12 @@ def test_editor_load_and_reload_pictures(client, lid, monkeypatch):
     r = post(client, lid, "media", fields)  # still failing (fake fetch): no "geladen", the reason stays visible
     assert r.headers["location"] == f"/editor/{lid}?m=media_failed#bilder" and loads[-1] == (lid, True)
     page = client.get(r.headers["location"]).text
-    assert 'id="bilder" open' in page and "HTTP 429" in page and "Bilder geladen" not in page
+    assert 'id="inserat" aria-labelledby="ed-sheet-title" data-open' in page and "HTTP 429" in page and "Bilder geladen" not in page
     assert client.refreshed[-1] == lid
 
     db.set_media_state(lid, db.now_iso(), None)  # all there now: "Inserat neu laden"
     page = client.get(f"/editor/{lid}?m=media_loaded").text
-    assert "Bilder geladen." in page and 'id="bilder" open' in page and "Inserat neu laden</button>" in page
+    assert "Bilder geladen." in page and 'id="inserat" aria-labelledby="ed-sheet-title" data-open' in page and "Inserat neu laden</button>" in page
     assert post(client, lid, "media", fields, reload="1").headers["location"] == f"/editor/{lid}?m=media#bilder"
     assert post(client, lid, "media", fields, reload="1").headers["location"] == f"/editor/{lid}?m=media_soon#bilder"
     assert reloads == [lid, lid]
