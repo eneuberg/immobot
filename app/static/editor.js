@@ -1,5 +1,5 @@
 // immobot draft editor (/editor/{id}): comfort on top of plain forms, which work without JS.
-// Autosize, "Kopieren" for the text field, autosave of the text (with a warning on leaving while it isn't saved),
+// Autosize, "Kopieren" for the text field, "Kopieren & Inserat öffnen", autosave of the text (with a warning on leaving while it isn't saved),
 // "Claude schreibt …" while revising, a live word diff against Claude's original and polling while Claude looks for
 // rules. Loaded with defer, only on this page.
 (function () {
@@ -47,6 +47,38 @@
       navigator.clipboard.writeText(field.value).then(done, fallback);
     } else {
       fallback();
+    }
+  });
+
+  // --- "Kopieren & Inserat öffnen" ---------------------------------------------------------------------
+  // The one action of an open text: copy it and open the ad in a new tab - both only work during the tap itself -,
+  // then the button's form posts /finish as usual (submitInPlace below), with copied=1 when copying worked, so the
+  // finished page says what happened. Without JS the button only finishes; the next page has the text and the link.
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-copy-open]");
+    if (!btn || !text || btn.form !== form || (form && form.dataset.sent)) return;
+    var ok = false;
+    if (navigator.clipboard && window.isSecureContext) {
+      try { navigator.clipboard.writeText(text.value); ok = true; } catch (err) { ok = false; }
+    }
+    if (!ok) {
+      var start = text.selectionStart, end = text.selectionEnd;
+      text.select();
+      try { ok = document.execCommand("copy"); } catch (err) { ok = false; }
+      text.setSelectionRange(start, end);
+    }
+    var flag = form.querySelector("input[name=copied]");
+    if (!flag) {
+      flag = document.createElement("input");
+      flag.type = "hidden";
+      flag.name = "copied";
+      form.appendChild(flag);
+    }
+    flag.value = ok ? "1" : "";
+    btn.dataset.busyLabel = ok ? "Kopiert ✓" : "Speichert …";
+    if (btn.dataset.go) {
+      var tab = window.open(btn.dataset.go, "_blank");
+      if (tab) { try { tab.opener = null; } catch (err) { /* other origin already */ } }
     }
   });
 

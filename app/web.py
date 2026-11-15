@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import bot, db, editor_access, housekeeping, is24, learning, llm, media, portals, rent, search, settings, textdiff, textfmt, vault
+from . import bot, cards, db, editor_access, housekeeping, is24, learning, llm, media, portals, rent, search, settings, textdiff, textfmt, vault
 
 log = logging.getLogger(__name__)
 
@@ -61,19 +61,23 @@ FREDY_BASE_URL_MAX = 200
 
 # "Einstellungen" has three tabs: Profil (used most), Verhalten, Zugänge (set up once). Each form posts its
 # section, so it saves only its own checkboxes.
+# Three pages for three audiences (paths kept from before): you and your search, what immobot learned, technology.
 SETTINGS_SECTIONS = {
-    "profil": {"path": "/settings", "label": "Profil", "template": "settings.html"},
-    "verhalten": {"path": "/settings/verhalten", "label": "Verhalten", "template": "settings_verhalten.html"},
-    "zugaenge": {"path": "/settings/zugaenge", "label": "Zugänge", "template": "settings_zugaenge.html"},
+    "profil": {"path": "/settings", "label": "Ich & meine Suche", "template": "settings.html"},
+    "verhalten": {"path": "/settings/verhalten", "label": "Gelernt", "template": "settings_verhalten.html"},
+    "zugaenge": {"path": "/settings/zugaenge", "label": "Technik", "template": "settings_zugaenge.html"},
 }
+# The forms (hidden field "section"); "betrieb" (drafts, costs, photos, bot, system prompt) lives on the Technik page
+# but has its own form, so its switches are only reset by that form.
 SECTION_FIELDS = {
-    "profil": [*TEXT_SETTINGS, "target_words"],
-    "verhalten": ["effort", "monthly_budget_eur", "eur_usd_rate", "send_image", "llm_max_images", "is24_fetch",
-                  "followup_delay_s", "paused", "auto_dismiss_hours", "kleinanzeigen_enabled", "use_examples", "use_rules",
-                  "use_voice_guide"],
+    "profil": ["profile", "wishes", "style", "target_words"],
+    "verhalten": ["use_examples", "use_rules", "use_voice_guide"],
     "zugaenge": ["provider", "model", "fredy_base_url"],  # the model list depends on the provider and its key
+    "betrieb": ["effort", "monthly_budget_eur", "eur_usd_rate", "send_image", "llm_max_images", "is24_fetch",
+                "followup_delay_s", "paused", "auto_dismiss_hours", "kleinanzeigen_enabled", "system_prompt"],
 }
-FIELD_SECTION = {field: section for section, fields in SECTION_FIELDS.items() for field in fields}
+FORM_PAGE = {"betrieb": "zugaenge"}  # form -> page it is on (else the page of the same name)
+FIELD_SECTION = {field: FORM_PAGE.get(section, section) for section, fields in SECTION_FIELDS.items() for field in fields}
 AI_CREDENTIALS = {info["credential"]: provider for provider, info in settings.PROVIDERS.items()}  # "Zugänge" → KI-Anbieter
 # Credentials that may stay empty. Not the allowlist: with an empty list nobody may press the bot's buttons or open
 # the editor from Telegram. The Fredy MCP token is optional: without it listings just aren't marked offline automatically.
@@ -482,7 +486,7 @@ async def _login_notice(client: str) -> None:
     db.add_credential_event("dashboard", "login_new_ip", key)
     when = datetime.now(LOCAL_TZ).strftime("%d.%m. %H:%M")
     await bot.notify(f"🔓 Dashboard-Login von neuer IP {key} ({when})\n"
-                     "Nicht du? Im Dashboard „Abmelden“ (beendet alle Sitzungen) und DASHBOARD_PASSWORD in Coolify "
+                     "Nicht du? Im Dashboard „Abmelden“ (beendet alle Sitzungen) und DASHBOARD_PASSWORD auf dem Server "
                      "ändern.", bot.configured_chat_id())
 
 
@@ -559,6 +563,8 @@ MEDIA_SOURCE_LABELS = {"fredy": "Bilder von Fredy", "is24": "von ImmoScout24 gel
 def _listing_context(listing: dict, error: str | None = None) -> dict:
     pictures = media.stored_pictures(listing["id"])
     source = media.source_of(listing)
+    drafts = [_draft_view(d) for d in db.list_drafts(listing["id"])]
+    hint = drafts[-1].get("hint") if drafts else None
     return {
         "active": "listings",
         "listing": listing,
@@ -577,8 +583,13 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
         "image_url": portals.safe_url(listing["image_url"]),
         "contact_url": portals.safe_url(portals.contact_url(listing["provider"], listing["url"])),
         "fredy_url": portals.fredy_url(listing, db.get_settings()["fredy_base_url"]),
-        "drafts": [_draft_view(d) for d in db.list_drafts(listing["id"])],
-        "final_session": db.latest_session(listing["id"], "done"),  # the editor's "Endversion"
+        "drafts": drafts,
+        "final_session": db.latest_session(listing["id"], "done"),  # the editor's finished text
+        "session": db.latest_session(listing["id"]),  # open or done: what the one main button says
+        # the top of the page: rent that matters, rooms, district and Claude's hint of the newest draft
+        "card": cards.facts(listing, hint),
+        "hint": hint,
+        "hint_flag": cards.flag(hint),
         "auto_dismiss_hours": housekeeping.auto_dismiss_hours(),  # explains an automatic "uninteressant"
         "error": error,
     }
@@ -586,23 +597,37 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
 
 def _listing_cards(rows: list[dict]) -> list[dict]:
     thumbs = db.thumb_positions()  # listings with stored ImmoScout24 pictures
+    hints = db.latest_hints([row["id"] for row in rows])
     return [{
         **row,
         "portal": portals.provider_label(row["provider"]),
         # Server-built link to a stored picture; otherwise the template falls back to Fredy's image_url (safe_url).
         "thumb_url": f"/listing/{row['id']}/media/{thumbs[row['id']]}" if row["id"] in thumbs else None,
+        # warm rent, rooms, district and one flag from Claude's hint (cards.py)
+        "card": cards.facts(row, hints.get(row["id"])),
     } for row in rows]
 
 
 def card_counts(stats: dict | None = None) -> dict[str, int]:
-    """The numbers on the main page that a ❌/↩️ changes (filter chips, "x neu · y gesehen · z gesendet"), keyed
-    by the data-count names in listings.html: "all" (not aussortiert), the statuses (not aussortiert), "discarded"
-    (aussortiert), the reasons and "auto" (uninteressant by the job)."""
+    """The numbers on the main page that a ❌/↩️ changes (filter chips, group headings), keyed by the data-count
+    names in listings.html: "all" (not aussortiert), the statuses (not aussortiert), "open" (Neu + Gesehen: the
+    "Neu" group), "discarded" (aussortiert), the reasons and "auto" (uninteressant by the job)."""
     stats = stats or db.stats()
-    return {"all": stats["shown_total"], **{key: stats["by_status"].get(key, 0) for key in settings.STATUSES},
+    by_status = {key: stats["by_status"].get(key, 0) for key in settings.STATUSES}
+    return {"all": stats["shown_total"], **by_status, "open": by_status["new"] + by_status["seen"],
             "discarded": stats["discarded_total"],
             **{key: stats["by_discard"].get(key, 0) for key in settings.DISCARD_REASONS},
             "auto": stats["auto_dismissed"]}
+
+
+# The main page without a filter: three groups, what to do first on top. "open" is no status of its own: new and
+# seen listings without a draft ("Neu" for the person, whether the page was opened or not).
+LIST_GROUPS = [
+    ("open", "Neu", ("new", "seen")),
+    ("drafted", "Angefangen", ("drafted",)),
+    ("sent", f"Gesendet · letzte {settings.SENT_VISIBLE_HOURS} h", ("sent",)),
+]
+LIST_LIMIT = 300  # cards per filtered list; more are counted honestly ("die neuesten 300 von 547")
 
 
 def _card_html(listing_id: int, back: str) -> str:
@@ -616,14 +641,19 @@ def _wants_json(request: Request) -> bool:
 
 
 def _render_listings(request: Request, listings: list[dict], *, status: str | None = None, add_failed=None,
-                     search_info: dict | None = None, discarded: str | None = None, auto: bool = False):
+                     search_info: dict | None = None, discarded: str | None = None, auto: bool = False,
+                     groups: list[dict] | None = None, total: int | None = None):
     stats = db.stats()
+    costs = cost_overview()
     return render(request, "listings.html", {
         "active": "listings",
         "listings": listings,
+        "groups": groups,  # the default view: [{"key", "label", "listings"}], empty groups left out
+        "total": total,  # how many the filter matches when more than the list shows (LIST_LIMIT)
         "stats": stats,
         "counts": card_counts(stats),
-        "costs": cost_overview(),
+        # only a warning when the budget is nearly or fully used; the numbers are on Status and in Technik
+        "budget_warning": costs if costs["budget"] and (costs["used_pct"] or 0) >= 80 else None,
         "status_filter": status,
         "discard_filter": discarded,  # "all" or a reason: the "Aussortiert" row
         "auto_filter": auto,
@@ -636,12 +666,13 @@ def _render_listings(request: Request, listings: list[dict], *, status: str | No
 @router.get("/", dependencies=PAGE)
 def listings_page(request: Request, status: str | None = None, add: str | None = None, q: str | None = None,
                   auto: str | None = None, discarded: str | None = None):
-    """The main page. Without a filter: every listing that isn't aussortiert ("Alle"), sent ones only for
-    SENT_VISIBLE_HOURS after sending; status=…: one status of those (all sent ones under "Gesendet");
-    discarded=all|<reason> (&auto=1: "davon automatisch"): the aussortiert ones. A search (q) looks at all of them."""
+    """The main page. Without a filter: every listing that isn't aussortiert, in three groups (LIST_GROUPS: Neu,
+    Angefangen, Gesendet - sent ones only for SENT_VISIBLE_HOURS after sending); status=…: one status of those
+    ("open": Neu and Gesehen; all sent ones under "sent"); discarded=all|<reason> (&auto=1: "davon automatisch"):
+    the aussortiert ones. A search (q) looks at all of them."""
     if status == "dismissed":  # links and bookmarks from before "aussortiert"
         status, discarded = None, settings.MANUAL_DISCARD
-    if status not in settings.STATUSES:
+    if status not in settings.STATUSES and status != "open":
         status = None
     if discarded != "all" and discarded not in settings.DISCARD_REASONS:
         discarded = None
@@ -653,14 +684,27 @@ def listings_page(request: Request, status: str | None = None, add: str | None =
     except ValueError:
         add_failed = None
     query = " ".join((q or "").split())[:search.QUERY_MAX]
+    db_status = ("new", "seen") if status == "open" else status
     if query:  # word search: free, every meaningful word must appear (search.keyword_search); aussortiert ones too
-        rows = search.keyword_search(query, db.list_listings(status, limit=2000))
+        rows = search.keyword_search(query, db.list_listings(db_status, limit=2000))
         return _render_listings(request, _listing_cards(rows), status=status, add_failed=add_failed,
                                 search_info={"query": query, "no_terms": not search.query_terms(query)})
+    if not status and not discarded:
+        cards_ = _listing_cards(db.list_listings(discard="none", recent_sent_only=True, limit=1000))
+        groups = [{"key": key, "label": label, "listings": [c for c in cards_ if c["status"] in statuses]}
+                  for key, label, statuses in LIST_GROUPS]
+        return _render_listings(request, cards_, add_failed=add_failed, groups=[g for g in groups if g["listings"]])
     discard = ("any" if discarded == "all" else discarded) if discarded else "none"
-    rows = db.list_listings(status, auto=only_auto, discard=discard, recent_sent_only=not status and not discarded)
-    return _render_listings(request, _listing_cards(rows),
-                            status=status, add_failed=add_failed, discarded=discarded, auto=only_auto)
+    rows = db.list_listings(db_status, auto=only_auto, discard=discard, limit=LIST_LIMIT)
+    total = None
+    if len(rows) >= LIST_LIMIT:
+        counts = card_counts()
+        if discarded:
+            total = counts["auto"] if only_auto else counts["discarded" if discarded == "all" else discarded]
+        else:
+            total = counts[status]
+    return _render_listings(request, _listing_cards(rows), status=status, add_failed=add_failed,
+                            discarded=discarded, auto=only_auto, total=total if total and total > len(rows) else None)
 
 
 ADDED_MESSAGES = {  # /listing/{id}?neu=… after "Inserat per Link"
@@ -791,7 +835,9 @@ async def listing_restore(request: Request, listing_id: int, next: str = Form(""
 
 
 @router.post("/listing/{listing_id}/draft", dependencies=ACTION)
-async def listing_create_draft(request: Request, listing_id: int):
+async def listing_create_draft(request: Request, listing_id: int, then: str = Form("")):
+    """"Anschreiben schreiben lassen" (then=editor: the main button, on to the editor with the new text) or
+    "Neues Anschreiben erzeugen" under "Alle Anschreiben" (back to the listing page)."""
     _listing_or_404(listing_id)
     db.mark_seen(listing_id)
     kind = "regenerate" if db.latest_draft(listing_id) else "initial"
@@ -804,6 +850,8 @@ async def listing_create_draft(request: Request, listing_id: int):
         context = _listing_context(_listing_or_404(listing_id), error=redact(request, message))
         return render(request, "listing.html", context)
     bot.schedule_refresh(listing_id)  # the Telegram message shows the draft instead of "✍️ Anschreiben"
+    if then == "editor":
+        return RedirectResponse(f"/editor/{listing_id}#text", status_code=303)
     anchor = f"d{draft['id']}" if isinstance(draft, dict) and draft.get("id") else "entwuerfe"
     return RedirectResponse(f"/listing/{listing_id}#{anchor}", status_code=303)
 
@@ -1208,10 +1256,11 @@ def _render_section(request: Request, section: str, *, values: dict | None = Non
     }
     if template is None and section == "profil":
         context.update(_profile_context(request, all_versions))
-    elif template is None and section == "verhalten":
+    elif template is None and section == "verhalten":  # "Gelernt": rewrite card and versions, rules, examples
+        context.update(_profile_context(request, all_versions), **_learning_context())
+    elif template is None:  # "Technik": credentials, provider, Fredy, and the "betrieb" form
         context.update(effort_options=[(e, EFFORT_LABELS.get(e, e)) for e in settings.EFFORTS],
-                       costs=cost_overview(current), **_learning_context())
-    elif template is None:
+                       costs=cost_overview(current))
         saved_provider = settings.provider_of(current)
         context.update(
             panels=_provider_panels(request, current),
@@ -1225,6 +1274,7 @@ def _render_section(request: Request, section: str, *, values: dict | None = Non
 
 SETTINGS_MESSAGES = {
     "saved": "Gespeichert.",
+    "reset": "System-Prompt auf den Standard zurückgesetzt.",
     "key": "API-Key gespeichert.",
     "models": "Modellliste neu geladen.",
 }
@@ -1241,10 +1291,11 @@ def settings_page(request: Request, saved: str | None = None, reset: str | None 
 
 @router.get("/settings/verhalten", dependencies=PAGE)
 def settings_verhalten_page(request: Request, saved: str | None = None, done: str | None = None,
-                            undo: str | None = None):
+                            undo: str | None = None, verlauf: str | None = None):
     card, card_message = LEARNING_MESSAGES.get(done or "", (None, None))
     return _render_section(request, "verhalten", message=SETTINGS_MESSAGES["saved"] if saved else None,
-                           card=card, card_message=card_message,
+                           card=card, card_message=card_message, all_versions=verlauf == "alle",
+                           verlauf_open=bool(verlauf),
                            undo_example=_int_param(undo) if done == "example_off" else None)
 
 
@@ -1317,12 +1368,13 @@ async def settings_models_refresh(provider: str = Form("")):
 @router.post("/settings", dependencies=ACTION)
 async def settings_save(request: Request):
     form = {key: value for key, value in (await request.form()).items() if isinstance(value, str)}
-    section = form.get("section") if form.get("section") in SETTINGS_SECTIONS else None
+    section = form.get("section") if form.get("section") in SECTION_FIELDS else None
     current = db.get_settings()
     values, errors = validate_settings(form, current, section)
+    page = FORM_PAGE.get(section, section)
     if errors:
         shown = {**current, **values}  # keep the user's input in the form
-        page = section or FIELD_SECTION[next(iter(errors))]  # without a section: the page of the first bad field
+        page = page or FIELD_SECTION[next(iter(errors))]  # without a section: the page of the first bad field
         return _render_section(request, page, values=shown, errors=errors, error="Nicht gespeichert, bitte Eingaben prüfen.",
                                show=values.get("provider"), status_code=400)
     db.update_settings(values)
@@ -1332,7 +1384,8 @@ async def settings_save(request: Request):
             and vault.get(settings.PROVIDERS[provider]["credential"])):
         await _refresh_models_quietly(provider)  # first switch to a provider: check which models its key offers
     query = "?saved=1" + (f"&version={version_id}" if version_id else "")
-    return RedirectResponse(SETTINGS_SECTIONS[section or "profil"]["path"] + query, status_code=303)
+    anchor = "#betrieb" if section == "betrieb" else ""
+    return RedirectResponse(SETTINGS_SECTIONS[page or "profil"]["path"] + query + anchor, status_code=303)
 
 
 @router.post("/settings/reset/{key}", dependencies=ACTION)
@@ -1341,6 +1394,8 @@ def settings_reset(key: str):
         raise HTTPException(status_code=404, detail="Unbekannte Einstellung")
     db.reset_setting(key)
     version_id = db.snapshot_profile("reset", f"„{TEXT_SETTING_LABELS[key]}“ auf Standard")
+    if key == "system_prompt":  # under "Technik"
+        return RedirectResponse("/settings/zugaenge?saved=reset#betrieb", status_code=303)
     return RedirectResponse(f"/settings?reset={key}" + (f"&version={version_id}" if version_id else ""), status_code=303)
 
 
@@ -1403,7 +1458,7 @@ async def settings_rewrite_start(request: Request):
         started_at = db.now_iso()
         _set_rewrite_job(state="running", started_at=started_at)
         _rewrite_task = asyncio.create_task(_run_rewrite(started_at))
-    return RedirectResponse("/settings#verbessern", status_code=303)
+    return RedirectResponse("/settings/verhalten#verbessern", status_code=303)
 
 
 @router.get("/settings/rewrite/status", dependencies=PAGE)
@@ -1411,7 +1466,7 @@ def settings_rewrite_status():
     """For app.js: {"state": "none" | "running" | "done" | "failed", "url": where to go once it is over}."""
     job = _rewrite_job() or {}
     state = job.get("state") or "none"
-    url = f"/settings/vorschlag/{job['proposal_id']}" if state == "done" and job.get("proposal_id") else "/settings"
+    url = f"/settings/vorschlag/{job['proposal_id']}" if state == "done" and job.get("proposal_id") else "/settings/verhalten"
     return {"state": state, "url": url}
 
 
@@ -1421,7 +1476,7 @@ def settings_rewrite_dismiss():
     job = _rewrite_job()
     if job and job.get("state") == "failed":
         db.delete_meta(REWRITE_JOB_META)
-    return RedirectResponse("/settings", status_code=303)
+    return RedirectResponse("/settings/verhalten", status_code=303)
 
 
 def _proposal_or_404(proposal_id: int) -> dict:

@@ -138,7 +138,7 @@ def test_telegram_link_starts_a_browser_session(client, lid):
     assert "Entwurfs-Editor" in page.text  # minimal header: no way into the dashboard
     for link in ('href="/settings"', 'href="/status"', 'href="/"', "Abmelden", "🔗 Dashboard", f'href="/listing/{lid}"'):
         assert link not in page.text
-    assert f'href="{editor_access.make_open_path(lid)}"' in page.text  # "📨 Inserat öffnen", via /go (no login)
+    assert f'data-go="{editor_access.make_open_path(lid)}"' in page.text  # "Kopieren & Inserat öffnen", via /go
 
 
 def test_cookie_is_secure_like_the_session_cookie(client, lid, monkeypatch):
@@ -220,7 +220,7 @@ def test_editor_access_matrix(client, lid):
         r = client.get(f"/editor/{listing_id}")
         assert r.status_code == 200 and f'href="/listing/{listing_id}"' in r.text and 'href="/settings"' in r.text
         assert_editor_headers(r)
-    assert "Noch kein Entwurf" in client.get(f"/editor/{other}").text
+    assert "Noch kein Anschreiben" in client.get(f"/editor/{other}").text
     for path in ["/editor/abc", "/editor/0", "/editor/99999"]:
         r = client.get(path)
         assert r.status_code == 404 and "Inserat nicht gefunden" in r.text and "abc" not in r.text
@@ -285,7 +285,7 @@ def test_revise_with_critique_and_history(client, lid, fake_generate):
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     editor_cookie(client, lid)
     r, fields = open_editor(client, lid)
-    assert "„Fertig“ speichert die Endversion." in r.text  # orientation on a fresh round
+    assert "Kopieren &amp; Inserat öffnen" in r.text and "Fassung 1" not in r.text  # one action; no badge yet
     r = post(client, lid, "revise", fields, text="Original von Hand", critique="  ")
     assert r.status_code == 400 and "was Claude ändern soll" in r.text
     assert db.latest_session(lid)["current_text"] == "Original von Hand"  # hand edits saved anyway
@@ -296,7 +296,6 @@ def test_revise_with_critique_and_history(client, lid, fake_generate):
     assert "Fassung von Claude 1</textarea>" in page and "Fassung 2" in page
     assert "„Kürzer bitte“" in page and "Claudes Entwurf" in page  # history
     assert "Codewort Linde" in page  # Claude's hint for this text
-    assert "„Fertig“ speichert die Endversion." not in page  # not once you are working on it
     assert "Es gibt einen neueren Entwurf" not in page  # its own revision isn't a newer draft
     assert "Claude-Aufrufen" not in page  # the daily count only shows when the limit comes near
     editor.CALLS_SHOWN_FROM, shown_from = 1, editor.CALLS_SHOWN_FROM
@@ -407,19 +406,22 @@ def test_finish_proposes_rules_in_the_background(client, lid, fake_rules):
     assert (session["status"], session["final_text"]) == ("done", "Endversion von Hand")
     assert wait_for_rules(client, lid) == "done" and fake_rules == [session["id"]]
     page = client.get(f"/editor/{lid}").text
-    assert "Endversion von Hand</pre>" in page and "Nenne kein Einzugsdatum.</textarea>" in page
+    assert "Endversion von Hand</pre>" in page and "Nenne kein Einzugsdatum." not in page  # proposals: own page
+    assert f'href="/editor/{lid}/lernen"' in page and "Claude hat 2 Vorschläge aus deinen Änderungen" in page
+    page = client.get(f"/editor/{lid}/lernen").text
+    assert "Nenne kein Einzugsdatum.</textarea>" in page
     assert "Datum zweimal gestrichen." in page and "Bisher:" in page and "Alte Regel" in page
-    assert "Claude sucht nach Regeln" not in page
+    assert "Claude sucht nach Regeln" not in page and "Hast du die Nachricht abgeschickt?" not in page
 
     new_rule, update = db.list_rules("proposed", session_id=session["id"])
     r = post(client, lid, f"rules/{new_rule['id']}", fields, decision="accept", text="Nenne nie ein Einzugsdatum.")
-    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=accepted#regeln"
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}/lernen?m=accepted#regeln"
     rule = db.get_rule(new_rule["id"])
     assert (rule["status"], rule["text"], rule["proposed_text"]) == ("active", "Nenne nie ein Einzugsdatum.",
                                                                      "Nenne kein Einzugsdatum.")
     assert post(client, lid, f"rules/{update['id']}", fields, decision="reject").status_code == 303
     assert db.get_rule(update["id"])["status"] == "rejected"
-    page = client.get(f"/editor/{lid}").text
+    page = client.get(f"/editor/{lid}/lernen").text
     assert "Nenne nie ein Einzugsdatum." in page and "verworfen" in page  # decided ones listed
     r = post(client, lid, f"rules/{update['id']}", fields, decision="accept")
     assert r.status_code == 400 and "schon entschieden" in r.text
@@ -451,12 +453,12 @@ def test_finished_session_without_proposals_offers_to_ask(client, lid, fake_rule
     _, fields = open_editor(client, lid)
     session_id = int(fields["session_id"])
     learning.finish(session_id, "Geändert")  # finished, but no rule round (like a job lost in a restart)
-    page = client.get(f"/editor/{lid}").text
-    assert "Für diese Endversion hat Claude noch keine Regeln vorgeschlagen." in page
+    page = client.get(f"/editor/{lid}/lernen").text
+    assert "Für diesen Text hat Claude noch keine Regeln vorgeschlagen." in page
     assert f'action="/editor/{lid}/rules/retry"' in page and "Regeln vorschlagen lassen" in page
     r = post(client, lid, "rules/retry", fields)
     assert r.status_code == 303 and wait_for_rules(client, lid) == "done" and fake_rules == [session_id]
-    page = client.get(f"/editor/{lid}").text
+    page = client.get(f"/editor/{lid}/lernen").text
     assert "Nenne kein Einzugsdatum.</textarea>" in page and "Regeln vorschlagen lassen" not in page
 
 
@@ -471,7 +473,7 @@ def test_finished_session_says_why_there_are_no_proposals(client, lid, final, ba
     session = learning.finish(int(fields["session_id"]), final)
     if basis:  # a round was made and found nothing
         db.update_session(session["id"], rules_basis=learning._rules_basis(session, []))
-    page = client.get(f"/editor/{lid}").text
+    page = client.get(f"/editor/{lid}/lernen").text
     assert shown in page and "Regeln vorschlagen lassen" not in page
 
 
@@ -507,7 +509,7 @@ def test_rule_job_error_and_retry(client, lid, monkeypatch):
     _, fields = open_editor(client, lid)
     post(client, lid, "finish", fields, text="Ende")
     assert wait_for_rules(client, lid) == "error"
-    page = client.get(f"/editor/{lid}").text
+    page = client.get(f"/editor/{lid}/lernen").text
     assert "Keine Regelvorschläge: Monatsbudget von 15 € erreicht." in page and "Nochmal versuchen" in page
 
     async def boom(session_id):
@@ -516,7 +518,7 @@ def test_rule_job_error_and_retry(client, lid, monkeypatch):
     monkeypatch.setattr(learning, "propose_rules", boom)
     r = post(client, lid, "rules/retry", fields)
     assert r.status_code == 303 and wait_for_rules(client, lid) == "error"
-    page = client.get(f"/editor/{lid}").text
+    page = client.get(f"/editor/{lid}/lernen").text
     assert "Unerwarteter Fehler" in page and "secret detail" not in page
 
 
@@ -528,8 +530,10 @@ def test_waiting_page_while_rules_run(client, lid):
     learning.finish(session_id, "Ende")
     editor._rule_jobs[session_id] = {"state": "running", "error": None}
     page = client.get(f"/editor/{lid}").text
+    assert "Claude lernt aus deinen Änderungen – ansehen" in page and "data-rules-poll" not in page  # just a link
+    page = client.get(f"/editor/{lid}/lernen").text
     assert "Claude sucht nach Regeln …" in page and f'data-rules-poll="/editor/{lid}/rules/status"' in page
-    assert f'<noscript><meta http-equiv="refresh" content="5; url=/editor/{lid}"></noscript>' in page  # no "#…"
+    assert f'<noscript><meta http-equiv="refresh" content="5; url=/editor/{lid}/lernen"></noscript>' in page  # no "#…"
     assert client.get(f"/editor/{lid}/rules/status").json() == {"state": "running"}
     r = post(client, lid, "reopen", fields)
     assert r.status_code == 409 and db.get_session(session_id)["status"] == "done"
@@ -559,14 +563,14 @@ def test_mark_sent(client, lid):
     post(client, lid, "finish", fields, text="Ende")
     page = client.get(f"/editor/{lid}").text
     assert "Hast du die Nachricht abgeschickt?" in page and "✅ Ja, abgeschickt" in page
-    assert f'<dialog class="ed-ask-dialog" data-ask-return="editor-{lid}" data-opened' in page  # the overlay, always
-    assert "data-dialog-close>Noch nicht</button>" in page
-    assert page.count(f'action="/editor/{lid}/sent"') == 2  # card and overlay
+    assert f'<aside class="ask-sheet" data-ask-return="editor-{lid}" data-opened\n' in page  # the sheet, shown
+    assert "data-sheet-close>Noch nicht</button>" in page and "<dialog" not in page  # not modal
+    assert page.count(f'action="/editor/{lid}/sent"') == 1  # asked once
     r = post(client, lid, "sent", {"token": fields["token"]})
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=sent#ende"
     assert db.get_listing(lid)["status"] == "sent" and client.refreshed == [lid, lid]  # Telegram: Endversion, then "gesendet"
     page = client.get(f"/editor/{lid}").text
-    assert "als gesendet markiert" in page and "Hast du die Nachricht abgeschickt?" not in page
+    assert "✓ Gesendet" in page and "Hast du die Nachricht abgeschickt?" not in page
     # pressed by mistake: "zurücknehmen" -> back to "Entwurf"
     assert f'action="/editor/{lid}/unsent"' in page
     r = post(client, lid, "unsent", {"token": fields["token"]})
@@ -582,7 +586,7 @@ def test_mark_dismissed_after_finish(client, lid):
     _, fields = open_editor(client, lid)
     post(client, lid, "finish", fields, text="Ende")
     page = client.get(f"/editor/{lid}").text
-    assert page.count(f'action="/editor/{lid}/dismiss"') == 2 and "❌ Doch uninteressant" in page
+    assert page.count(f'action="/editor/{lid}/dismiss"') == 1 and "Doch uninteressant" in page
     r = post(client, lid, "dismiss", {"token": fields["token"]})
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=dismissed#ende"
     listing = db.get_listing(lid)
@@ -639,11 +643,11 @@ def test_asks_after_opening_the_listing_while_writing(client, lid):
     editor_cookie(client, lid)
     r, fields = open_editor(client, lid)
     page = r.text
-    assert f'href="{editor_access.make_open_path(lid)}"' in page and "data-opens-listing" in page
-    assert f'data-ask-return="editor-{lid}" aria-labelledby' in page and "Weiter anschreiben?" in page  # not armed
+    assert f'data-go="{editor_access.make_open_path(lid)}"' in page  # "Kopieren & Inserat öffnen"
+    assert f'data-ask-return="editor-{lid}" hidden' in page and "Weiter anschreiben?" in page  # not armed
     db.mark_opened(lid)
     _, fields = open_editor(client, lid)
-    assert f'data-ask-return="editor-{lid}" data-opened' in client.get(f"/editor/{lid}").text
+    assert f'data-ask-return="editor-{lid}" data-opened hidden' in client.get(f"/editor/{lid}").text
     r = post(client, lid, "dismiss", {"token": fields["token"]})
     assert r.status_code == 303 and db.get_listing(lid)["discard_reason"] == "uninteressant"
     assert "data-ask-return" not in client.get(f"/editor/{lid}").text  # nothing left to decide
@@ -666,14 +670,14 @@ def test_new_round_from_a_newer_draft(client, lid):
     assert post(client, lid, "new-round", fields).status_code == 400  # nothing newer yet
     newer = db.add_draft(lid, "shorter", "Kürzer aus Telegram", "claude-opus-5-5")
     page = client.get(f"/editor/{lid}").text
-    assert "Es gibt einen neueren Entwurf" in page and "Kürzer" in page and "data-confirm=" in page
+    assert "Es gibt ein neueres Anschreiben" in page and "Kürzer" in page and "data-confirm=" in page
     r = post(client, lid, "new-round", fields)
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=round#text"
     old = db.get_session(int(fields["session_id"]))
     new = db.latest_session(lid)
     assert old["status"] == "superseded" and (new["status"], new["base_draft_id"]) == ("open", newer)
     page = client.get(f"/editor/{lid}").text
-    assert "Kürzer aus Telegram</textarea>" in page and "Es gibt einen neueren Entwurf" not in page
+    assert "Kürzer aus Telegram</textarea>" in page and "Es gibt ein neueres Anschreiben" not in page
     r = post(client, lid, "save", fields, text="Aus dem alten Tab")  # a form of the old round
     assert r.status_code == 409 and "nicht mehr aktuell" in r.text and "Aus dem alten Tab</pre>" in r.text
     assert db.latest_session(lid)["current_text"] == "Kürzer aus Telegram"
@@ -690,7 +694,7 @@ def test_create_first_draft_in_the_editor(client, lid, monkeypatch):
     monkeypatch.setattr(llm, "create_and_store_draft", create)
     editor_cookie(client, lid)
     r, fields = open_editor(client, lid)
-    assert "Noch kein Entwurf" in r.text and "session_id" not in fields
+    assert "Noch kein Anschreiben" in r.text and "session_id" not in fields
     r = post(client, lid, "draft", fields)
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=draft#text"
     assert calls == [(lid, "initial", "editor", False)] and client.refreshed == [lid]
@@ -703,11 +707,12 @@ def test_listing_page_links_the_editor_and_shows_the_final_version(client, lid):
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     login(client)
     page = client.get(f"/listing/{lid}").text
-    assert f'href="/editor/{lid}"' in page and "Im Editor bearbeiten" in page and "Endversion" not in page
+    assert f'href="/editor/{lid}"' in page and "Anschreiben bearbeiten" in page and "Fertiges Anschreiben" not in page
     session = learning.open_or_create_session(lid)
     learning.finish(session["id"], "Meine Endversion")
     page = client.get(f"/listing/{lid}").text
-    assert "Endversion" in page and "Meine Endversion</pre>" in page and f'data-copy="final-{session["id"]}"' in page
+    assert "Fertiges Anschreiben öffnen" in page and "Meine Endversion</pre>" in page
+    assert f'data-copy="final-{session["id"]}"' in page
     assert client.get(f"/listing/{lid}").headers["referrer-policy"] == "same-origin"  # only the editor is no-referrer
 
 
@@ -726,16 +731,17 @@ def test_hint_and_rule_reasons_render_markdown_texts_stay_raw(client, lid, fake_
     db.add_draft(lid, "initial", "Text mit **Sternen**", "claude-opus-5-5", hint="Bitte **Codewort** nennen")
     login(client)
     page, fields = open_editor(client, lid)
-    hint = '<strong class="md-label">Hinweis von Claude:</strong> <p>Bitte <strong>Codewort</strong> nennen</p>'
-    assert hint in page.text
+    hint = '<div class="md ed-hints-body"><p>Bitte <strong>Codewort</strong> nennen</p></div>'
+    assert hint in page.text and "Hinweis von Claude" in page.text
     assert ">Text mit **Sternen**</textarea>" in page.text
     post(client, lid, "finish", fields, text="Mit *Stern*")
     session = db.latest_session(lid)
     assert wait_for_rules(client, lid) == "done"
     db.add_rule("Schreib **so**.", reason="Du hast *zweimal* gekürzt.", session_id=session["id"])
-    page = client.get(f"/editor/{lid}").text
+    assert ">Mit *Stern*</pre>" in client.get(f"/editor/{lid}").text
+    page = client.get(f"/editor/{lid}/lernen").text
     assert '<div class="ed-reason md"><p>Du hast <em>zweimal</em> gekürzt.</p></div>' in page
-    assert ">Mit *Stern*</pre>" in page and ">Schreib **so**.</textarea>" in page
+    assert ">Schreib **so**.</textarea>" in page
 
 
 def test_finish_and_reopen_refresh_the_telegram_message(client, lid, fake_rules, monkeypatch):
@@ -764,11 +770,11 @@ def test_page_without_a_save_button(client, lid):
     editor_cookie(client, lid)
     r, _ = open_editor(client, lid)
     bar = r.text.split('<div class="ed-bar">')[1].split("</div>")[0]
-    assert ">Fertig ✓</button>" in bar and "Speichern" not in bar
-    assert "Kopieren" not in r.text.split('<div class="ed-grid"')[0] + bar  # copying comes after "Fertig"
+    assert ">Kopieren &amp; Inserat öffnen</button>" in bar and "Speichern" not in bar  # the one action
+    assert 'formaction="/editor/1/finish" data-copy-open' in bar  # it finishes: learning works as before
     head = r.text.split('<header class="ed-card-head">')[1].split("</header>")[0]
     assert 'class="linkish ed-save-nojs nojs-only"' in head and ">Zwischenspeichern</button>" in head  # without JS
-    assert "Erst bearbeiten, dann „Fertig“: Danach kannst du den Text kopieren" in bar
+    assert "Kopiert den Text, öffnet das Inserat und speichert den Text als fertig" in bar
     assert 'data-save-state role="status"' in r.text and "data-save-reload hidden" in r.text
 
 
@@ -824,7 +830,7 @@ def test_rules_card_explains_the_search(client, lid, fake_rules):
     _, fields = open_editor(client, lid)
     post(client, lid, "finish", fields, text="Geändert")
     wait_for_rules(client, lid)
-    page = client.get(f"/editor/{lid}").text
+    page = client.get(f"/editor/{lid}/lernen").text
     assert "Claude schaut, was du selbst geändert hast, was du von seinen Überarbeitungen behalten hast" in page
     # Claude proposed something: "Regel selbst eintragen" is there, but collapsed
     assert '<details class="rule-add">\n  <summary>Regel selbst eintragen</summary>' in page
@@ -837,7 +843,7 @@ def test_no_rule_shows_claudes_reason_and_the_manual_form(client, lid):
     session = learning.finish(int(fields["session_id"]), "Geändert")
     db.update_session(session["id"], rules_basis=learning._rules_basis(session, []),
                       rules_note="Die Änderung betraf nur den Namen der Ansprechperson.")
-    page = client.get(f"/editor/{lid}").text
+    page = client.get(f"/editor/{lid}/lernen").text
     assert "<strong>Claude:</strong> Die Änderung betraf nur den Namen der Ansprechperson." in page
     assert "keine allgemeine Regel gefunden" not in page
     assert '<details class="rule-add is-prominent" open>' in page and f'action="/editor/{lid}/rules/add"' in page
@@ -853,7 +859,7 @@ def test_add_own_rule_in_the_editor(client, lid):
     assert r.status_code == 409 and db.list_rules() == []  # only after "Fertig"
     session = learning.finish(int(fields["session_id"]), "Ende")
     r = post(client, lid, "rules/add", fields, text=" Schreib „Viele Grüße“\nstatt „Mit freundlichen Grüßen“. ")
-    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=rule_added#regeln"
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}/lernen?m=rule_added#regeln"
     (rule,) = db.list_rules("active")
     assert (rule["text"], rule["session_id"], rule["proposed_text"]) == (
         "Schreib „Viele Grüße“ statt „Mit freundlichen Grüßen“.", session["id"], None)
@@ -916,7 +922,7 @@ def test_editor_without_exposé_shows_fredys_description(client, lid):
     with db.connect() as conn:
         conn.execute("UPDATE listings SET description = ? WHERE id = ?", ("Kurzer Fredy-Text", lid))
     page = client.get(f"/editor/{lid}").text
-    assert "📄 Beschreibung</summary>" in page and "Kurzer Fredy-Text" in page
+    assert ">Beschreibung</summary>" in page and "Kurzer Fredy-Text" in page
 
 
 def test_first_editor_visit_fetches_pictures(client, lid, monkeypatch):
@@ -950,7 +956,7 @@ def test_first_editor_visit_downloads_pictures_known_by_url(client, lid, monkeyp
     db.replace_media(lid, [{"position": 1, "caption": "Balkon", "source_url": "https://x.example/1", "file": ""}])
     login(client)
     page = client.get(f"/editor/{lid}").text
-    assert calls == [lid] and "🖼 Bilder laden" in page  # still missing (fake fetch): the button stays
+    assert calls == [lid] and "Bilder laden</button>" in page  # still missing (fake fetch): the button stays
 
 
 def test_editor_load_and_reload_pictures(client, lid, monkeypatch):
@@ -971,7 +977,7 @@ def test_editor_load_and_reload_pictures(client, lid, monkeypatch):
     db.set_media_state(lid, db.now_iso(), "Exposé nicht abrufbar (HTTP 429).")
     editor_cookie(client, lid)
     r, fields = open_editor(client, lid)
-    assert "🔄 Erneut versuchen" in r.text and "HTTP 429" in r.text
+    assert "Erneut versuchen</button>" in r.text and "HTTP 429" in r.text
     r = post(client, lid, "media", fields)  # still failing (fake fetch): no "geladen", the reason stays visible
     assert r.headers["location"] == f"/editor/{lid}?m=media_failed#bilder" and loads[-1] == (lid, True)
     page = client.get(r.headers["location"]).text
@@ -980,7 +986,7 @@ def test_editor_load_and_reload_pictures(client, lid, monkeypatch):
 
     db.set_media_state(lid, db.now_iso(), None)  # all there now: "Inserat neu laden"
     page = client.get(f"/editor/{lid}?m=media_loaded").text
-    assert "Bilder geladen." in page and 'id="bilder" open' in page and "🔄 Inserat neu laden" in page
+    assert "Bilder geladen." in page and 'id="bilder" open' in page and "Inserat neu laden</button>" in page
     assert post(client, lid, "media", fields, reload="1").headers["location"] == f"/editor/{lid}?m=media#bilder"
     assert post(client, lid, "media", fields, reload="1").headers["location"] == f"/editor/{lid}?m=media_soon#bilder"
     assert reloads == [lid, lid]
@@ -1042,7 +1048,7 @@ def test_rule_accepted_with_scope_and_strength_and_a_fact(client, lid):
     rule = db.add_rule("Gern ein Smiley.", session_id=session_id, scope="privat", strength="soft")
     fact = db.add_rule("Einzug ab sofort", action="fact", session_id=session_id, fact_old="ideal November",
                        fact_new="ab sofort")
-    page = client.get(f"/editor/{lid}").text
+    page = client.get(f"/editor/{lid}/lernen").text
     assert 'value="privat"' in page and "„Über mich“ ergänzen" in page and "In „Über mich“ bisher:" in page
     r = post(client, lid, f"rules/{rule}", {"token": fields["token"], "session_id": str(session_id)},
              decision="accept", text="Gern ein „:)“.", scope="lockerer Ton", strength="hard", has_opts="1")
@@ -1051,7 +1057,7 @@ def test_rule_accepted_with_scope_and_strength_and_a_fact(client, lid):
         "status": "active", "text": "Gern ein „:)“.", "scope": "lockerer Ton", "strength": "hard"}
     r = post(client, lid, f"rules/{fact}", {"token": fields["token"], "session_id": str(session_id)},
              decision="accept", text="ab sofort")
-    assert r.headers["location"] == f"/editor/{lid}?m=fact#regeln"
+    assert r.headers["location"] == f"/editor/{lid}/lernen?m=fact#regeln"
     assert db.get_settings()["profile"] == "Einzug: ab sofort." and db.get_rule(fact)["status"] == "merged"
 
 
@@ -1061,5 +1067,33 @@ def test_editor_links_the_address_to_google_maps(client, lid):
     r, _ = open_editor(client, lid)
     link = "https://www.google.com/maps/search/?api=1&amp;query=Musterstr.%2012%2C%20K%C3%B6ln"
     assert ('<p class="ed-facts">780 € · 54 m² · Musterstr. 12 · <a href="' + link + '" target="_blank" '
-            'rel="noopener noreferrer">In Google Maps öffnen ↗</a></p>') in r.text
+            'rel="noopener noreferrer">Karte ↗</a></p>') in r.text
     assert "<iframe" not in r.text and "data-map-src" not in r.text  # only the link here, no map
+
+
+# --- one action: "Kopieren & Inserat öffnen" finishes; what Claude learns has its own page --------------------------
+
+def test_copy_and_open_finishes_and_learns_out_of_the_way(client, lid, fake_rules):
+    """editor.js copies and opens the ad, then posts /finish with copied=1: the text is final (learning starts as
+    before), the page says it was copied and asks "Abgeschickt?" once; the proposals wait on /lernen."""
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    editor_cookie(client, lid)  # from Telegram: the learn page is reachable too
+    _, fields = open_editor(client, lid)
+    r = post(client, lid, "finish", fields, text="Von Hand fertig", copied="1")
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=done_copied#ende"
+    assert db.latest_session(lid)["final_text"] == "Von Hand fertig"
+    assert wait_for_rules(client, lid) == "done" and fake_rules == [db.latest_session(lid)["id"]]
+    page = client.get(r.headers["location"]).text
+    assert "Kopiert. Im Inserat einfügen und abschicken" in page and page.count("data-ask-return") == 1
+    assert "ed-rule" not in page and f'href="/editor/{lid}/lernen"' in page
+    learn = client.get(f"/editor/{lid}/lernen")
+    assert learn.status_code == 200 and "Was Claude daraus lernt" in learn.text and "ed-rule" in learn.text
+    assert "data-ask-return" not in learn.text  # no sending questions there
+    assert client.get(f"/editor/{lid + 1}/lernen").status_code in (303, 401, 404)  # another listing: no access
+
+
+def test_learn_page_before_finishing(client, lid):
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    login(client)
+    page = client.get(f"/editor/{lid}/lernen").text
+    assert "Noch nicht abgeschlossen" in page and "Kopieren &amp; Inserat öffnen" in page

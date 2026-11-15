@@ -1,8 +1,9 @@
 {# One card of the main page (listings.html), also rendered alone for the ❌/↩️ answer without reload
    (web.listing_dismiss / listing_restore with Accept: application/json; app.js puts it in place of the old one).
-   l: a row from web._listing_cards; back: the list to return to after ❌/↩️ without JS.
-   Status "Neu" (never looked at, db.mark_seen): the card glows. Aussortiert: faded, the outlined chip instead of the
-   status pill, and what the status was when it is worth knowing (Entwurf / Gesendet).
+   l: a row from web._listing_cards (l.card: cards.facts); back: the list to return to after ❌/↩️ without JS.
+   What helps to decide, in one look: title, the rent that matters (warm if known), rooms, size, district and one flag
+   from Claude's hint. No portal, no costs (they are on Status). Status "Neu" (never looked at, db.mark_seen): the card
+   glows and says "Neu". Aussortiert: faded, the outlined chip, and what the status was when it is worth knowing.
    Button column: ❌ for listings in the list (not for sent ones), ↩️ for "uninteressant", none for offline / veraltet. #}
 {% from "macros.html" import state_badge, icon %}
 {% macro listing_card(l, back) -%}
@@ -11,10 +12,11 @@
 {% set thumb = l.thumb_url or (l.image_url|safe_url) %}
 {% set unseen = l.status == "new" and not l.discard_reason %}
 {% set toggle = "restore" if l.discard_reason == MANUAL_DISCARD else ("dismiss" if not l.discard_reason and l.status != "sent" else none) %}
+{% set c = l.card or {} %}
 <li id="l{{ l.id }}">
   <a class="listing-card{% if l.discard_reason %} is-discarded{% endif %}{% if toggle %} has-toggle{% endif %}{% if unseen %} is-unseen{% endif %}" href="/listing/{{ l.id }}">
     <div class="thumb">
-      <span class="thumb-ph" aria-hidden="true">{{ icon("home") }}<span>{{ l.portal }}</span></span>
+      <span class="thumb-ph" aria-hidden="true">{{ icon("home") }}</span>
       {% if thumb %}<img src="{{ thumb }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-fallback>{% endif %}
     </div>
     <div class="lc-body">
@@ -22,14 +24,16 @@
         {%- if unseen %}<span class="lc-unseen sr-only">noch nicht angesehen</span>{% endif %}
         {%- if l.discard_reason and l.status in ("drafted", "sent") %}<span class="lc-was">war: {{ STATUSES[l.status] }}</span>{% endif %}<span>{{ l.received_at|local_time }}</span></div>
       <span class="lc-title">{{ l.title or "(ohne Titel)" }}</span>
-      {% if l.address %}<span class="lc-addr">{{ l.address }}</span>{% endif %}
       <div class="lc-facts">
-        {% for part in l|rent_parts %}<span class="price">{{ part }}</span>{% else %}<span class="price">–</span>{% endfor %}
-        {% if l.size %}<span>{{ l.size }}</span>{% endif %}
-        <span class="portal">{{ l.portal }}</span>
+        <span class="price">{{ c.rent or l.price or "–" }}</span>
+        {%- if c.rooms %}<span>{{ c.rooms }}</span>{% endif %}
+        {%- if l.size %}<span>{{ l.size }}</span>{% endif %}
       </div>
-      {% if l.draft_count %}
-      <span class="lc-meta">{{ l.draft_count }} {{ "Entwurf" if l.draft_count == 1 else "Entwürfe" }} · {{ l.cost_eur|eur }}</span>
+      {% if c.district %}<span class="lc-addr">{{ icon("pin") }}{{ c.district }}</span>{% endif %}
+      {% if c.flag %}
+      <span class="lc-flag{% if c.flag.alarm %} is-alarm{% endif %}" title="Hinweis von Claude{% if c.flag.count > 1 %} (einer von {{ c.flag.count }}){% endif %}">
+        <span aria-hidden="true">⚠</span><span class="sr-only">Hinweis von Claude: </span>{{ c.flag.label }}
+        {%- if c.flag.count > 1 %} <span class="lc-flag-more">+{{ c.flag.count - 1 }}</span>{% endif %}</span>
       {% endif %}
     </div>
   </a>

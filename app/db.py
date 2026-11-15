@@ -425,7 +425,10 @@ def list_listings(status: str | None = None, limit: int = 300, auto: bool = Fals
     rate = _rate()
     params: list = [rate, rate]
     where = []
-    if status:
+    if isinstance(status, (tuple, list)):  # several statuses ("Neu" on the main page: new and seen)
+        where.append("l.status IN (%s)" % ",".join("?" * len(status)))
+        params.extend(status)
+    elif status:
         where.append("l.status = ?")
         params.append(status)
     if discard == "none":
@@ -448,6 +451,19 @@ def list_listings(status: str | None = None, limit: int = 300, auto: bool = Fals
                      where="WHERE " + " AND ".join(where) if where else "")
     with connect() as conn:
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def latest_hints(listing_ids: list[int]) -> dict[int, str]:
+    """Claude's hint of each listing's newest draft (only listings whose newest draft has one), for the cards."""
+    ids = [int(i) for i in listing_ids][:2000]
+    if not ids:
+        return {}
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT d.listing_id, d.hint FROM drafts d JOIN (SELECT listing_id, MAX(id) AS id FROM drafts "
+            "WHERE listing_id IN (%s) GROUP BY listing_id) m ON m.id = d.id" % ",".join("?" * len(ids)), ids,
+        ).fetchall()
+    return {r["listing_id"]: r["hint"] for r in rows if (r["hint"] or "").strip()}
 
 
 def unannounced_listing_ids(hours: int = 24) -> list[int]:

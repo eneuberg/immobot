@@ -78,7 +78,7 @@ FEEDBACK_SOURCES = ("editor", "telegram", "dashboard")
 STATUSES = {
     "new": "Neu",
     "seen": "Gesehen",
-    "drafted": "Entwurf",
+    "drafted": "Angefangen",  # a draft exists, not sent yet
     "sent": "Gesendet",
 }
 

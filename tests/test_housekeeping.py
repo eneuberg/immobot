@@ -121,7 +121,8 @@ def test_dashboard_filter(client, monkeypatch):  # noqa: F811
     db.discard(manual)
     page = client.get("/").text
     assert "Wohnung auto" not in page and "Wohnung manual" not in page  # aussortiert: not in the list
-    assert "⏱ davon automatisch" in page
+    assert "davon automatisch" not in page  # the reasons only once "Aussortiert" is chosen
+    assert "davon automatisch" in client.get("/", params={"discarded": "all"}).text
     only = client.get("/", params={"discarded": "uninteressant", "auto": "1"}).text
     assert "Wohnung auto" in only and "Wohnung manual" not in only and "⏱ automatisch" in only
     both = client.get("/", params={"discarded": "uninteressant"}).text
@@ -133,8 +134,8 @@ def test_dashboard_filter(client, monkeypatch):  # noqa: F811
 
 def test_setting_saved(client):  # noqa: F811
     login(client)
-    r = client.post("/settings", data={"section": "verhalten", "auto_dismiss_hours": "72"})
+    r = client.post("/settings", data={"section": "betrieb", "auto_dismiss_hours": "72"})
     assert r.status_code == 303 and db.get_settings()["auto_dismiss_hours"] == "72"
-    r = client.post("/settings", data={"section": "verhalten", "auto_dismiss_hours": "9999"})
+    r = client.post("/settings", data={"section": "betrieb", "auto_dismiss_hours": "9999"})
     assert db.get_settings()["auto_dismiss_hours"] == "72"
-    assert "Stunden nach dem Ansehen" in client.get("/settings/verhalten").text
+    assert "Stunden nach dem Ansehen" in client.get("/settings/zugaenge").text  # Technik

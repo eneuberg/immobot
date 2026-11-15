@@ -1,8 +1,7 @@
-{# Einstellungen → Verhalten: how drafts are made and what they may cost, what Claude sees of a listing, how the bot
-   behaves, and what Claude learns (switches in the form; learned rules and examples below it, with their own forms). #}
+{# Einstellungen → "Gelernt": what immobot learned from you - improvements to the profile from feedback, the learning
+   switches, learned rules (proposals first), the examples, and every profile version ("Verlauf"). #}
 {% extends "settings_base.html" %}
 {% from "settings_macros.html" import field_error with context %}
-{% from "cost_bar.html" import cost_bar %}
 {% from "rule_macros.html" import manual_rule_form %}
 
 {# Where a rule comes from; proposed_text is empty for a rule the user wrote. #}
@@ -16,86 +15,79 @@
   <form method="post" action="/settings/examples/{{ undo_example }}/on" class="flash-dismiss"><button type="submit" class="linkish">Rückgängig</button></form>
   {%- endif %}</div>{% endif %}{% endmacro %}
 
-{% block intro %}Wie Entwürfe entstehen, was sie kosten dürfen, wie sich der Bot verhält – und was Claude dazulernt.{% endblock %}
+{% block intro %}Was Claude aus deinen Änderungen gelernt hat – du entscheidest, was davon gilt.{% endblock %}
+
+{% block head %}
+{# The proposal is made in the background: app.js polls its status; without JS the page reloads itself. #}
+{% if job and job.state == "running" %}<noscript><meta http-equiv="refresh" content="10; url=/settings/verhalten"></noscript>{% endif %}
+{% endblock %}
 
 {% block section %}
+{# ---- "Aus Rückmeldungen verbessern": prominence follows what there is to do. A card while a proposal runs, waits,
+   failed or went stale, or once there is plenty of feedback (rewrite.suggested); otherwise one quiet line, with a
+   small button once a proposal is possible (rewrite.enabled). ---- #}
+{% set job_state = job.state if job else None %}
+{% set feedback_count = rewrite.feedback + rewrite.sessions %}
+{% set counts -%}
+{{ plural(feedback_count, "Rückmeldung", "Rückmeldungen") }} und {{ plural(rewrite.rules, "aktive Regel", "aktive Regeln") }}
+{%- if rewrite.base_version %} seit Version #{{ rewrite.base_version.id }}{% endif %}
+{%- endset %}
+{% if job_state in ("running", "failed") or rewrite.pending or stale_proposal or (rewrite.enabled and rewrite.suggested) %}
+<article id="verbessern" class="setting-card rewrite-card{% if rewrite.pending or job_state == 'running' or not (job_state == 'failed' or stale_proposal) %} is-active{% endif %}">
+  <h2>Aus Rückmeldungen verbessern</h2>
+  {% if job_state == "running" %}
+  <p class="rewrite-busy"><span aria-busy="true" data-rewrite-poll="/settings/rewrite/status">Vorschlag wird erstellt …</span></p>
+  <p class="help">Claude liest deine Rückmeldungen und sucht kleine Verbesserungen für dein Profil. Das dauert bis zu ein
+    paar Minuten. Die Seite aktualisiert sich selbst; du kannst sie auch verlassen.</p>
+  {% elif rewrite.pending %}
+  {% set n = rewrite.pending.edits|length %}
+  <p>{% if n %}Vorschlag bereit: <strong>{{ plural(n, "Änderung", "Änderungen") }}</strong> an deinem Profil.
+    {% else %}Claude hat diesmal keine Änderung gefunden.{% endif %}
+    <small class="muted">Erstellt am {{ rewrite.pending.created_at|local_time }}.</small></p>
+  <div class="actions"><a role="button" href="/settings/vorschlag/{{ rewrite.pending.id }}">Vorschlag ansehen</a></div>
+  {% else %}
+  {% if job_state == "failed" %}
+  <div class="flash err" role="alert">
+    <span>Der letzte Vorschlag ist fehlgeschlagen{% if job.finished_at %} ({{ job.finished_at|local_time }}){% endif %}: {{ job.error }}</span>
+    <form method="post" action="/settings/rewrite/dismiss" class="flash-dismiss"><button type="submit" class="linkish">Ausblenden</button></form>
+  </div>
+  {% endif %}
+  {% if stale_proposal %}
+  <div class="callout info"><span>Vorschlag #{{ stale_proposal.id }} passt nicht mehr, weil du das Profil danach geändert hast.
+    Einfach einen neuen erstellen lassen.</span></div>
+  {% endif %}
+  <p>{{ counts }}.{% if rewrite.suggested %} Genug, um dein Profil gezielt zu verbessern.{% endif %}</p>
+  {% if rewrite.merge_hint %}<p class="help">Schon {{ rewrite.rules }} aktive Regeln – ein Vorschlag kann sie ins Profil einarbeiten.</p>{% endif %}
+  {% if rewrite.enabled %}
+  <form method="post" action="/settings/rewrite" data-once class="actions">
+    <button type="submit">{{ "Neu erstellen" if stale_proposal else "Verbesserung vorschlagen" }}</button>
+  </form>
+  <p class="help">Claude schlägt kleine Änderungen an deinem Profil vor; du entscheidest über jede einzeln.
+    Dauert bis zu ein paar Minuten und kostet etwa so viel wie ein gründlicher Entwurf.</p>
+  {% else %}
+  <p class="help">Möglich {{ rewrite_threshold }}.</p>
+  {% endif %}
+  {% endif %}
+</article>
+{% elif rewrite.enabled %}
+<div class="rewrite-line" id="verbessern">
+  <small><strong>Aus Rückmeldungen verbessern:</strong> {{ counts }}. Lohnt sich meist ab etwa {{ rewrite_suggest_at }}
+    Rückmeldungen – ein Vorschlag geht aber schon jetzt.</small>
+  <form method="post" action="/settings/rewrite" data-once><button type="submit" class="linkish">Verbesserung vorschlagen</button></form>
+</div>
+{% else %}
+<p class="rewrite-line" id="verbessern"><small><strong>Aus Rückmeldungen verbessern:</strong> möglich {{ rewrite_threshold }}
+  (bisher {{ plural(feedback_count, "Rückmeldung", "Rückmeldungen") }}, {{ plural(rewrite.rules, "Regel", "Regeln") }}).
+  Rückmeldungen sammelt immobot aus „Kürzer“, „Förmlicher“, „Neu“, „Anpassen“ und dem 📝 Editor.</small></p>
+{% endif %}
+
 <form id="verhalten-form" method="post" action="/settings">
   <input type="hidden" name="section" value="verhalten">
-  <article id="entwuerfe" class="setting-card">
-    <h2>Entwürfe</h2>
-    <label>Denkaufwand (Effort) <small>höher = gründlicher, aber langsamer und teurer</small>
-      <select name="effort" {% if errors.effort %}aria-invalid="true"{% endif %}>
-        {% for key, label in effort_options %}
-        <option value="{{ key }}" {% if values.effort == key %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-      {{ field_error("effort") }}
-    </label>
-    <p class="help">Anbieter und Modell stehen unter <a href="/settings/zugaenge#anbieter">Zugänge</a>.</p>
-  </article>
-
-  <article id="kosten" class="setting-card">
-    <h2>Kosten</h2>
-    {{ cost_bar(costs) }}
-    <div class="form-grid">
-      <label>Monatsbudget in € <small>0 = kein Limit; ist es erreicht, entstehen keine neuen Entwürfe mehr</small>
-        <input type="text" inputmode="decimal" name="monthly_budget_eur" value="{{ values.monthly_budget_eur }}"
-          {% if errors.monthly_budget_eur %}aria-invalid="true"{% endif %}>
-        {{ field_error("monthly_budget_eur") }}
-      </label>
-      <label>Wechselkurs: 1 € = x $ <small>rechnet in Dollar abgerechnete Kosten (Anthropic) in Euro um, z. B. 1,10</small>
-        <input type="text" inputmode="decimal" name="eur_usd_rate" value="{{ values.eur_usd_rate }}"
-          {% if errors.eur_usd_rate %}aria-invalid="true"{% endif %}>
-        {{ field_error("eur_usd_rate") }}
-      </label>
-    </div>
-  </article>
-
-  <article id="fotos" class="setting-card">
-    <h2>Fotos &amp; Exposé</h2>
-    <p class="help">Was Claude vom Inserat zu sehen bekommt.</p>
-    <label class="check">
-      <input type="checkbox" role="switch" name="send_image" value="1" {% if values.send_image|as_bool %}checked{% endif %}>
-      <span>Fotos des Inserats an Claude mitschicken <small>Claude sieht dann die Fotos und kann darauf eingehen (kostet Tokens, siehe unten).</small></span>
-    </label>
-    <label>Fotos für Claude pro Entwurf <small>Wie viele Inserat-Fotos Claude beim Schreiben mitbekommt – mehr Fotos = genauer, aber je Foto ca. 1.000 Tokens (≈ 0,1–4 ct je nach Modell). Das Telegram-Album zeigt unabhängig davon bis zu 10 Fotos (Telegram-Limit).</small>
-      <input type="number" name="llm_max_images" min="0" max="20" step="1" value="{{ values.llm_max_images }}"
-        {% if errors.llm_max_images %}aria-invalid="true"{% endif %}>
-      {{ field_error("llm_max_images") }}
-    </label>
-    <label class="check">
-      <input type="checkbox" role="switch" name="is24_fetch" value="1" {% if values.is24_fetch|as_bool %}checked{% endif %}>
-      <span>Bilder &amp; Details selbst von ImmoScout24 laden <small>Wenn Fredy keine Bilder mitschickt, holt immobot bei ImmoScout24-Inseraten das Exposé selbst (1 Abruf pro Inserat, nur bei Bedarf). Schickt Fredy die Bilder mit (Fredy-PR #489 bzw. gepatchtes Fredy), wird nichts zusätzlich abgerufen.</small></span>
-    </label>
-  </article>
-
-  <article id="bot" class="setting-card">
-    <h2>Telegram-Bot</h2>
-    <label>Verzögerung nach Fredys Nachricht <small>in Sekunden, 0–60 – damit die Buttons direkt unter Fredys Inserat erscheinen</small>
-      <input type="number" name="followup_delay_s" min="0" max="60" step="1" value="{{ values.followup_delay_s }}"
-        {% if errors.followup_delay_s %}aria-invalid="true"{% endif %}>
-      {{ field_error("followup_delay_s") }}
-    </label>
-    <label class="check">
-      <input type="checkbox" role="switch" name="paused" value="1" {% if values.paused|as_bool %}checked{% endif %}>
-      <span>Pause <small>Der Bot meldet sich nicht zu neuen Inseraten.</small></span>
-    </label>
-    <label class="check">
-      <input type="checkbox" role="switch" name="kleinanzeigen_enabled" value="1" {% if values.kleinanzeigen_enabled|as_bool %}checked{% endif %}>
-      <span>Kleinanzeigen-Inserate <small>Inserate aus Fredys Kleinanzeigen-Suche: immobot schickt Bilder und Nachricht selbst, mit „🟢 Kleinanzeigen“ markiert. Aus = sie werden ignoriert (auch nicht im Dashboard).</small></span>
-    </label>
-    <label>Automatisch uninteressant nach <small>Stunden nach dem Ansehen, 0 = aus. Ein Inserat, das du angesehen, aber nicht angeschrieben hast (kein Entwurf), wird danach als „uninteressant“ aussortiert – im Dashboard unter „Aussortiert“, mit ↩️ jederzeit zurückzuholen (danach nie wieder automatisch). Ungesehene Inserate bleiben „Neu“.</small>
-      <input type="number" name="auto_dismiss_hours" min="0" max="720" step="1" value="{{ values.auto_dismiss_hours }}"
-        {% if errors.auto_dismiss_hours %}aria-invalid="true"{% endif %}>
-      {{ field_error("auto_dismiss_hours") }}
-    </label>
-  </article>
-
   <article id="lernen" class="setting-card">
     <h2>Lernen</h2>
-    <p class="help">Claude lernt aus deinen Endversionen im 📝 Editor und aus Regeln, die du freigibst – ohne Training.
+    <p class="help">Claude lernt aus deinen fertigen Anschreiben im Editor und aus Regeln, die du freigibst – ohne Training.
       Beides steht in Claudes Anweisungen für jeden neuen Entwurf. Gesammelte Rückmeldungen kann Claude außerdem
-      <a href="/settings#verbessern">ins Profil einarbeiten</a>.</p>
+      <a href="#verbessern">ins Profil einarbeiten</a>.</p>
     <label class="check">
       <input type="checkbox" role="switch" name="use_examples" value="1" {% if values.use_examples|as_bool %}checked{% endif %}>
       <span>Endversionen als Stil-Beispiele nutzen <small>Bis zu {{ example_count }} deiner fertigen Texte aus dem Editor zeigen Claude deine Stimme: die neuesten und ein paar ältere, bei den neuesten auch, was du an Claudes Entwurf geändert hast. Claude soll sie nicht kopieren, sondern so schreiben wie du.</small></span>
@@ -131,9 +123,9 @@
   {% endif %}
   {% if rules_active >= max_rules %}
   <div class="callout warn"><span><strong>Höchstgrenze erreicht:</strong> {{ max_rules }} aktive Regeln. Neue erst nach dem Abschalten
-    einer Regel – oder <a href="/settings#verbessern">ins Profil einarbeiten</a>.</span></div>
+    einer Regel – oder <a href="#verbessern">ins Profil einarbeiten</a>.</span></div>
   {% elif rules_active >= merge_hint_at %}
-  <div class="callout info"><span>Schon {{ rules_active }} aktive Regeln. Zeit, sie <a href="/settings#verbessern">ins Profil einzuarbeiten</a>
+  <div class="callout info"><span>Schon {{ rules_active }} aktive Regeln. Zeit, sie <a href="#verbessern">ins Profil einzuarbeiten</a>
     – dann bleibt Claudes Anweisung übersichtlich (höchstens {{ max_rules }}).</span></div>
   {% endif %}
 
@@ -291,4 +283,37 @@
   </details>
   {% endif %}
 </article>
+
+{# ---- Verlauf: every change of the profile as a version (never deleted) ---- #}
+<article id="verlauf" class="setting-card">
+  <details {% if verlauf_open %}open{% endif %}>
+    <summary><strong>Verlauf</strong> <span class="count">{{ versions_total }}</span>
+      <small class="muted">– jede Änderung als Version</small></summary>
+    <ol class="version-list">
+      {% for v in versions %}
+      <li>
+        <div class="v-main">
+          <strong>#{{ v.id }}</strong>
+          <span class="badge">{{ version_labels.get(v.source, v.source) }}</span>
+          <span class="v-when">{{ v.created_at|local_time }}</span>
+          {% if loop.first %}<span class="v-current">aktuell</span>{% endif %}
+        </div>
+        {% if v.note %}<div class="v-note">{{ v.note }}</div>{% endif %}
+        {% if not loop.first %}
+        <div class="v-actions">
+          <a href="/settings/version/{{ v.id }}">Ansehen</a>
+          <form method="post" action="/settings/version/{{ v.id }}/restore">
+            <button type="submit" class="linkish" data-confirm="Version #{{ v.id }} wiederherstellen? Das aktuelle Profil bleibt als Version im Verlauf.">Wiederherstellen</button>
+          </form>
+        </div>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    {% if versions_total > versions|length %}
+    <p class="help"><a href="/settings/verhalten?verlauf=alle#verlauf">Alle {{ versions_total }} Versionen zeigen</a></p>
+    {% endif %}
+  </details>
+</article>
+
 {% endblock %}

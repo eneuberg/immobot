@@ -1,5 +1,6 @@
 """Rent of a listing: Fredy's price (the cold rent on ImmoScout24) plus warm and total rent from the exposé text
-(listings.details, "Warmmiete: 690 €" / "Gesamtmiete: 790 €"). Shown wherever a listing's price appears.
+(listings.details, "Warmmiete: 690 €" / "Gesamtmiete: 790 €"; without an exposé the same lines in Fredy's description).
+Shown wherever a listing's price appears.
 
 parts() -> ["570 € kalt", "690 € warm"]; the total rent only when it differs from the warm rent or that is missing
 ("900 € gesamt zzgl. Heizkosten"). Without exposé data just Fredy's price, unlabelled (other portals may mean
@@ -41,7 +42,8 @@ def _labelled(value: str, label: str) -> str:
 
 def info(listing: dict) -> dict:
     """{"cold", "warm", "total"}: strings or None. total is None when it equals warm."""
-    values = _first_values(listing.get("details"))
+    # the exposé text; without one Fredy's description, which often has the same "Gesamtmiete: …" lines
+    values = _first_values(listing.get("details")) or _first_values(listing.get("description"))
     warm, total = values.get("Warmmiete"), values.get("Gesamtmiete")
     if warm and total and _same(warm, total):
         total = None

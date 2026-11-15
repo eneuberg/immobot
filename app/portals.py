@@ -1,5 +1,6 @@
 """Portal helpers: URL validation, contact deep links, links into Fredy and display names per Fredy provider id."""
 
+import os
 import re
 import unicodedata
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -91,11 +92,12 @@ def provider_label(provider: str | None) -> str:
 
 # --- map links (listing page: "🗺 Karte" and "In Google Maps öffnen") -----------------------------------------
 # Listings only carry a free-text address ("Venloer Straße 123, 50823 Köln, Ehrenfeld", "Ehrenfeld, Köln",
-# "50823 Köln - Ehrenfeld"), no coordinates: Google searches for it. All searches are in Köln, so an address without
-# the city gets ", Köln" appended (else "Ehrenfeld" alone may land anywhere).
-MAPS_CITY = "Köln"
+# "50823 Köln - Ehrenfeld"), no coordinates: Google searches for it. All searches are in one city (env MAPS_CITY,
+# default Köln; empty = none), so an address without the city gets ", <city>" appended (else "Ehrenfeld" alone may
+# land anywhere).
+MAPS_CITY = os.environ.get("MAPS_CITY", "Köln").strip()
 MAPS_QUERY_MAX = 200
-_CITY_WORDS = ("köln", "koeln", "cologne")
+_CITY_WORDS = ("köln", "koeln", "cologne") if MAPS_CITY == "Köln" else ((MAPS_CITY.lower(),) if MAPS_CITY else ())
 
 
 def maps_query(address: str | None) -> str | None:
@@ -105,7 +107,7 @@ def maps_query(address: str | None) -> str | None:
     text = " ".join(unicodedata.normalize("NFC", address).split())[:MAPS_QUERY_MAX].strip()
     if not text:
         return None
-    if not any(word in text.lower() for word in _CITY_WORDS):
+    if MAPS_CITY and not any(word in text.lower() for word in _CITY_WORDS):
         text += f", {MAPS_CITY}"
     return text
 

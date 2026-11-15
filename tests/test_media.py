@@ -385,12 +385,11 @@ def test_overview_thumbnail_only_from_downloaded_pictures(client, hosts):
 
 
 def test_settings_switch(client):
-    page = client.get("/settings/verhalten").text
+    page = client.get("/settings/zugaenge").text  # Technik
     assert 'name="is24_fetch" value="1" checked' in page
     assert "Bilder &amp; Details selbst von ImmoScout24 laden" in page
     assert ("Wenn Fredy keine Bilder mitschickt, holt immobot bei ImmoScout24-Inseraten das Exposé selbst (1 Abruf pro "
-            "Inserat, nur bei Bedarf). Schickt Fredy die Bilder mit (Fredy-PR #489 bzw. gepatchtes Fredy), wird nichts "
-            "zusätzlich abgerufen.") in page
+            "Inserat, nur bei Bedarf). Schickt Fredy die Bilder schon mit, wird nichts zusätzlich abgerufen.") in page
     assert page.index('name="llm_max_images"') < page.index('name="is24_fetch"')  # right after the photo count
 
 

@@ -1,5 +1,5 @@
-{# Einstellungen → Profil: what the drafts say about you and how they sound, every change as a version ("Verlauf"),
-   and improvements from feedback ("Aus Rückmeldungen verbessern" at the top). Nothing technical here. #}
+{# Einstellungen → "Ich & meine Suche": what the letters say about you, what you look for and how they sound, and a
+   test letter. Versions and improvements from feedback are under "Gelernt", the system prompt under "Technik". #}
 {% extends "settings_base.html" %}
 {% from "macros.html" import draft_meta %}
 {% from "settings_macros.html" import field_error with context %}
@@ -21,13 +21,7 @@
 {{ field_error(key) }}
 {% endmacro %}
 
-{% block head %}
-{# The proposal is made in the background: app.js polls its status; without JS the page reloads itself. #}
-{# An explicit URL without "#verbessern": a refresh to the same URL with a fragment doesn't reload. #}
-{% if job and job.state == "running" %}<noscript><meta http-equiv="refresh" content="10; url=/settings"></noscript>{% endif %}
-{% endblock %}
-
-{% block intro %}Was über dich in den Anschreiben steht und wie sie klingen.{% endblock %}
+{% block intro %}Was über dich in den Anschreiben steht, was du suchst und wie du schreibst.{% endblock %}
 
 {% block section %}
 {% if test %}
@@ -40,64 +34,6 @@
   <pre class="draft" id="draft-test">{{ test.draft.text }}</pre>
   <footer class="chips">{{ draft_meta(test.draft) }}</footer>
 </article>
-{% endif %}
-
-{# ---- "Aus Rückmeldungen verbessern": prominence follows what there is to do. A card while a proposal runs, waits,
-   failed or went stale, or once there is plenty of feedback (rewrite.suggested); otherwise one quiet line, with a
-   small button once a proposal is possible (rewrite.enabled). ---- #}
-{% set job_state = job.state if job else None %}
-{% set feedback_count = rewrite.feedback + rewrite.sessions %}
-{% set counts -%}
-{{ plural(feedback_count, "Rückmeldung", "Rückmeldungen") }} und {{ plural(rewrite.rules, "aktive Regel", "aktive Regeln") }}
-{%- if rewrite.base_version %} seit Version #{{ rewrite.base_version.id }}{% endif %}
-{%- endset %}
-{% if job_state in ("running", "failed") or rewrite.pending or stale_proposal or (rewrite.enabled and rewrite.suggested) %}
-<article id="verbessern" class="setting-card rewrite-card{% if rewrite.pending or job_state == 'running' or not (job_state == 'failed' or stale_proposal) %} is-active{% endif %}">
-  <h2>Aus Rückmeldungen verbessern</h2>
-  {% if job_state == "running" %}
-  <p class="rewrite-busy"><span aria-busy="true" data-rewrite-poll="/settings/rewrite/status">Vorschlag wird erstellt …</span></p>
-  <p class="help">Claude liest deine Rückmeldungen und sucht kleine Verbesserungen für dein Profil. Das dauert bis zu ein
-    paar Minuten. Die Seite aktualisiert sich selbst; du kannst sie auch verlassen.</p>
-  {% elif rewrite.pending %}
-  {% set n = rewrite.pending.edits|length %}
-  <p>{% if n %}Vorschlag bereit: <strong>{{ plural(n, "Änderung", "Änderungen") }}</strong> an deinem Profil.
-    {% else %}Claude hat diesmal keine Änderung gefunden.{% endif %}
-    <small class="muted">Erstellt am {{ rewrite.pending.created_at|local_time }}.</small></p>
-  <div class="actions"><a role="button" href="/settings/vorschlag/{{ rewrite.pending.id }}">Vorschlag ansehen</a></div>
-  {% else %}
-  {% if job_state == "failed" %}
-  <div class="flash err" role="alert">
-    <span>Der letzte Vorschlag ist fehlgeschlagen{% if job.finished_at %} ({{ job.finished_at|local_time }}){% endif %}: {{ job.error }}</span>
-    <form method="post" action="/settings/rewrite/dismiss" class="flash-dismiss"><button type="submit" class="linkish">Ausblenden</button></form>
-  </div>
-  {% endif %}
-  {% if stale_proposal %}
-  <div class="callout info"><span>Vorschlag #{{ stale_proposal.id }} passt nicht mehr, weil du das Profil danach geändert hast.
-    Einfach einen neuen erstellen lassen.</span></div>
-  {% endif %}
-  <p>{{ counts }}.{% if rewrite.suggested %} Genug, um dein Profil gezielt zu verbessern.{% endif %}</p>
-  {% if rewrite.merge_hint %}<p class="help">Schon {{ rewrite.rules }} aktive Regeln – ein Vorschlag kann sie ins Profil einarbeiten.</p>{% endif %}
-  {% if rewrite.enabled %}
-  <form method="post" action="/settings/rewrite" data-once class="actions">
-    <button type="submit">{{ "Neu erstellen" if stale_proposal else "Verbesserung vorschlagen" }}</button>
-  </form>
-  <p class="help">Claude schlägt kleine Änderungen an deinem Profil vor; du entscheidest über jede einzeln.
-    Dauert bis zu ein paar Minuten und kostet etwa so viel wie ein gründlicher Entwurf.</p>
-  {% else %}
-  <p class="help">Möglich {{ rewrite_threshold }}.</p>
-  {% endif %}
-  {% endif %}
-</article>
-{% elif rewrite.enabled %}
-<div class="rewrite-line" id="verbessern">
-  <small><strong>Aus Rückmeldungen verbessern:</strong> {{ counts }}. Lohnt sich meist ab etwa {{ rewrite_suggest_at }}
-    Rückmeldungen – ein Vorschlag geht aber schon jetzt.</small>
-  <form method="post" action="/settings/rewrite" data-once><button type="submit" class="linkish">Verbesserung vorschlagen</button></form>
-</div>
-{% else %}
-<p class="rewrite-line" id="verbessern"><small><strong>Aus Rückmeldungen verbessern:</strong> möglich {{ rewrite_threshold }}
-  (bisher {{ plural(feedback_count, "Rückmeldung", "Rückmeldungen") }}, {{ plural(rewrite.rules, "Regel", "Regeln") }}).
-  Rückmeldungen sammelt immobot aus „Kürzer“, „Förmlicher“, „Neu“, „Anpassen“ und dem 📝 Editor.</small></p>
 {% endif %}
 
 <form id="settings-form" method="post" action="/settings">
@@ -119,61 +55,17 @@
     </label>
   </article>
 
-  <article id="prompt" class="setting-card">
-    <details {% if errors.system_prompt %}open{% endif %}>
-      <summary><strong>System-Prompt</strong> <small class="muted">– Grundanweisung an die KI, für Fortgeschrittene</small></summary>
-      <div class="field-head">
-        <label for="system_prompt" class="muted"><small>Legt fest, wie Anschreiben grundsätzlich aufgebaut sind. Meist reicht es, „Über mich“, „Wünsche“ und „Schreibstil“ anzupassen.</small></label>
-        {{ reset_button("system_prompt", "System-Prompt") }}
-      </div>
-      <textarea id="system_prompt" name="system_prompt" rows="18" {% if errors.system_prompt %}aria-invalid="true"{% endif %}>
-{{ values.system_prompt }}</textarea>
-      {{ field_error("system_prompt") }}
-    </details>
-  </article>
-
+  <p class="help">Jede Änderung wird als Version gespeichert – <a href="/settings/verhalten#verlauf">Verlauf unter „Gelernt“</a>.</p>
   <div class="savebar">
-    <small>Gilt für alle neuen Entwürfe.</small>
+    <small>Gilt für alle neuen Anschreiben.</small>
     <button type="submit">Speichern</button>
   </div>
 </form>
 
 {# Reset forms live outside the main form; the buttons above point here via form="…". #}
-{% for key in ["profile", "wishes", "style", "system_prompt"] %}
+{% for key in ["profile", "wishes", "style"] %}
 <form id="reset-{{ key }}" method="post" action="/settings/reset/{{ key }}"></form>
 {% endfor %}
-
-{# ---- Verlauf: every change of the profile as a version (never deleted) ---- #}
-<article id="verlauf" class="setting-card">
-  <details {% if verlauf_open %}open{% endif %}>
-    <summary><strong>Verlauf</strong> <span class="count">{{ versions_total }}</span>
-      <small class="muted">– jede Änderung als Version</small></summary>
-    <ol class="version-list">
-      {% for v in versions %}
-      <li>
-        <div class="v-main">
-          <strong>#{{ v.id }}</strong>
-          <span class="badge">{{ version_labels.get(v.source, v.source) }}</span>
-          <span class="v-when">{{ v.created_at|local_time }}</span>
-          {% if loop.first %}<span class="v-current">aktuell</span>{% endif %}
-        </div>
-        {% if v.note %}<div class="v-note">{{ v.note }}</div>{% endif %}
-        {% if not loop.first %}
-        <div class="v-actions">
-          <a href="/settings/version/{{ v.id }}">Ansehen</a>
-          <form method="post" action="/settings/version/{{ v.id }}/restore">
-            <button type="submit" class="linkish" data-confirm="Version #{{ v.id }} wiederherstellen? Das aktuelle Profil bleibt als Version im Verlauf.">Wiederherstellen</button>
-          </form>
-        </div>
-        {% endif %}
-      </li>
-      {% endfor %}
-    </ol>
-    {% if versions_total > versions|length %}
-    <p class="help"><a href="/settings?verlauf=alle#verlauf">Alle {{ versions_total }} Versionen zeigen</a></p>
-    {% endif %}
-  </details>
-</article>
 
 <article id="testen" class="setting-card">
   <h2>Testen</h2>

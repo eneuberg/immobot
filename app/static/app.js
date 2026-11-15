@@ -21,7 +21,7 @@
   ["click", "submit", "cancel", "keydown"].forEach(function (type) {
     document.addEventListener(type, function (e) {
       if (type === "keydown" && e.key !== "Enter" && e.key !== " " && e.key !== "Escape") return;
-      if (e.target.closest && e.target.closest("dialog[data-cooling]")) { e.preventDefault(); e.stopImmediatePropagation(); }
+      if (e.target.closest && e.target.closest("[data-cooling]")) { e.preventDefault(); e.stopImmediatePropagation(); }
     }, true);
   });
 
@@ -324,8 +324,10 @@
     Array.prototype.forEach.call(document.querySelectorAll("[data-expose-preview]"), exposePreview);
   });
 
-  // The question when the person comes back (<dialog data-ask-return="key">, listing and editor page): "Interessant?"
-  // / "Abgeschickt?". It opens every time the person comes back to the page, once data-opened is set - by the server
+  // The question when the person comes back (<aside class="ask-sheet" data-ask-return="key">, listing and editor
+  // page): "Interessant?" / "Abgeschickt?". A non-modal sheet at the bottom: it appears (hidden = false) and takes
+  // neither the page nor the focus; "Noch nicht" / "Später" ([data-sheet-close]) hides it until the next return.
+  // Shown from the start where the server says so (the finished text: not hidden). A <dialog> still works as before. It opens every time the person comes back to the page, once data-opened is set - by the server
   // (the ad was opened before: dashboard, editor or Telegram; the finished editor always) or by a click on
   // "Inserat öffnen" (<a data-opens-listing>) here. "Coming back" =
   //   - the page was hidden (other tab or app) or the window lost focus (other window) for LEAVE_MS or more;
@@ -334,8 +336,18 @@
   //   - it was opened from outside immobot (a Telegram button, a bookmark: no referrer from this site).
   // Not: going on within immobot, or a form on the page sending the person back to it (same address as referrer).
   document.addEventListener("DOMContentLoaded", function () {
-    var dlg = document.querySelector("dialog[data-ask-return]");
-    if (!dlg || typeof dlg.showModal !== "function") return;
+    var dlg = document.querySelector("[data-ask-return]");
+    var isDialog = dlg && dlg.tagName === "DIALOG";
+    if (!dlg || (isDialog && typeof dlg.showModal !== "function")) return;
+    var show = function () {
+      if (isDialog) { window.immobotShowModal(dlg); return; }
+      if (!dlg.hidden) return;
+      dlg.hidden = false;
+      dlg.setAttribute("data-cooling", "");  // a tap meant for the page underneath must not hit a button
+      clearTimeout(dlg._coolTimer);
+      dlg._coolTimer = setTimeout(function () { dlg.removeAttribute("data-cooling"); }, MODAL_COOLDOWN_MS);
+    };
+    var hide = function () { if (isDialog) dlg.close(); else dlg.hidden = true; };
     var LEAVE_MS = 1500;
     var key = "immobot-left-" + dlg.dataset.askReturn;
     var unloading = false;
@@ -347,7 +359,7 @@
       return 0;
     };
     var ask = function () {
-      if (dlg.hasAttribute("data-opened") && document.visibilityState === "visible") window.immobotShowModal(dlg);
+      if (dlg.hasAttribute("data-opened") && document.visibilityState === "visible") show();
     };
     var leave = function () { if (!unloading && !leftAt()) leftAt(Date.now()); };
     var back = function () {
@@ -374,10 +386,10 @@
       unloading = false;
       if (e.persisted) { leftAt(null); ask(); }  // back from the browser's cache
     });
-    dlg.querySelectorAll("[data-dialog-close]").forEach(function (btn) {
-      btn.addEventListener("click", function () { dlg.close(); });
+    dlg.querySelectorAll("[data-dialog-close], [data-sheet-close]").forEach(function (btn) {
+      btn.addEventListener("click", hide);
     });
-    dlg.addEventListener("click", function (e) { if (e.target === dlg) dlg.close(); });
+    if (isDialog) dlg.addEventListener("click", function (e) { if (e.target === dlg) dlg.close(); });
     // This load: after being away (reloaded meanwhile), or arriving from outside immobot.
     var ref = "";
     try { ref = document.referrer ? new URL(document.referrer) : ""; } catch (err) { ref = ""; }

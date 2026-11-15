@@ -1,43 +1,46 @@
 {% extends "base.html" %}
 {% from "macros.html" import icon %}
 {% from "listing_card.html" import listing_card %}
-{% from "cost_bar.html" import cost_track %}
 {% block title %}Inserate{% endblock %}
 {% block content %}
-{% set months = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"] %}
-{% set month_no = stats.month[5:7]|int %}
-<div class="page-head">
-  <div>
-    <h1>Inserate</h1>
-    <p>Neue Inserate kommen automatisch von Fredy. Wähle ein Inserat für Details und Entwürfe.</p>
-  </div>
+{# The cards come first: one heading line (with "+" to add a listing by link), the search, one chip row, then the
+   listings. Without a filter they are grouped: Neu (new and seen, no draft yet), Angefangen (a draft), Gesendet in
+   the last SENT_VISIBLE_HOURS h (web.LIST_GROUPS). Costs are on Status; here only a warning near the budget. #}
+{% set chip_labels = {"open": "Neu", "drafted": "Angefangen", "sent": "Gesendet"} %}
+<div class="page-head list-head">
+  <h1>Inserate</h1>
+  {% if not search %}
+  {# An ImmoScout24 exposé added by hand: fetched now, then posted to Telegram with its pictures (web.listing_add).
+     Folded away behind "+" until needed; open again after a failed attempt. #}
+  <details class="add-listing" id="hinzufuegen"{% if add_failed %} open{% endif %}>
+    <summary title="Inserat per Link hinzufügen"><span aria-hidden="true" class="add-plus">+</span><span class="add-label">Per Link</span><span class="sr-only"> ein Inserat hinzufügen</span></summary>
+    <form method="post" action="/listings/add">
+      {% if add_failed %}<div class="flash err bare" role="alert">{{ add_failed.error }}</div>{% endif %}
+      <label for="add-url">ImmoScout24-Link oder geteilter Text</label>
+      <textarea id="add-url" name="url" rows="3" required maxlength="2000" autocomplete="off" spellcheck="false"
+        data-expose-preview="add-preview"
+        placeholder="https://www.immobilienscout24.de/expose/…">{{ add_failed.url if add_failed else '' }}</textarea>
+      <p class="add-preview" id="add-preview" aria-live="polite" hidden></p>
+      <button type="submit" class="add-submit">Hinzufügen</button>
+      <small class="muted">Nur ImmoScout24. immobot holt Exposé und Bilder (einige Sekunden) und schickt das Inserat an Telegram.</small>
+    </form>
+  </details>
+  {% endif %}
 </div>
 
-{% if not search %}
-{# An ImmoScout24 exposé added by hand: fetched now, then posted to Telegram with its pictures (web.listing_add).
-   Folded away until needed; open again after a failed attempt. #}
-<details class="add-listing" id="hinzufuegen"{% if add_failed %} open{% endif %}>
-  <summary>➕ Inserat per Link hinzufügen</summary>
-  <form method="post" action="/listings/add">
-    {% if add_failed %}<div class="flash err bare" role="alert">{{ add_failed.error }}</div>{% endif %}
-    <label for="add-url" class="sr-only">ImmoScout24-Link</label>
-    <textarea id="add-url" name="url" rows="3" required maxlength="2000" autocomplete="off" spellcheck="false"
-      data-expose-preview="add-preview"
-      placeholder="Link oder geteilten Text einfügen, z. B. https://www.immobilienscout24.de/expose/…">{{ add_failed.url if add_failed else '' }}</textarea>
-    <p class="add-preview" id="add-preview" aria-live="polite" hidden></p>
-    <button type="submit" class="add-submit">Hinzufügen</button>
-    <small class="muted">Nur ImmoScout24. Text vom Teilen-Button geht auch, nur der Exposé-Link wird verwendet. Holt Exposé und Bilder (einige Sekunden) und schickt sie mit den Buttons an Telegram.</small>
-  </form>
-</details>
+{% if budget_warning %}
+<div class="flash warn" role="status"><span>{% if budget_warning.over %}Monatsbudget erreicht: Claude schreibt keine neuen Entwürfe mehr.
+  {%- else %}{{ budget_warning.used_pct }} % des Monatsbudgets verbraucht ({{ budget_warning.total|eur }} von {{ budget_warning.budget|eur }}).{% endif %}
+  <a href="/settings/zugaenge#kosten">Budget ändern</a></span></div>
 {% endif %}
 
 {# Search (text only, free): every meaningful word must appear (search.py). #}
-<form method="get" action="/" class="search-listings" aria-label="Inserate durchsuchen">
-  <label for="search-q">Inserate durchsuchen</label>
+<form method="get" action="/" class="search-listings" role="search" aria-label="Inserate durchsuchen">
+  <label for="search-q" class="sr-only">Inserate durchsuchen</label>
   <div class="add-row">
     <input type="search" id="search-q" name="q" value="{{ search.query if search else '' }}" maxlength="300"
-      placeholder="z. B. Montanusstraße, Balkon, Garten …" autocomplete="off" enterkeyhint="search">
-    <button type="submit">Suchen</button>
+      placeholder="Suchen: Straße, Balkon, Garten …" autocomplete="off" enterkeyhint="search">
+    <button type="submit" class="secondary outline" aria-label="Suchen">Suchen</button>
   </div>
 </form>
 
@@ -51,52 +54,53 @@
 {% endif %}
 
 {% if not search %}
-<section class="stats" aria-label="Überblick">
-  <div class="stat stat-cost{% if costs.over %} is-over{% endif %}"><span class="label">Kosten {{ months[month_no - 1] if 1 <= month_no <= 12 else stats.month }}</span><span class="value">{{ stats.cost_month|eur }}</span>
-    {%- if costs.budget %}{{ cost_track(costs, slim=True) }}{% endif %}
-    <span class="sub">{% if costs.over %}Budget erreicht{% elif costs.budget %}von {{ costs.budget|eur }} Budget{% else %}kein Limit{% endif %}</span></div>
-  <div class="stat"><span class="label">Kosten gesamt</span><span class="value">{{ stats.cost_total|eur }}</span><span class="sub">seit Beginn</span></div>
-  {# data-count: kept current by app.js after ❌/↩️ and when a glowing card is opened (web.card_counts) #}
-  <div class="stat"><span class="label">Inserate in der Liste</span><span class="value" data-count="all">{{ counts.all }}</span><span class="sub">
-    <span data-count="new">{{ counts.new }}</span> neu · <span data-count="seen">{{ counts.seen }}</span> gesehen · <span data-count="drafted">{{ counts.drafted }}</span> mit Entwurf · <span data-count="sent">{{ counts.sent }}</span> gesendet</span></div>
-  <div class="stat"><span class="label">Entwürfe</span><span class="value">{{ stats.drafts_total }}</span><span class="sub">insgesamt erzeugt</span></div>
-</section>
-
-{# Two rows: the statuses of the listings in the list ("Alle" = not aussortiert), and - outlined like the
-   aussortiert chip, since it is no status - "Aussortiert" with its reasons. Reasons without listings are left out
-   (unless chosen). #}
-<nav class="filters" aria-label="Nach Status filtern">
-  <a href="/" {% if not status_filter and not discard_filter %}aria-current="page"{% endif %} title="Ohne Aussortierte; Gesendete nur {{ SENT_VISIBLE_HOURS }} h nach dem Senden (alle unter „Gesendet“)">Alle <span class="n" data-count="all">{{ counts.all }}</span></a>
-  {% for key, label in STATUSES.items() %}
-  <a href="/?status={{ key }}" {% if status_filter == key %}aria-current="page"{% endif %}><span class="dot st-{{ key }}" aria-hidden="true"></span>{{ label }} <span class="n" data-count="{{ key }}">{{ counts[key] }}</span></a>
-  {% endfor %}
+{# One row: the groups of the list, then "Aussortiert" (outlined: no status). Scrolls sideways on narrow screens,
+   the fading edge shows there is more. The reasons only appear once "Aussortiert" is chosen. #}
+<nav class="filters" aria-label="Inserate filtern">
+  <a href="/" {% if not status_filter and not discard_filter %}aria-current="page"{% endif %} title="Ohne Aussortierte; Gesendete nur {{ SENT_VISIBLE_HOURS }} h nach dem Senden">Alle <span class="n" data-count="all">{{ counts.all }}</span></a>
+  <a href="/?status=open" {% if status_filter in ("open", "new", "seen") %}aria-current="page"{% endif %}><span class="dot st-new" aria-hidden="true"></span>Neu <span class="n" data-count="open">{{ counts.open }}</span></a>
+  <a href="/?status=drafted" {% if status_filter == "drafted" %}aria-current="page"{% endif %}><span class="dot st-drafted" aria-hidden="true"></span>Angefangen <span class="n" data-count="drafted">{{ counts.drafted }}</span></a>
+  <a href="/?status=sent" {% if status_filter == "sent" %}aria-current="page"{% endif %}><span class="dot st-sent" aria-hidden="true"></span>Gesendet <span class="n" data-count="sent">{{ counts.sent }}</span></a>
+  <a href="/?discarded=all" class="f-discard" {% if discard_filter %}aria-current="page"{% endif %}>{{ icon("archive") }}Aussortiert <span class="n" data-count="discarded">{{ counts.discarded }}</span></a>
 </nav>
-<nav class="filters filters-discard" aria-label="Aussortierte Inserate">
-  <a href="/?discarded=all" class="f-discard" {% if discard_filter == "all" %}aria-current="page"{% endif %}>{{ icon("archive") }}Aussortiert <span class="n" data-count="discarded">{{ counts.discarded }}</span></a>
+{% if discard_filter %}
+<nav class="filters filters-discard" aria-label="Aussortiert nach Grund">
+  <a href="/?discarded=all" {% if discard_filter == "all" %}aria-current="page"{% endif %}>Alle Gründe</a>
   {% for key, label in DISCARD_REASONS.items() if counts[key] or discard_filter == key %}
   <a href="/?discarded={{ key }}" {% if discard_filter == key and not auto_filter %}aria-current="page"{% endif %}>{{ label }} <span class="n" data-count="{{ key }}">{{ counts[key] }}</span></a>
   {% if key == MANUAL_DISCARD and (counts.auto or auto_filter) %}
-  <a href="/?discarded={{ key }}&amp;auto=1" {% if auto_filter %}aria-current="page"{% endif %} title="Angesehen, aber {{ auto_dismiss_hours }} h lang kein Entwurf: automatisch aussortiert">⏱ davon automatisch <span class="n" data-count="auto">{{ counts.auto }}</span></a>
+  <a href="/?discarded={{ key }}&amp;auto=1" {% if auto_filter %}aria-current="page"{% endif %} title="Angesehen, aber {{ auto_dismiss_hours }} h lang kein Entwurf: automatisch aussortiert">davon automatisch <span class="n" data-count="auto">{{ counts.auto }}</span></a>
   {% endif %}
   {% endfor %}
 </nav>
-{% if discard_filter %}
-<p class="help discard-help">Aussortierte Inserate stehen nicht mehr in der Liste; ihr Status bleibt, wie er war.
+<p class="help discard-help">Aussortierte stehen nicht mehr in der Liste.
   <strong>Uninteressant</strong>: von dir mit ❌ oder automatisch {{ auto_dismiss_hours }} h nach dem Ansehen ohne Entwurf – mit ↩️ zurückholen.
   <strong>Offline</strong>: laut Fredy nicht mehr online. <strong>Veraltet</strong>: älter als {{ STALE_DAYS }} Tage. Diese beiden sind endgültig.</p>
 {% endif %}
 {% endif %}
 
-{% if listings %}
+{% set back = request.url.path ~ ("?" ~ request.url.query if request.url.query else "") %}
+{% if groups %}
+{% for g in groups %}
+<section class="list-group" aria-labelledby="g-{{ g.key }}">
+  <h2 class="list-group-title" id="g-{{ g.key }}">{{ g.label }} <span class="count"{% if g.key != "sent" %} data-count="{{ g.key }}"{% endif %}>{{ g.listings|length }}</span></h2>
+  <ul class="listing-list">
+    {% for l in g.listings %}{{ listing_card(l, back) }}
+    {% endfor %}
+  </ul>
+</section>
+{% endfor %}
+{% elif listings and groups is none %}
 <ul class="listing-list">
-  {% set back = request.url.path ~ ("?" ~ request.url.query if request.url.query else "") %}
   {% for l in listings %}{{ listing_card(l, back) }}
   {% endfor %}
 </ul>
+{% if total %}<p class="help list-cap">Hier stehen die neuesten {{ listings|length }} von {{ total }}. Ältere findest du über die Suche.</p>{% endif %}
+{% elif search %}
 {% elif status_filter %}
 <div class="empty">
   {{ icon("inbox") }}
-  <strong>Keine Inserate mit Status „{{ STATUSES[status_filter] }}“</strong>
+  <strong>Nichts unter „{{ chip_labels.get(status_filter) or STATUSES.get(status_filter, status_filter) }}“</strong>
   <p><a href="/">Alle Inserate anzeigen</a></p>
 </div>
 {% elif discard_filter %}
@@ -108,8 +112,8 @@
 {% elif stats.listings_total %}
 <div class="empty">
   {{ icon("inbox") }}
-  <strong>Alles aussortiert</strong>
-  <p>Gerade steht kein Inserat in der Liste. Die aussortierten findest du unter <a href="/?discarded=all">Aussortiert</a>.</p>
+  <strong>Gerade nichts zu tun</strong>
+  <p>Kein neues oder angefangenes Inserat. Gesendete findest du unter <a href="/?status=sent">Gesendet</a>, aussortierte unter <a href="/?discarded=all">Aussortiert</a>.</p>
 </div>
 {% else %}
 <div class="empty">
@@ -118,5 +122,4 @@
   <p>Sobald Fredy ein neues Inserat meldet, erscheint es hier. Klappt das nicht, unter <a href="/status">Status</a> nachsehen, wann der letzte Webhook kam.</p>
 </div>
 {% endif %}
-<p class="foot">Kosten in Euro; Anthropic rechnet in Dollar ab und wird mit dem Wechselkurs aus den Einstellungen umgerechnet.</p>
 {% endblock %}

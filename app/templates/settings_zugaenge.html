@@ -1,13 +1,18 @@
-{# Einstellungen → Zugänge: what is set up once. KI-Anbieter (key, model, test, model list), Telegram (bot token, chat,
+{# Einstellungen → "Technik": what is set up once, and how immobot runs. Zugänge: KI-Anbieter (key, model, test, model list), Telegram (bot token, chat,
    allowed users, links and editor login), Fredy (webhook token, MCP token, address). Credentials: status only, never values. #}
 {% extends "settings_base.html" %}
 {% from "macros.html" import cred_badge, howto, key_line %}
 {% from "settings_macros.html" import field_error, need_tag with context %}
+{% from "cost_bar.html" import cost_bar %}
+{% macro reset_button(key, label) -%}
+<button type="submit" form="reset-{{ key }}" class="linkish"
+  data-confirm="„{{ label }}“ auf den Standard zurücksetzen? Ungespeicherte Änderungen auf dieser Seite gehen verloren.">Standard wiederherstellen</button>
+{%- endmacro %}
 
 {% macro credential_status(c) %}
 {% if c.hint %}Key: <code>{{ c.hint }}</code> · {% endif %}
 {% if c.source == "dashboard" %}<span class="success">gesetzt über Dashboard am {{ c.updated_at|local_time }}</span>
-{% elif c.source == "env" %}aus Env-Variable – hier eintragen und danach in Coolify löschen
+{% elif c.source == "env" %}aus Env-Variable – hier eintragen und danach die Variable auf dem Server löschen
 {% elif c.need == "required" %}<span class="error">nicht gesetzt</span>
 {% else %}<span class="muted">nicht gesetzt</span>{% endif %}
 {% if c.undecryptable %}<br><span class="error">⚠ nicht entschlüsselbar – neu eintragen</span>{% endif %}
@@ -76,7 +81,7 @@
 </article>
 {% endmacro %}
 
-{% block intro %}KI-Anbieter, Telegram und Fredy – richtest du einmal ein.{% endblock %}
+{% block intro %}KI-Anbieter, Telegram und Fredy, Kosten und Bot – richtest du einmal ein.{% endblock %}
 
 {% block section %}
 {% if allowlist_warning %}<div class="flash warn" role="alert">{{ allowlist_warning }}</div>{% endif %}
@@ -272,6 +277,101 @@
   </div>
 </form>
 
+{# ---- Betrieb: how drafts are made, costs, what Claude sees, the bot, the system prompt (form section "betrieb") ---- #}
+<div class="section-head" id="betrieb"><h2>Entwürfe, Kosten &amp; Bot</h2></div>
+<form id="betrieb-form" method="post" action="/settings">
+  <input type="hidden" name="section" value="betrieb">
+  <article id="entwuerfe" class="setting-card">
+    <h2>Entwürfe</h2>
+    <label>Denkaufwand (Effort) <small>höher = gründlicher, aber langsamer und teurer</small>
+      <select name="effort" {% if errors.effort %}aria-invalid="true"{% endif %}>
+        {% for key, label in effort_options %}
+        <option value="{{ key }}" {% if values.effort == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      {{ field_error("effort") }}
+    </label>
+    <p class="help">Anbieter und Modell: <a href="#anbieter">weiter oben</a>.</p>
+  </article>
+
+  <article id="kosten" class="setting-card">
+    <h2>Kosten</h2>
+    {{ cost_bar(costs) }}
+    <div class="form-grid">
+      <label>Monatsbudget in € <small>0 = kein Limit; ist es erreicht, entstehen keine neuen Entwürfe mehr</small>
+        <input type="text" inputmode="decimal" name="monthly_budget_eur" value="{{ values.monthly_budget_eur }}"
+          {% if errors.monthly_budget_eur %}aria-invalid="true"{% endif %}>
+        {{ field_error("monthly_budget_eur") }}
+      </label>
+      <label>Wechselkurs: 1 € = x $ <small>rechnet in Dollar abgerechnete Kosten (Anthropic) in Euro um, z. B. 1,10</small>
+        <input type="text" inputmode="decimal" name="eur_usd_rate" value="{{ values.eur_usd_rate }}"
+          {% if errors.eur_usd_rate %}aria-invalid="true"{% endif %}>
+        {{ field_error("eur_usd_rate") }}
+      </label>
+    </div>
+  </article>
+
+  <article id="fotos" class="setting-card">
+    <h2>Fotos &amp; Exposé</h2>
+    <p class="help">Was Claude vom Inserat zu sehen bekommt.</p>
+    <label class="check">
+      <input type="checkbox" role="switch" name="send_image" value="1" {% if values.send_image|as_bool %}checked{% endif %}>
+      <span>Fotos des Inserats an Claude mitschicken <small>Claude sieht dann die Fotos und kann darauf eingehen (kostet Tokens, siehe unten).</small></span>
+    </label>
+    <label>Fotos für Claude pro Entwurf <small>Wie viele Inserat-Fotos Claude beim Schreiben mitbekommt – mehr Fotos = genauer, aber je Foto ca. 1.000 Tokens (≈ 0,1–4 ct je nach Modell). Das Telegram-Album zeigt unabhängig davon bis zu 10 Fotos (Telegram-Limit).</small>
+      <input type="number" name="llm_max_images" min="0" max="20" step="1" value="{{ values.llm_max_images }}"
+        {% if errors.llm_max_images %}aria-invalid="true"{% endif %}>
+      {{ field_error("llm_max_images") }}
+    </label>
+    <label class="check">
+      <input type="checkbox" role="switch" name="is24_fetch" value="1" {% if values.is24_fetch|as_bool %}checked{% endif %}>
+      <span>Bilder &amp; Details selbst von ImmoScout24 laden <small>Wenn Fredy keine Bilder mitschickt, holt immobot bei ImmoScout24-Inseraten das Exposé selbst (1 Abruf pro Inserat, nur bei Bedarf). Schickt Fredy die Bilder schon mit, wird nichts zusätzlich abgerufen.</small></span>
+    </label>
+  </article>
+
+  <article id="bot" class="setting-card">
+    <h2>Telegram-Bot</h2>
+    <label>Verzögerung nach Fredys Nachricht <small>in Sekunden, 0–60 – damit die Buttons direkt unter Fredys Inserat erscheinen</small>
+      <input type="number" name="followup_delay_s" min="0" max="60" step="1" value="{{ values.followup_delay_s }}"
+        {% if errors.followup_delay_s %}aria-invalid="true"{% endif %}>
+      {{ field_error("followup_delay_s") }}
+    </label>
+    <label class="check">
+      <input type="checkbox" role="switch" name="paused" value="1" {% if values.paused|as_bool %}checked{% endif %}>
+      <span>Pause <small>Der Bot meldet sich nicht zu neuen Inseraten.</small></span>
+    </label>
+    <label class="check">
+      <input type="checkbox" role="switch" name="kleinanzeigen_enabled" value="1" {% if values.kleinanzeigen_enabled|as_bool %}checked{% endif %}>
+      <span>Kleinanzeigen-Inserate <small>Inserate aus Fredys Kleinanzeigen-Suche: immobot schickt Bilder und Nachricht selbst, mit „🟢 Kleinanzeigen“ markiert. Aus = sie werden ignoriert (auch nicht im Dashboard).</small></span>
+    </label>
+    <label>Automatisch uninteressant nach <small>Stunden nach dem Ansehen, 0 = aus. Ein Inserat, das du angesehen, aber nicht angeschrieben hast (kein Entwurf), wird danach als „uninteressant“ aussortiert – im Dashboard unter „Aussortiert“, mit ↩️ jederzeit zurückzuholen (danach nie wieder automatisch). Ungesehene Inserate bleiben „Neu“.</small>
+      <input type="number" name="auto_dismiss_hours" min="0" max="720" step="1" value="{{ values.auto_dismiss_hours }}"
+        {% if errors.auto_dismiss_hours %}aria-invalid="true"{% endif %}>
+      {{ field_error("auto_dismiss_hours") }}
+    </label>
+  </article>
+
+  <article id="prompt" class="setting-card">
+    <details {% if errors.system_prompt %}open{% endif %}>
+      <summary><strong>System-Prompt</strong> <small class="muted">– Grundanweisung an die KI, für Fortgeschrittene</small></summary>
+      <div class="field-head">
+        <label for="system_prompt" class="muted"><small>Legt fest, wie Anschreiben grundsätzlich aufgebaut sind. Meist reicht es, „Über mich“, „Wünsche“ und „Schreibstil“ anzupassen.</small></label>
+        {{ reset_button("system_prompt", "System-Prompt") }}
+      </div>
+      <textarea id="system_prompt" name="system_prompt" rows="18" {% if errors.system_prompt %}aria-invalid="true"{% endif %}>
+{{ values.system_prompt }}</textarea>
+      {{ field_error("system_prompt") }}
+    </details>
+  </article>
+
+  <div class="savebar">
+    <small>Gilt für alle neuen Anschreiben.</small>
+    <button type="submit">Speichern</button>
+  </div>
+</form>
+<form id="reset-system_prompt" method="post" action="/settings/reset/system_prompt"></form>
+<p class="help">Zustand von Fredy, Telegram und Claude, Protokoll und alle Kosten: <a href="/status">Status</a>.</p>
+
 <details class="disclosure notes-box">
   <summary>Wichtig: Verschlüsselung und Env-Variablen</summary>
   <div class="disclosure-body">
@@ -279,7 +379,7 @@
       <li>Die Werte (auch die API-Keys) liegen AES-GCM-verschlüsselt in der Datenbank. Der Schlüssel
         wird aus <code>SESSION_SECRET</code> abgeleitet. <strong>Wird <code>SESSION_SECRET</code> geändert, sind alle hier
         gespeicherten Werte nicht mehr lesbar</strong> („nicht entschlüsselbar“) und müssen neu eingetragen werden.</li>
-      <li>Steht bei einem Wert „aus Env-Variable“: hier eintragen und danach die Variable in Coolify löschen.</li>
+      <li>Steht bei einem Wert „aus Env-Variable“: hier eintragen und danach die Variable auf dem Server löschen.</li>
     </ul>
   </div>
 </details>

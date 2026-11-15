@@ -61,7 +61,7 @@ def test_profile_history_view_and_restore(client):
     save_profile(client, style="Locker, per Du.")
     r = save_profile(client, style="Förmlich, per Sie.", target_words="90")
     assert r.headers["location"] == "/settings?saved=1&version=3"
-    page = client.get("/settings").text
+    page = client.get("/settings/verhalten").text
     verlauf = page.split('id="verlauf"')[1]
     assert '<span class="count">3</span>' in verlauf and "Ausgangsstand" in verlauf and "gespeichert" in verlauf
     assert "<strong>#3</strong>" in verlauf and "aktuell" in verlauf
@@ -69,7 +69,7 @@ def test_profile_history_view_and_restore(client):
     assert 'href="/settings/version/3"' not in verlauf  # the current one has nothing to show or restore
     assert "data-confirm=\"Version #2 wiederherstellen?" in verlauf
     assert "<details >" in verlauf or "<details>" in verlauf  # collapsed
-    assert "<details open>" in client.get("/settings?verlauf=1").text.split('id="verlauf"')[1]
+    assert "<details open>" in client.get("/settings/verhalten?verlauf=1").text.split('id="verlauf"')[1]
 
     view = client.get("/settings/version/2").text  # version 2 -> current, per field
     assert "Version #2" in view and "gespeichert" in view
@@ -96,10 +96,10 @@ def test_profile_history_shows_the_newest_and_all_on_request(client, monkeypatch
     monkeypatch.setattr(web, "VERSIONS_SHOWN", 2)
     for words in ("100", "110", "120"):
         save_profile(client, target_words=words)
-    page = client.get("/settings").text
+    page = client.get("/settings/verhalten").text
     assert page.count('href="/settings/version/') == 1  # #4 (current) and #3 shown, #3 with "Ansehen"
     assert "Alle 4 Versionen zeigen" in page
-    page = client.get("/settings?verlauf=alle").text
+    page = client.get("/settings/verhalten?verlauf=alle").text
     assert page.count('href="/settings/version/') == 3 and "Alle 4 Versionen zeigen" not in page
 
 
@@ -109,25 +109,25 @@ def test_rewrite_prominence_follows_the_feedback(client):
     """Nothing yet: a quiet line with the threshold. Possible but little: a quiet line with a small button.
     Plenty: a card with the main button. A proposal waiting: a card with "Vorschlag ansehen"."""
     login(client)
-    page = client.get("/settings").text
+    page = client.get("/settings/verhalten").text
     assert 'class="rewrite-line"' in page and "möglich ab 3 Rückmeldungen oder 3 aktiven Regeln" in page
     assert "(bisher 0 Rückmeldungen, 0 Regeln)" in page and 'action="/settings/rewrite"' not in page
     lid = add_listing()
     for kind in ("shorter", "shorter", "formal"):
         db.add_feedback(lid, "telegram", "quick", kind)
-    page = client.get("/settings").text
+    page = client.get("/settings/verhalten").text
     assert '<article id="verbessern"' not in page
     line = page.split('<div class="rewrite-line" id="verbessern">')[1].split("</div>")[0]
     assert "3 Rückmeldungen und 0 aktive Regeln seit Version #1." in line and "ab etwa 10" in line
     assert 'action="/settings/rewrite"' in line and 'class="linkish">Verbesserung vorschlagen' in line
     for _ in range(learning.REWRITE_SUGGEST_AT - 3):
         db.add_feedback(lid, "telegram", "quick", "shorter")
-    card = client.get("/settings").text.split('<article id="verbessern"')[1].split("</article>")[0]
+    card = client.get("/settings/verhalten").text.split('<article id="verbessern"')[1].split("</article>")[0]
     assert "10 Rückmeldungen und 0 aktive Regeln seit Version #1. Genug" in card and "is-active" in card
     assert 'action="/settings/rewrite"' in card and "Verbesserung vorschlagen" in card
     assert "bis zu ein paar Minuten" in card
     pid = make_proposal({"field": "target_words", "old": "150", "new": "120"})
-    card = client.get("/settings").text.split('<article id="verbessern"')[1].split("</article>")[0]
+    card = client.get("/settings/verhalten").text.split('<article id="verbessern"')[1].split("</article>")[0]
     assert "Vorschlag bereit: <strong>1 Änderung</strong>" in card and f'href="/settings/vorschlag/{pid}"' in card
     assert 'action="/settings/rewrite"' not in card
 
@@ -135,7 +135,7 @@ def test_rewrite_prominence_follows_the_feedback(client):
 def test_one_active_rule_is_not_enough_for_a_rewrite(client):
     login(client)
     db.add_rule("Kein Ausrufezeichen.", status="active")
-    page = client.get("/settings").text
+    page = client.get("/settings/verhalten").text
     assert '<article id="verbessern"' not in page and 'action="/settings/rewrite"' not in page
     assert "(bisher 0 Rückmeldungen, 1 Regel)" in page
     r = client.post("/settings/rewrite")
@@ -169,13 +169,13 @@ def enable_rewrite():
 def test_rewrite_runs_in_the_background(client, gated_rewrite):
     login(client)
     enable_rewrite()
-    assert client.get("/settings/rewrite/status").json() == {"state": "none", "url": "/settings"}
+    assert client.get("/settings/rewrite/status").json() == {"state": "none", "url": "/settings/verhalten"}
     r = client.post("/settings/rewrite")
-    assert r.status_code == 303 and r.headers["location"] == "/settings#verbessern"  # at once, not after the call
+    assert r.status_code == 303 and r.headers["location"] == "/settings/verhalten#verbessern"  # at once, not after the call
     assert client.get("/settings/rewrite/status").json()["state"] == "running"
-    page = client.get("/settings").text
+    page = client.get("/settings/verhalten").text
     assert "Vorschlag wird erstellt …" in page and 'data-rewrite-poll="/settings/rewrite/status"' in page
-    assert '<noscript><meta http-equiv="refresh" content="10; url=/settings"></noscript>' in page  # without JS
+    assert '<noscript><meta http-equiv="refresh" content="10; url=/settings/verhalten"></noscript>' in page  # without JS
     assert client.post("/settings/rewrite").status_code == 303  # one job at a time
     assert wait_for(lambda: gated_rewrite["calls"] == 1) and gated_rewrite["calls"] == 1
 
@@ -183,7 +183,7 @@ def test_rewrite_runs_in_the_background(client, gated_rewrite):
     assert wait_for(lambda: client.get("/settings/rewrite/status").json()["state"] == "done")
     pid = db.list_rewrite_proposals(limit=1)[0]["id"]
     assert client.get("/settings/rewrite/status").json() == {"state": "done", "url": f"/settings/vorschlag/{pid}"}
-    page = client.get("/settings").text
+    page = client.get("/settings/verhalten").text
     assert "Vorschlag wird erstellt" not in page and "http-equiv" not in page and "Vorschlag bereit" in page
 
 
@@ -198,12 +198,12 @@ def test_rewrite_failure_is_shown_until_dismissed(client, gated_rewrite, error, 
     gated_rewrite.update(open=True, error=error)
     client.post("/settings/rewrite")
     assert wait_for(lambda: client.get("/settings/rewrite/status").json()["state"] == "failed")
-    assert client.get("/settings/rewrite/status").json() == {"state": "failed", "url": "/settings"}
-    card = client.get("/settings").text.split('<article id="verbessern"')[1].split("</article>")[0]
+    assert client.get("/settings/rewrite/status").json() == {"state": "failed", "url": "/settings/verhalten"}
+    card = client.get("/settings/verhalten").text.split('<article id="verbessern"')[1].split("</article>")[0]
     assert "Der letzte Vorschlag ist fehlgeschlagen" in card and shown in card and "boom" not in card
     assert "Verbesserung vorschlagen" in card  # try again
-    assert client.post("/settings/rewrite/dismiss").headers["location"] == "/settings"
-    assert "fehlgeschlagen" not in client.get("/settings").text
+    assert client.post("/settings/rewrite/dismiss").headers["location"] == "/settings/verhalten"
+    assert "fehlgeschlagen" not in client.get("/settings/verhalten").text
 
 
 def test_rewrite_cut_off_by_a_restart_counts_as_failed(client):
@@ -211,7 +211,7 @@ def test_rewrite_cut_off_by_a_restart_counts_as_failed(client):
     enable_rewrite()
     db.set_meta(web.REWRITE_JOB_META, json.dumps({"state": "running", "started_at": db.now_iso()}))  # no task
     assert client.get("/settings/rewrite/status").json()["state"] == "failed"
-    assert "Abgebrochen (Neustart?)" in client.get("/settings").text
+    assert "Abgebrochen (Neustart?)" in client.get("/settings/verhalten").text
 
 
 def test_rewrite_needs_enough_feedback(client, gated_rewrite):
@@ -315,7 +315,7 @@ def test_stale_proposal_is_explained(client):
     page = client.get(f"/settings/vorschlag/{pid}").text
     assert "Veraltet:" in page and 'action="/settings/rewrite"' in page and "Neu erstellen" in page
     assert 'name="edit"' not in page
-    card = client.get("/settings").text.split('<article id="verbessern"')[1].split("</article>")[0]
+    card = client.get("/settings/verhalten").text.split('<article id="verbessern"')[1].split("</article>")[0]
     assert f"Vorschlag #{pid} passt nicht mehr" in card and "Neu erstellen" in card
     r = client.post(f"/settings/vorschlag/{pid}/apply", data={"edit": ["1"]})
     assert r.status_code == 409 and "bitte neu vorschlagen" in r.text
@@ -424,8 +424,8 @@ def test_rule_limit_and_merge_hint(client, monkeypatch):
     for i in range(learning.RULES_MERGE_HINT_AT):
         db.add_rule(f"Regel {i}.", status="active")
     card = client.get("/settings/verhalten").text.split('<article id="regeln"')[1]
-    assert "Schon 15 aktive Regeln" in card and 'href="/settings#verbessern"' in card
-    profil = client.get("/settings").text
+    assert "Schon 15 aktive Regeln" in card and 'href="#verbessern"' in card  # the card is on the same page
+    profil = client.get("/settings/verhalten").text
     assert "Schon 15 aktive Regeln – ein Vorschlag kann sie ins Profil einarbeiten." in profil
     monkeypatch.setattr(learning, "MAX_ACTIVE_RULES", 15)
     off = db.add_rule("Noch eine.", status="inactive")
@@ -520,7 +520,7 @@ def test_learning_costs_count_in_the_totals(client):
     db.add_llm_usage("rewrite", "anthropic", "claude-opus-5-5", cost_usd=2.2)  # 2,00 €
     db.add_llm_usage("rules", "deutschlandgpt", "claude-sonnet-5.5", listing_id=lid, cost_usd=0.55, currency="EUR",
                      cost_native=0.5)  # 0,50 €
-    for path in ["/", "/status"]:
+    for path in ["/status"]:  # the main page has no cost tiles any more
         assert client.get(path).text.count(">3,50 €</span>") == 2, path  # this month and in total
 
 
@@ -534,7 +534,7 @@ def legend(page: str) -> list[tuple[str, str]]:
 
 
 def test_cost_bar_by_source_under_budget(client):
-    """Status and Verhalten → Kosten: this month's costs against the budget, by source, with a text legend."""
+    """Status and Technik → Kosten: this month's costs against the budget, by source, with a text legend."""
     login(client)
     lid = add_listing()
     db.add_draft(lid, "initial", "A", "claude-opus-5-5", cost_usd=1.1, source="telegram")  # 1,00 €
@@ -543,7 +543,7 @@ def test_cost_bar_by_source_under_budget(client):
     db.add_llm_usage("rules", "anthropic", "claude-opus-5-5", listing_id=lid, cost_usd=0.22)  # 20,0 ct
     db.add_llm_usage("rewrite", "deutschlandgpt", "claude-sonnet-5.5", cost_usd=0.33, currency="EUR", cost_native=0.3)
     db.update_settings({"monthly_budget_eur": "10"})
-    for path in ["/status", "/settings/verhalten"]:
+    for path in ["/status", "/settings/zugaenge"]:
         page = client.get(path).text
         bar = cost_bar(page)
         assert "<strong>2,10 €</strong> von 10,00 € Budget · 21 %" in bar, path
@@ -553,10 +553,12 @@ def test_cost_bar_by_source_under_budget(client):
         assert 'class="costbar-seg seg-drafts" style="width: 10.00%"' in bar  # of the budget: the rest is free
         assert "costbar-limit" not in bar and "is-over" not in bar and "Budget erreicht" not in page
         assert "auch Regel-Vorschläge und Profil-Verbesserung" in page  # learning calls count, said in words
-    verhalten = client.get("/settings/verhalten").text
-    assert verhalten.index('class="costbar') < verhalten.index('name="monthly_budget_eur"')  # next to the budget
-    overview = client.get("/").text  # slim version in the Inserate header
-    assert 'costbar-meter is-slim' in overview and "von 10,00 € Budget" in overview
+    technik = client.get("/settings/zugaenge").text
+    assert technik.index('class="costbar') < technik.index('name="monthly_budget_eur"')  # next to the budget
+    overview = client.get("/").text  # the main page only warns from 80 % on
+    assert "costbar" not in overview and "Monatsbudget" not in overview
+    db.update_settings({"monthly_budget_eur": "2.5"})  # 2,10 of 2,50 €: 84 %
+    assert "84 % des Monatsbudgets verbraucht (2,10 € von 2,50 €)" in client.get("/").text
 
 
 def test_cost_bar_over_budget_and_without_limit(client):
@@ -572,15 +574,14 @@ def test_cost_bar_over_budget_and_without_limit(client):
     assert "Budget erreicht – bis Monatsende keine neuen Claude-Aufrufe" in bar
     assert "Monatsbudget" in page.split('<section class="health"')[1].split("</section>")[0]  # a red tile too
     assert ("Entwürfe", "3,00 €") in legend(page)
-    assert "Budget erreicht" in client.get("/").text.split('class="stats"')[1].split("</section>")[0]
+    assert "Monatsbudget erreicht: Claude schreibt keine neuen Entwürfe mehr." in client.get("/").text
 
     db.update_settings({"monthly_budget_eur": "0"})  # no limit: the total, no limit mark, no percentage
-    for path in ["/status", "/settings/verhalten"]:
+    for path in ["/status", "/settings/zugaenge"]:
         bar = cost_bar(client.get(path).text)
         assert "<strong>4,00 €</strong> · kein Limit" in bar and "costbar-limit" not in bar and "%</span>" not in bar
         assert 'seg-drafts" style="width: 75.00%"' in bar
-    overview = client.get("/").text.split('class="stats"')[1].split("</section>")[0]
-    assert "kein Limit" in overview and "is-slim" not in overview
+    assert "Monatsbudget" not in client.get("/").text  # no limit: nothing to warn about
 
 
 def test_add_rule_on_verhalten(client):

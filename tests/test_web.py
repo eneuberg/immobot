@@ -252,7 +252,8 @@ def test_listings_page_and_filter(client):
 
     r = client.get("/")
     assert r.status_code == 200 and "Altbau Nord" in r.text and "Neubau Süd" in r.text
-    assert "3,8 ct" in r.text and "USD" not in r.text  # 0,042 $ shown in euros (1 € = 1,10 $)
+    assert "3,8 ct" not in r.text and "USD" not in r.text  # no costs on the cards (they are on Status)
+    assert 'id="g-open"' in r.text and "Neu <span" in r.text  # grouped: Neu / Angefangen / Gesendet
     r = client.get("/?status=sent")
     assert "Altbau Nord" in r.text and "Neubau Süd" not in r.text
     assert client.get("/?status=bogus").status_code == 200  # unknown filter = all
@@ -281,8 +282,9 @@ def test_listing_hint_renders_markdown_but_the_draft_stays_raw(client):
     db.add_draft(lid, "initial", "Guten Tag, **nicht fett**\n- kein Punkt", "claude-opus-5-5", cost_usd=0.01,
                  hint="Vorher:\n- **Objekt-ID senden:** bitte <b>nicht</b>\n- Vermieter*innen anschreiben")
     page = client.get(f"/listing/{lid}").text
-    assert ('<div class="md"><strong class="md-label">Hinweis:</strong> <p>Vorher:</p><ul><li><strong>Objekt-ID senden:'
+    assert ('<div class="md ed-hints-body"><p>Vorher:</p><ul><li><strong>Objekt-ID senden:'
             '</strong> bitte &lt;b&gt;nicht&lt;/b&gt;</li><li>Vermieter*innen anschreiben</li></ul></div>') in page
+    assert '<details class="ed-hints" id="hinweise" open>' in page  # above the actions, open
     assert ">Guten Tag, **nicht fett**\n- kein Punkt</pre>" in page  # sent and copied as it is
 
 
@@ -389,14 +391,13 @@ def test_static_assets_served_without_login(client):
 
 
 def test_listing_page_status_track_and_actions(client):
-    """The status is shown, not set: a track Neu → Gesehen → Entwurf → Gesendet; by hand only "✅ Gesendet" (and
-    "zurücknehmen") and "❌ Uninteressant"."""
+    """The status is shown, not set: a pill (Neu → Gesehen → Angefangen → Gesendet); by hand only "✅ Gesendet" (under
+    "Mehr", with "Zurücknehmen") and "❌ Uninteressant"."""
     login(client)
     lid = add_listing()
     page = client.get(f"/listing/{lid}").text  # opening it: "Neu" -> "Gesehen"
     assert db.get_listing(lid)["status"] == "seen"
-    assert '<li class="st-step st-seen is-current" aria-current="step">' in page
-    assert '<li class="st-step st-new is-done">' in page and '<li class="st-step st-sent">' in page
+    assert '<span class="badge dot st-seen">Gesehen</span>' in page and "status-track" not in page
     assert f'action="/listing/{lid}/sent"' in page and f'action="/listing/{lid}/dismiss"' in page
     assert 'name="status"' not in page  # no status buttons any more
     r = client.post(f"/listing/{lid}/sent", data={"next": f"/listing/{lid}"})
@@ -421,7 +422,7 @@ def test_listing_page_locked_while_aussortiert(client):
     assert '<span class="dc-kind">Aussortiert</span><span class="dc-reason">Uninteressant</span>' in page
     assert f'action="/listing/{lid}/restore"' in page and f'action="/listing/{lid}/sent"' not in page
     assert f'action="/listing/{lid}/dismiss"' not in page
-    assert '<li class="st-step st-drafted is-current" aria-current="step">' in page  # the last state stays visible
+    assert '<span class="lc-was">war: Angefangen</span>' in page  # the last state stays visible
     client.post(f"/listing/{lid}/sent")
     assert db.get_listing(lid)["status"] == "drafted"  # locked
     client.post(f"/listing/{lid}/restore", data={"next": f"/listing/{lid}"})
@@ -447,20 +448,20 @@ def test_listing_page_asks_after_opening_the_listing(client):
     lid = add_listing()
     page = client.get(f"/listing/{lid}").text
     assert f'href="{editor_access.make_open_path(lid)}"' in page and "data-opens-listing" in page
-    overlay = page.split(f'data-ask-return="listing-{lid}"')[1].split("</dialog>")[0]
+    overlay = page.split(f'data-ask-return="listing-{lid}"')[1].split("</aside>")[0]
     assert not overlay.startswith(" data-opened")  # never opened: only a click here arms it
-    assert "✍️ Interessant – im Editor anschreiben" in overlay and f'action="/listing/{lid}/dismiss"' in overlay
-    assert '<p class="ed-ask-later"><button type="button" class="linkish" data-dialog-close>Später' in overlay
+    assert "✍️ Ja, anschreiben" in overlay and f'action="/listing/{lid}/dismiss"' in overlay
+    assert 'class="linkish ask-later js-only" data-sheet-close>Später</button>' in overlay  # not a third button
     db.mark_opened(lid)
-    overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</dialog>")[0]
+    overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</aside>")[0]
     assert overlay.startswith(" data-opened")
     db.add_draft(lid, "initial", "Hallo", "claude-opus-5-5")
     db.advance_status(lid, "drafted")
-    overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</dialog>")[0]
+    overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</aside>")[0]
     assert "Hast du die Nachricht abgeschickt?" in overlay and f'action="/listing/{lid}/sent"' in overlay
-    assert "Interessant – im Editor" not in overlay
+    assert "Ja, anschreiben" not in overlay
     db.discard(lid)
-    overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</dialog>")[0]
+    overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</aside>")[0]
     assert "Doch interessant?" in overlay and "❌ Uninteressant" not in overlay
     assert f'action="/listing/{lid}/restore"' in overlay
     db.restore(lid)
@@ -536,7 +537,7 @@ def test_card_toggle_answers_json_for_app_js(client):
     assert "is-discarded" not in card and "⏱ automatisch" not in card and "is-unseen" not in card
     assert '<span class="badge dot st-seen">Gesehen</span>' in card
     assert 'value="/?discarded=all"' in card and 'title="Uninteressant – aussortieren"' in card and "❌</button>" in card
-    assert data["counts"] == {"all": 2, "new": 0, "seen": 1, "drafted": 0, "sent": 1, "discarded": 0,
+    assert data["counts"] == {"all": 2, "new": 0, "seen": 1, "drafted": 0, "sent": 1, "open": 1, "discarded": 0,
                               "uninteressant": 0, "offline": 0, "veraltet": 0, "auto": 0}
     # the same card the page renders (there with that page as `next`)
     page = client.get("/").text
@@ -561,18 +562,22 @@ def test_card_toggle_logged_out_is_not_json(client):
 
 
 def test_counts_and_filters_on_the_main_page(client):
-    """"Alle" = not aussortiert, a chip per status, then the "Aussortiert" row with its reasons (empty ones left
-    out); every number is marked for app.js."""
+    """One chip row: "Alle" (not aussortiert, grouped), Neu (new + seen), Angefangen, Gesendet, Aussortiert; the
+    reasons only once "Aussortiert" is chosen (empty ones left out); every number is marked for app.js."""
     login(client)
     new, seen, gone, old = (add_listing(fredy_id=f"x{i}", title=f"Wohnung {i}") for i in range(4))
     db.mark_seen(seen)
     db.mark_offline(["x2"])
     db.discard(old, "veraltet", auto=True)
     page = client.get("/").text
-    for key in ("all", "new", "seen", "drafted", "sent", "discarded", "offline", "veraltet"):
+    for key in ("all", "open", "drafted", "sent", "discarded"):
         assert f'data-count="{key}"' in page
-    assert 'data-count="uninteressant"' not in page and "davon automatisch" not in page  # nothing there
-    assert '<span data-count="new">1</span> neu · <span data-count="seen">1</span> gesehen' in page
+    assert 'data-count="offline"' not in page and 'class="stats"' not in page  # no tiles, no reasons yet
+    assert '<span class="count" data-count="open">2</span>' in page  # the "Neu" group: new and seen
+    discarded = client.get("/?discarded=all").text
+    for key in ("offline", "veraltet"):
+        assert f'data-count="{key}"' in discarded
+    assert 'data-count="uninteressant"' not in discarded and "davon automatisch" not in discarded  # nothing there
     assert "Wohnung 0" in page and "Wohnung 1" in page and "Wohnung 2" not in page and "Wohnung 3" not in page
     assert 'href="/?discarded=all" class="f-discard"' in page
     every = client.get("/?discarded=all").text
@@ -683,7 +688,8 @@ def test_settings_pages_render_all_fields(client):
         assert f'<a href="{web.SETTINGS_SECTIONS[section]["path"]}" aria-current="page">' in r.text  # sub-navigation
         assert '<a href="/settings" aria-current="page">Einstellungen</a>' in r.text  # main navigation
         assert 'href="/credentials"' not in r.text  # no separate main tab anymore
-        assert ">Profil" in r.text and ">Verhalten" in r.text and ">Zugänge" in r.text
+        assert ">Ich &amp; meine Suche" in r.text and ">Gelernt" in r.text and ">Technik" in r.text
+    assert '<input type="hidden" name="section" value="betrieb">' in pages["zugaenge"].text  # second form on Technik
     for key, section in web.FIELD_SECTION.items():
         for name in field_names(key):
             assert f'name="{name}"' in pages[section].text, key
@@ -691,11 +697,12 @@ def test_settings_pages_render_all_fields(client):
     zugaenge = pages["zugaenge"].text
     assert "Opus 5.5 · 4 / 20 $" in zugaenge and "Sonnet 5.5 · 3,30 / 16,50 €" in zugaenge
     profil = pages["profil"].text  # the texts stay on their own tab, without keys or tokens around them
-    assert "Über mich" in profil and "System-Prompt" in profil and "API-Key" not in profil and "Token" not in profil
-    verhalten = pages["verhalten"].text
-    assert "Denkaufwand" in verhalten and "Monatsbudget" in verhalten and "Pause" in verhalten
+    assert "Über mich" in profil and "System-Prompt" not in profil and "API-Key" not in profil and "Token" not in profil
+    assert "Denkaufwand" in zugaenge and "Monatsbudget" in zugaenge and "Pause" in zugaenge and "System-Prompt" in zugaenge
+    verhalten = pages["verhalten"].text  # "Gelernt"
     assert "Endversionen als Stil-Beispiele nutzen" in verhalten and "Gelernte Regeln nutzen" in verhalten
-    assert "API-Key" not in verhalten
+    assert 'id="verlauf"' in verhalten and 'id="verbessern"' in verhalten  # versions and improvements moved here
+    assert "API-Key" not in verhalten and "Denkaufwand" not in verhalten
 
 
 @pytest.mark.parametrize("path,location", [
@@ -715,7 +722,9 @@ def test_old_settings_urls_redirect(client, path, location):
 def test_each_sub_page_saves_only_its_own_checkboxes(client):
     login(client)
     switches = ("send_image", "paused", "is24_fetch", "use_examples", "use_rules")
-    assert set(web.CHECKBOX_SETTINGS) == set(switches) and all(key in web.SECTION_FIELDS["verhalten"] for key in switches)
+    assert set(web.CHECKBOX_SETTINGS) == set(switches)
+    assert all(key in web.SECTION_FIELDS["betrieb"] for key in switches[:3])
+    assert all(key in web.SECTION_FIELDS["verhalten"] for key in switches[3:])
     db.update_settings(dict.fromkeys(switches, "1"))
     r = client.post("/settings", data={"section": "profil", "profile": "Neu", "target_words": "100"})
     assert r.status_code == 303 and r.headers["location"].startswith("/settings?saved=1")
@@ -724,18 +733,24 @@ def test_each_sub_page_saves_only_its_own_checkboxes(client):
     r = client.post("/settings", data={"section": "zugaenge", "fredy_base_url": ""})
     assert r.headers["location"] == "/settings/zugaenge?saved=1" and "Gespeichert." in client.get(r.headers["location"]).text
     assert [db.get_settings()[key] for key in switches] == ["1"] * 5
-    # "Verhalten" saves all switches: the ones missing from the form are off
-    r = client.post("/settings", data={"section": "verhalten", "followup_delay_s": "5", "send_image": "1", "use_rules": "1"})
+    # "betrieb" (on Technik) saves its switches: the ones missing from the form are off, the learning ones stay
+    r = client.post("/settings", data={"section": "betrieb", "followup_delay_s": "5", "send_image": "1"})
+    assert r.headers["location"] == "/settings/zugaenge?saved=1#betrieb"
+    assert "Gespeichert." in client.get(r.headers["location"]).text
+    stored = db.get_settings()
+    assert stored["followup_delay_s"] == "5" and [stored[key] for key in switches] == ["1", "0", "0", "1", "1"]
+    # "Gelernt" saves the learning switches only
+    r = client.post("/settings", data={"section": "verhalten", "use_rules": "1"})
     assert r.headers["location"] == "/settings/verhalten?saved=1" and "Gespeichert." in client.get(r.headers["location"]).text
     stored = db.get_settings()
-    assert stored["followup_delay_s"] == "5" and [stored[key] for key in switches] == ["1", "0", "0", "0", "1"]
+    assert [stored[key] for key in switches] == ["1", "0", "0", "0", "1"]
 
 
 def test_validation_error_shows_the_page_with_the_field(client):
     login(client)
-    r = client.post("/settings", data={"section": "verhalten", "followup_delay_s": "99"})
+    r = client.post("/settings", data={"section": "betrieb", "followup_delay_s": "99"})
     assert r.status_code == 400 and 'name="followup_delay_s" min="0" max="60" step="1" value="99"' in r.text
-    assert '<a href="/settings/verhalten" aria-current="page">' in r.text
+    assert '<a href="/settings/zugaenge" aria-current="page">' in r.text
     r = client.post("/settings", data=valid_settings(model="gpt-4"))  # no section: the page of the bad field
     assert r.status_code == 400 and '<a href="/settings/zugaenge" aria-current="page">' in r.text and "Unbekanntes Modell" in r.text
 
@@ -1064,7 +1079,7 @@ def test_credentials_page_shows_status_never_values(client):
     login(client)
     r = client.get("/settings/zugaenge")
     assert r.status_code == 200
-    assert r.text.count("aus Env-Variable – hier eintragen und danach in Coolify löschen") == 3  # bot token, chat, webhook
+    assert r.text.count("aus Env-Variable – hier eintragen und danach die Variable auf dem Server löschen") == 3  # bot token, chat, webhook
     assert "Aktuelle Chat-ID: <code>42</code>" in r.text  # the chat id is not secret
     assert "SESSION_SECRET" in r.text
     # one tab in the order KI-Anbieter, Telegram, Fredy
@@ -1106,7 +1121,7 @@ def test_required_and_optional_credentials_are_marked(client):
     vault.clear("telegram_allowed_user_ids")
     page = client.get("/settings/zugaenge").text
     assert page.count('<span class="badge err dot">fehlt</span>') == 4 and page.count('class="alert-dot"') == 1
-    assert '<a href="/settings/zugaenge" aria-current="page">Zugänge<span class="alert-dot"' in page  # the dot is on Zugänge
+    assert '<a href="/settings/zugaenge" aria-current="page">Technik<span class="alert-dot"' in page  # the dot is on Technik
     assert 'class="alert-dot"' in client.get("/settings").text  # ... on every tab of "Einstellungen"
     for name in ["anthropic_api_key", "telegram_bot_token", "telegram_chat_id", "fredy_webhook_token"]:
         vault.set(name, DASHBOARD_SECRETS[name])  # the DeutschlandGPT key isn't needed
@@ -1683,8 +1698,8 @@ def test_settings_shows_provider_section(client):
     assert 'form="test-anthropic"' in anthropic and 'action="/credentials/test/deutschlandgpt"' in page
     assert ">Wechseln<" not in page and "Entfernen" not in anthropic  # an env key can't be removed here
     assert "data-provider-unsaved hidden" in page
-    assert "Anbieter &amp; Modell speichern" in page and 'name="effort"' not in page  # effort: "Verhalten"
-    verhalten = client.get("/settings/verhalten").text
+    assert "Anbieter &amp; Modell speichern" in page and 'name="effort"' in page  # effort: own form, same page
+    verhalten = page
     assert "Wechselkurs: 1 € = x $" in verhalten and 'name="eur_usd_rate" value="1.10"' in verhalten
     assert "Monatsbudget in €" in verhalten and 'name="monthly_budget_eur" value="15"' in verhalten
 
@@ -1861,7 +1876,7 @@ def test_listing_shows_euro_costs_and_dollars_for_anthropic(client):
     # Model · provider and the cost are separate chips under each draft; euros first, dollars only for Anthropic.
     assert ">Claude Sonnet 5.5 · DeutschlandGPT</span>" in page and ">2,1 ct</span>" in page
     assert ">Claude Opus 5.5 · Anthropic</span>" in page and ">3,8 ct (≈ 0,042 $)</span>" in page
-    assert "5,9 ct" in client.get("/").text  # listing total in euros: 2,1 + 3,8 ct
+    assert "5,9 ct" not in client.get("/").text  # no costs on the cards
     db.update_settings({"eur_usd_rate": "1.40"})  # 1 € = 1,40 $
     assert ">3,0 ct (≈ 0,042 $)</span>" in client.get(f"/listing/{lid}").text
 
@@ -1872,7 +1887,8 @@ def test_stat_tiles_in_euros(client):
     db.add_draft(lid, "initial", "A", "claude-opus-5-5", cost_usd=2.2)  # 2,00 € at 1,10
     db.add_draft(lid, "initial", "B", "claude-sonnet-5.5", cost_usd=1.1, provider="deutschlandgpt", currency="EUR",
                  cost_native=1.0)
-    for path in ["/", "/status"]:
+    assert 'class="stats"' not in client.get("/").text  # no stat tiles on the main page any more
+    for path in ["/status"]:
         page = client.get(path).text
         assert page.count('class="value">3,00 €</span>') == 2, path  # this month and in total
         assert "USD" not in page, path
@@ -1986,8 +2002,8 @@ def test_listing_page_map(client):
     assert f'<a class="map-open" href="{link}" target="_blank" rel="noopener noreferrer">In Google Maps öffnen ↗</a>' in page
     # The embed sits only in a data attribute (app.js sets the iframe on opening): no request to Google before.
     assert f'data-map-src="https://maps.google.com/maps?q={query}&amp;z=15&amp;output=embed"' in page
-    assert "<iframe" not in page and "<summary>🗺 Karte</summary>" in page
-    assert page.index('class="lh-addr"') < page.index('class="lh-map"') < page.index('class="facts"')
+    assert "<iframe" not in page and "<summary>Karte</summary>" in page
+    assert page.index('class="chips lh-chips"') < page.index('class="lh-addr"') < page.index('class="lh-map"')
     # Without the city the search would land anywhere: ", Köln" is added.
     lid = add_listing(fredy_id="x2", address="Ehrenfeld <b>&")
     page = client.get(f"/listing/{lid}").text
@@ -2058,7 +2074,7 @@ def test_public_url_from_webhook(client):
 
 def test_settings_llm_max_images(client):
     login(client)
-    page = client.get("/settings/verhalten").text
+    page = client.get("/settings/zugaenge").text
     assert 'name="llm_max_images" min="0" max="20" step="1" value="10"' in page
     assert "Fotos für Claude pro Entwurf" in page and "Höchstens so viele Bilder" not in page
     assert ("Wie viele Inserat-Fotos Claude beim Schreiben mitbekommt – mehr Fotos = genauer, aber je Foto ca. 1.000 Tokens "
@@ -2193,3 +2209,56 @@ def test_alle_shows_sent_listings_only_48h_after_sending(client):
     assert db.get_listing(old)["sent_at"] is None and f'href="/listing/{old}"' in client.get("/").text
     db.mark_sent(old)
     assert db.get_listing(old)["sent_at"] > "2026-01-02"
+
+
+# --- conservative rework: grouped list, richer cards, one main action on the listing page ---------------------
+
+def test_main_page_groups_and_card_facts(client):
+    """Without a filter: Neu (new + seen), Angefangen, Gesendet (48 h) as groups; a card shows warm rent, rooms,
+    district and one flag from Claude's hint - no portal, no costs."""
+    login(client)
+    fresh = add_listing(fredy_id="g1", title="Helle 2-Zimmer-Wohnung", address="Musterweg 1, 50823 Köln, Ehrenfeld")
+    db.set_listing_details(fresh, "Zimmer: 2\nWarmmiete: 810 €", None)
+    started = add_listing(fredy_id="g2", title="Angefangen hier")
+    db.add_draft(started, "initial", "Hallo", "claude-opus-5-5", hint="- **Vorsicht:** Fake-Muster\n- Kaution hoch")
+    db.advance_status(started, "drafted")
+    sent = add_listing(fredy_id="g3", title="Schon gesendet")
+    db.mark_sent(sent)
+    page = client.get("/").text
+    assert page.index('id="g-open"') < page.index('id="g-drafted"') < page.index('id="g-sent"')
+    assert "Gesendet · letzte 48 h" in page
+    card = page.split(f'id="l{fresh}"')[1].split("</li>")[0]
+    assert '<span class="price">810 € warm</span>' in card and "<span>2 Zimmer</span>" in card and "Ehrenfeld" in card
+    assert "ImmoScout24" not in card and " ct" not in card
+    flagged = page.split(f'id="l{started}"')[1].split("</li>")[0]
+    assert 'class="lc-flag is-alarm"' in flagged and "Vorsicht" in flagged and "+1" in flagged
+    assert "Inserat hinzufügen" in page and '<details class="add-listing" id="hinzufuegen">' in page  # behind "+"
+    only_new = client.get("/?status=open").text
+    assert "Helle 2-Zimmer-Wohnung" in only_new and "Angefangen hier" not in only_new
+
+
+def test_archive_list_says_when_it_is_cut(client, monkeypatch):
+    login(client)
+    monkeypatch.setattr(web, "LIST_LIMIT", 2)
+    for i in range(3):
+        db.discard(add_listing(fredy_id=f"c{i}", title=f"Alt {i}"))
+    page = client.get("/?discarded=all").text
+    assert "Hier stehen die neuesten 2 von 3." in page
+    assert "neuesten" not in client.get("/").text
+
+
+def test_listing_page_one_main_action(client, fake_llm):
+    """Pictures → rent → hints → one main action; "Als gesendet markieren" and Fredy under "Mehr"; description and
+    letters collapsed. The main button writes the first letter and goes on to the editor."""
+    login(client)
+    lid = add_listing(fredy_url="https://fredy.example/l/1")
+    page = client.get(f"/listing/{lid}").text
+    assert "Anschreiben schreiben lassen" in page and 'name="then" value="editor"' in page
+    more = page.split('<details class="lh-more">')[1].split("</details>")[0]
+    assert f'action="/listing/{lid}/sent"' in more and 'href="https://fredy.example/l/1"' in more
+    assert '<details class="disclosure lh-section" id="beschreibung">' in page
+    assert '<details class="disclosure lh-section" id="entwuerfe">' in page
+    r = client.post(f"/listing/{lid}/draft", data={"then": "editor"})
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}#text" and fake_llm == [(lid, "initial")]
+    page = client.get(f"/listing/{lid}").text
+    assert "Anschreiben bearbeiten" in page and "Codewort Linde" in page.split('class="lh-actions"')[0]  # hint above

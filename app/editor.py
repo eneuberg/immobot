@@ -13,8 +13,10 @@ web.same_origin and carries a form token: editor pages are sent with "Referrer-P
 post their forms with "Origin: null", which same_origin lets through. editor_headers() adds no-referrer, noindex and
 no-store to every response under /e/ and /editor/.
 
-Claude's rule proposals after "Fertig" run as a background task; the page polls /editor/{id}/rules/status (JS, with
-a <noscript> meta refresh as fallback) until they are there. The text saves itself (editor.js posts to
+One action finishes a text: "Kopieren & Inserat öffnen" (editor.js copies the text and opens the ad, then posts
+/finish; without JS only /finish). Claude's rule proposals after that run as a background task and are shown on
+their own page, /editor/{id}/lernen, away from copying and sending; it polls /editor/{id}/rules/status (JS, with a
+<noscript> meta refresh as fallback) until they are there. The text saves itself (editor.js posts to
 /editor/{id}/save with "Accept: application/json" and gets JSON back); without JS a "Zwischenspeichern" button does.
 """
 
@@ -29,7 +31,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
-from . import bot, db, editor_access, learning, llm, media, portals, rent, settings, textdiff, web
+from . import bot, cards, db, editor_access, learning, llm, media, portals, rent, settings, textdiff, web
 
 log = logging.getLogger(__name__)
 
@@ -50,12 +52,13 @@ _ID = re.compile(r"[1-9][0-9]{0,11}")
 MESSAGES = {
     "saved": "Gespeichert.",
     "revised": "Claude hat den Text überarbeitet.",
-    "done": "Endversion gespeichert.",
+    "done": "Fertig. Text kopieren, im Inserat einfügen und abschicken.",
+    "done_copied": "Kopiert. Im Inserat einfügen und abschicken – dann unten bestätigen.",
     "rule_added": "Regel gespeichert – sie gilt ab dem nächsten Entwurf.",
-    "done_note": "Endversion gespeichert. Deine Kritik im Feld hat Claude nicht mehr umgesetzt – sie ist als "
-                 "Rückmeldung gespeichert und fließt ins Lernen ein.",
-    "reopened": "Weiter bearbeiten – die Endversion bleibt bis zum nächsten „Fertig“ gespeichert.",
-    "round": "Du bearbeitest jetzt den neueren Entwurf.",
+    "done_note": "Fertig. Deine Kritik im Feld hat Claude nicht mehr umgesetzt – sie ist als Rückmeldung "
+                 "gespeichert und fließt ins Lernen ein.",
+    "reopened": "Weiter bearbeiten – der fertige Text bleibt gespeichert, bis du wieder abschließt.",
+    "round": "Du bearbeitest jetzt das neuere Anschreiben.",
     "accepted": "Regel übernommen – sie gilt ab dem nächsten Entwurf.",
     "removed": "Regel abgeschaltet.",
     "rejected": "Vorschlag verworfen.",
@@ -67,7 +70,7 @@ MESSAGES = {
     "dismissed": "Aussortiert: uninteressant.",
     "restored": "Zurückgeholt – das Inserat ist wieder in der Liste.",
     "locked": "Das Inserat ist aussortiert – am Status hat sich nichts geändert.",
-    "draft": "Entwurf erzeugt.",
+    "draft": "Claude hat ein Anschreiben geschrieben.",
     "media": "Inserat neu geladen.",
     "media_loaded": "Bilder geladen.",
     "media_soon": "Gerade erst geladen – in einer Minute geht es wieder.",
@@ -241,7 +244,8 @@ def _proposals(session: dict) -> tuple[list[dict], list[dict]]:
 
 def _render(request: Request, listing: dict, mode: str, *, message: str | None = None, error: str | None = None,
             critique: str | None = None, lost_text: str | None = None, manual_rule: str | None = None,
-            open_media: bool = False, status_code: int = 200):
+            open_media: bool = False, learn_view: bool = False, status_code: int = 200):
+    """The editor page; learn_view: its "Was Claude daraus lernt" view (/editor/{id}/lernen, a finished text)."""
     listing_id = listing["id"]
     session = learning.open_or_create_session(listing_id)
     current = db.get_settings()
@@ -268,6 +272,7 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
         "pictures_missing": media.pictures_missing(listing),
         "open_media": open_media,
         "details": web.details_sections(listing.get("details")),
+        "learn_view": learn_view or manual_rule is not None,
     }
     if session is not None:
         text = session["final_text"] if session["status"] == "done" else session["current_text"]
@@ -280,7 +285,7 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
         proposals, decided = _proposals(session)
         review = learning.pending_review(session)
         job = _rule_job(session["id"])
-        if job and job["state"] == "done":
+        if job and job["state"] == "done" and (learn_view or manual_rule is not None):
             _rule_jobs.pop(session["id"], None)  # shown now: the page lists the proposals
         context.update(
             text=text,
@@ -289,6 +294,7 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
             notes=notes,
             version_no=len(history) + 1,
             hint=last_draft.get("hint") if last_draft else None,
+            hint_flag=cards.flag(last_draft.get("hint")) if last_draft else None,  # the hint box's one line
             newer={**newer, "kind_label": web.DRAFT_KIND_LABELS.get(newer["kind"], newer["kind"])} if newer else None,
             proposals=proposals,
             decided=decided,
@@ -319,6 +325,16 @@ async def editor_page(request: Request, listing_id: str, m: str | None = None, k
                    open_media=m in ("media", "media_loaded", "media_failed", "media_soon"))
 
 
+@router.get("/editor/{listing_id}/lernen")
+def editor_learn_page(request: Request, listing_id: str, m: str | None = None):
+    """What Claude learns from the finished text: its proposals to decide, a rule of one's own. Linked from the
+    finished editor; nothing here is needed to send the letter."""
+    listing, mode, denied = _gate(request, listing_id)
+    if denied is not None:
+        return denied
+    return _render(request, listing, mode, message=MESSAGES.get(m or ""), learn_view=True)
+
+
 @router.get("/editor/{listing_id}/media/{position}")
 def editor_media(request: Request, listing_id: str, position: int):
     """A stored picture of the listing, for an editor session from Telegram as well as the dashboard login."""
@@ -347,6 +363,11 @@ def editor_rules_status(request: Request, listing_id: str):
 
 def _back(listing_id: int, message: str, anchor: str = "") -> RedirectResponse:
     return RedirectResponse(f"/editor/{listing_id}?m={message}" + (f"#{anchor}" if anchor else ""), status_code=303)
+
+
+def _back_learn(listing_id: int, message: str) -> RedirectResponse:
+    """Back to the "Was Claude daraus lernt" view after deciding a proposal or adding a rule."""
+    return RedirectResponse(f"/editor/{listing_id}/lernen?m={message}#regeln", status_code=303)
 
 
 def _current_session(listing: dict, session_id: str) -> dict | None:
@@ -524,9 +545,10 @@ async def _propose_rules(session_id: int) -> None:
 
 @router.post("/editor/{listing_id}/finish", dependencies=ACTION)
 async def editor_finish(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
-                        text: str = Form(""), critique: str = Form("")):
-    """"Fertig": store the final version; with "Gelernte Regeln nutzen" on, Claude looks for rules in the background.
-    A critique still in its field (typed, but "Überarbeiten lassen" not pressed) is kept as a note for learning."""
+                        text: str = Form(""), critique: str = Form(""), copied: str = Form("")):
+    """"Kopieren & Inserat öffnen" (copied=1: editor.js copied the text and opened the ad first): store the final
+    version; with "Gelernte Regeln nutzen" on, Claude looks for rules in the background. A critique still in its
+    field (typed, but "Überarbeiten lassen" not pressed) is kept as a note for learning."""
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
         return denied
@@ -540,7 +562,8 @@ async def editor_finish(request: Request, listing_id: str, token: str = Form("")
     if settings.as_bool(db.get_settings().get("use_rules")):
         _start_rule_job(session["id"])
     bot.schedule_refresh(listing["id"])  # Telegram shows the Endversion instead of Claude's draft
-    return _back(listing["id"], "done_note" if critique.strip() else "done", "ende")
+    message = "done_note" if critique.strip() else ("done_copied" if copied == "1" else "done")
+    return _back(listing["id"], message, "ende")
 
 
 @router.post("/editor/{listing_id}/rules/retry", dependencies=ACTION)
@@ -555,7 +578,7 @@ async def editor_rules_retry(request: Request, listing_id: str, token: str = For
         return _stale(request, listing, mode)
     if settings.as_bool(db.get_settings().get("use_rules")):
         _start_rule_job(session["id"])
-    return RedirectResponse(f"/editor/{listing['id']}#regeln", status_code=303)
+    return RedirectResponse(f"/editor/{listing['id']}/lernen#regeln", status_code=303)
 
 
 @router.post("/editor/{listing_id}/reopen", dependencies=ACTION)
@@ -612,7 +635,7 @@ def editor_add_rule(request: Request, listing_id: str, token: str = Form(""), se
         learning.add_manual_rule(text, session_id=session["id"])
     except Exception as exc:
         return _failed(request, listing, mode, exc, manual_rule=text)
-    return _back(listing["id"], "rule_added", "regeln")
+    return _back_learn(listing["id"], "rule_added")
 
 
 @router.post("/editor/{listing_id}/rules/{rule_id}", dependencies=ACTION)
@@ -627,22 +650,24 @@ def editor_decide_rule(request: Request, listing_id: str, rule_id: str, token: s
     rid = _listing_id(rule_id)
     rule = db.get_rule(rid) if rid else None
     if session is None or rule is None or rule["session_id"] != session["id"]:
-        return _render(request, listing, mode, error="Diesen Vorschlag gibt es hier nicht (mehr).", status_code=404)
+        return _render(request, listing, mode, error="Diesen Vorschlag gibt es hier nicht (mehr).", learn_view=True,
+                       status_code=404)
     if decision not in ("accept", "reject"):
-        return _render(request, listing, mode, error="Bitte „Übernehmen“ oder „Verwerfen“ wählen.", status_code=400)
+        return _render(request, listing, mode, error="Bitte „Übernehmen“ oder „Verwerfen“ wählen.", learn_view=True,
+                       status_code=400)
     try:
         opts = {"scope": scope, "strength": "hard" if strength == "hard" else "soft"} if has_opts == "1" else {}
         decided = learning.decide_rule(rule["id"], decision == "accept", text if rule["action"] != "remove" else None,
                                        **opts)
     except Exception as exc:
-        return _failed(request, listing, mode, exc)
+        return _failed(request, listing, mode, exc, learn_view=True)
     if decision == "reject":
         message = "rejected"
     elif rule["action"] == "fact":
         message = "fact"
     else:
         message = "removed" if rule["action"] == "remove" and decided["id"] != rule["id"] else "accepted"
-    return _back(listing["id"], message, "regeln")
+    return _back_learn(listing["id"], message)
 
 
 @router.post("/editor/{listing_id}/sent", dependencies=ACTION)
@@ -659,7 +684,7 @@ async def editor_mark_sent(request: Request, listing_id: str, token: str = Form(
 
 @router.post("/editor/{listing_id}/unsent", dependencies=ACTION)
 async def editor_unmark_sent(request: Request, listing_id: str, token: str = Form("")):
-    """"zurücknehmen" beside "✓ als gesendet markiert": pressed by mistake, back to "Entwurf"."""
+    """"Zurücknehmen" beside "✓ Gesendet": pressed by mistake, back to "Angefangen"."""
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
         return denied

@@ -1147,3 +1147,164 @@ details.add-listing > form { padding: 0 1rem .85rem; margin: 0; }
 /* "Später" / "Noch nicht" in the return question: below the real choices, small, not a third button */
 .ed-ask-dialog .ed-ask-later { margin: .6rem 0 0; text-align: center; font-size: .85rem; }
 .ed-ask-dialog .ed-ask-later button.linkish { color: var(--pico-muted-color); }
+
+/* ======================================================================================================
+   Main page: cards first (one heading line with "+", compact search, one chip row, grouped list)
+   ====================================================================================================== */
+.list-head { flex-wrap: wrap; align-items: center; margin-bottom: .6rem; }
+.list-head h1 { flex: 1 1 auto; }
+.list-head details.add-listing { margin: 0; border: 0; background: none; padding: 0; }
+.list-head details.add-listing > summary {
+  list-style: none; display: inline-flex; align-items: center; gap: .35rem; min-height: 2.75rem; padding: 0 .9rem 0 .7rem;
+  border-radius: 999px; border: 1px solid var(--pico-card-border-color); background: var(--pico-card-background-color);
+  font-size: .9rem; color: var(--accent-strong);
+}
+.list-head details.add-listing > summary::-webkit-details-marker { display: none; }
+.list-head details.add-listing > summary::after { content: none; }
+.list-head .add-plus { font-size: 1.35rem; line-height: 1; font-weight: 500; }
+.list-head details.add-listing[open] { flex: 1 0 100%; order: 3; }
+.list-head details.add-listing[open] > summary { margin-left: auto; display: flex; width: max-content; }
+.list-head details.add-listing > form {
+  margin: .5rem 0 .25rem; padding: .85rem 1rem; border: 1px solid var(--pico-card-border-color);
+  border-radius: var(--radius-sm); background: var(--pico-card-background-color);
+}
+.list-head details.add-listing > form > label { font-weight: 600; margin-bottom: .35rem; }
+.search-listings { margin: 0 0 .6rem; padding: 0; border: 0; background: none; }
+.search-listings .add-row input { min-height: 2.75rem; }
+.search-listings .add-row button { min-height: 2.75rem; padding: 0 1rem; }
+/* one row of chips, 44 px high; on phones it scrolls sideways and the right edge fades out */
+.filters { margin-bottom: .75rem; }
+.filters a { min-height: 2.75rem; padding: 0 .95rem; }
+@media (max-width: 767px) {
+  .filters:not(.filters-discard) { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2.25rem), transparent);
+                                   mask-image: linear-gradient(to right, #000 calc(100% - 2.25rem), transparent);
+                                   padding-right: 2.5rem; }
+}
+.filters a.f-discard { border-style: dashed; border-color: var(--pico-form-element-border-color); background: transparent; color: var(--neutral); }
+.filters a.f-discard .icon { width: 1em; height: 1em; }
+.filters a.f-discard[aria-current="page"] { background: var(--neutral); border-color: var(--neutral); border-style: solid; color: var(--pico-card-background-color); }
+.filters.filters-discard a { min-height: 2.75rem; }
+.list-group { margin: 0 0 1.4rem; }
+.list-group-title { display: flex; align-items: center; gap: .45rem; font-size: .95rem; margin: 0 0 .5rem; color: var(--pico-muted-color); text-transform: none; }
+.list-group-title .count { font-size: .78rem; vertical-align: 0; }
+.list-cap { margin-top: .75rem; }
+/* card facts: rent (bold) · rooms · size, district, one flag */
+.lc-facts { gap: .1rem .6rem; }
+.lc-facts > span + span::before { content: none; }
+.lc-addr { display: flex; align-items: center; gap: .25rem; }
+.lc-addr .icon { width: .95em; height: .95em; opacity: .75; }
+.lc-flag {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: .3rem; max-width: 100%; margin-top: .15rem;
+  padding: .08rem .5rem; border-radius: 999px; background: var(--warn-soft); color: var(--warn);
+  font-size: .76rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lc-flag.is-alarm { background: var(--err-soft); color: var(--err); }
+.lc-flag-more { font-weight: 500; opacity: .8; }
+.listing-card .lc-top .badge.st-seen { display: none; }  /* "Gesehen" says nothing on a card in "Neu" */
+
+/* ======================================================================================================
+   Editor: letter first, hints in one line, one full-width sticky action, the rest below
+   ====================================================================================================== */
+.ed-head { margin: 0 0 .6rem; }
+.ed-top { margin-bottom: .25rem; }
+.ed-back { margin-left: auto; font-size: .88rem; min-height: 2.75rem; display: inline-flex; align-items: center; }
+.ed-head h1 { --pico-font-size: 1.12rem; margin: 0 0 .15rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+@media (min-width: 768px) { .ed-head h1 { --pico-font-size: 1.4rem; } }
+.ed-facts { margin: 0; font-size: .88rem; }
+.ed-letter .ed-card-head { margin-bottom: .5rem; }
+.ed-letter .ed-card-head h2 { font-size: 1.02rem; }
+details.ed-hints { margin: 0 0 .6rem; border: 1px solid var(--warn-line); background: var(--warn-soft); border-radius: var(--radius-sm); }
+details.ed-hints > summary { min-height: 2.75rem; padding: .45rem .8rem; font-size: .9rem; font-weight: 600; color: var(--warn); }
+details.ed-hints > summary > span:nth-child(2) { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+details.ed-hints[open] > summary > span:nth-child(2) { white-space: normal; }
+details.ed-hints .ed-hints-lead { font-weight: 500; }
+details.ed-hints.is-alarm { border-color: var(--err-line); background: var(--err-soft); }
+details.ed-hints.is-alarm > summary { color: var(--err); }
+.ed-hints-body { padding: 0 .9rem .75rem; font-size: .9rem; color: var(--text); }
+.ed-side details.ed-hints { margin-bottom: 1rem; }
+/* one action, full width */
+.ed-card > .ed-bar { grid-template-columns: minmax(0, 1fr); }
+.ed-bar button { min-height: 3rem; font-size: 1rem; }
+.ed-side #kritik h2 { font-size: 1rem; }
+.ed-card .ed-revise small { font-weight: 400; opacity: .8; }
+.ed-quick button { min-height: 2.75rem; }
+.ed-info { margin: 0 0 1rem; }
+.ed-info > details > summary, .ed-diff > summary { min-height: 2.75rem; }
+.ed-learn-link { margin: 0 0 .75rem; font-size: .95rem; }
+.ed-learn-link a { display: inline-flex; align-items: center; min-height: 2.75rem; }
+.ed-learn-back { margin: 0 0 .5rem; }
+.ed-learn-back a { display: inline-flex; align-items: center; min-height: 2.75rem; }
+.ed-state-line { margin: .6rem 0 0; }
+.ed-unsent { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.ed-rule-more { margin: .3rem 0 .2rem; font-size: .88rem; }
+.ed-rule-more > summary { color: var(--pico-muted-color); min-height: 2.75rem; }
+.ed-done .ed-actions [role=button], .ed-done .ed-actions button { min-height: 2.75rem; }
+
+/* The return question ("Abgeschickt?", "Interessant?"): a sheet fixed at the bottom, not modal - the page stays
+   usable and scrollable; main gets room below so the sheet covers nothing at the end. */
+.ask-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  padding: .75rem 1rem calc(.75rem + env(safe-area-inset-bottom));
+  background: var(--pico-card-background-color); border-top: 1px solid var(--pico-card-border-color);
+  box-shadow: 0 -6px 24px rgba(16, 24, 40, .12);
+}
+.ask-sheet-in { max-width: 40rem; margin: 0 auto; display: grid; gap: .5rem; }
+.ask-sheet-title { margin: 0; font-size: 1rem; }
+.ask-sheet-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .5rem; }
+.ask-sheet-actions form { display: contents; }
+.ask-sheet-actions > *, .ask-sheet-actions button, .ask-sheet-actions [role=button] { width: 100%; margin: 0; min-height: 2.75rem; text-align: center; }
+.ask-sheet .ask-later { justify-self: center; min-height: 2.75rem; color: var(--pico-muted-color); }
+.ask-sheet[data-cooling] .ask-sheet-actions, .ask-sheet[data-cooling] .ask-later { opacity: .45; transition: opacity .2s; }
+html:not(.js) .js-only { display: none !important; }
+body:has(.ask-sheet:not([hidden])) main.container { padding-bottom: 12rem; }
+@media (min-width: 768px) {
+  .ask-sheet { left: auto; right: 1.25rem; bottom: 1.25rem; width: 26rem; border: 1px solid var(--pico-card-border-color); border-radius: var(--radius); }
+}
+
+/* ======================================================================================================
+   Listing page: pictures → title + rent → hints → one main action → key facts → map; the rest collapsed
+   ====================================================================================================== */
+.backlink a { display: inline-flex; align-items: center; min-height: 2.75rem; }
+.backlink { margin-bottom: .25rem; }
+.lh-body h1 { --pico-font-size: 1.3rem; margin-bottom: .3rem; }
+@media (min-width: 768px) { .lh-body h1 { --pico-font-size: 1.6rem; } }
+.lh-price { display: flex; flex-wrap: wrap; gap: .1rem .8rem; margin: 0 0 .75rem; font-size: 1.08rem; font-weight: 700; color: var(--pico-h1-color); font-variant-numeric: tabular-nums; }
+.lh-price span + span { font-weight: 600; color: var(--text); }
+.lh-body details.ed-hints { margin-bottom: .85rem; }
+.lh-body details.ed-hints > summary { white-space: normal; }
+.lh-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .5rem; margin-bottom: .5rem; }
+.lh-actions > form { margin: 0; display: contents; }
+.lh-actions .lh-main, .lh-actions > form.lh-main > button { grid-column: 1 / -1; }
+.lh-actions [role=button], .lh-actions button { width: 100%; margin: 0; min-height: 2.75rem; text-align: center; }
+.lh-actions .lh-main { min-height: 3rem; display: inline-flex; align-items: center; justify-content: center; gap: .45rem; }
+.lh-actions > :only-child, .lh-actions > form:last-child:nth-child(2) > button { grid-column: 1 / -1; }
+.lh-main-help { margin: 0 0 .75rem; }
+@media (min-width: 768px) {
+  .lh-actions { grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); }
+}
+.status-box { margin: .5rem 0 .75rem; padding-top: 0; border-top: 0; }
+.status-box:not(:has(*)) { display: none; }
+.status-box .status-undo { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin: 0; }
+.status-box .status-undo button.linkish { min-height: 2.75rem; }
+.lh-chips { margin: .25rem 0 .6rem; }
+.lh-chips .chip { font-size: .84rem; padding: .25rem .65rem; }
+.lh-chips .chip a { color: inherit; }
+details.lh-more { margin: .5rem 0 0; }
+details.lh-more > summary { min-height: 2.75rem; color: var(--pico-muted-color); font-size: .9rem; }
+.lh-more-body { display: flex; flex-wrap: wrap; gap: .5rem; padding: .25rem 0 0; }
+.lh-more-body form { margin: 0; }
+.lh-more-body button, .lh-more-body [role=button] { width: auto; margin: 0; min-height: 2.75rem; }
+details.lh-section { margin: 0 0 .75rem; }
+details.lh-section > summary { min-height: 3rem; font-size: 1rem; font-weight: 600; }
+details.lh-section > summary .chip { font-weight: 500; }
+.lh-regen { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .8rem; margin: .5rem 0 0; }
+.lh-regen button { width: auto; margin: 0; }
+.map-toggle > summary, .lh-map .map-open { min-height: 2.75rem; display: inline-flex; align-items: center; }
+
+/* ======================================================================================================
+   Tap targets: 44 px for navigation, tabs and small links on phones
+   ====================================================================================================== */
+.tabs a { min-height: 2.75rem; display: inline-flex; align-items: center; justify-content: center; }
+.logout button { min-height: 2.75rem; }
+.subnav a { min-height: 2.75rem; display: inline-flex; align-items: center; }
+.lh-actions > [role=button].secondary:last-child:nth-child(2) { grid-column: 1 / -1; }
