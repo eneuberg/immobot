@@ -6,6 +6,25 @@
   // CSS can now tell that JS runs (e.g. to show only the chosen provider panel on /settings) - before first paint.
   document.documentElement.classList.add("js");
 
+  // Overlays that open by themselves (coming back to the page): for the first moment after they appear they ignore
+  // clicks, Enter and Escape. A tap meant for the page underneath (the browser shows the cached page first, the
+  // overlay comes a moment later) must not hit "Später"/"Ja" or the backdrop. window.immobotShowModal is also used
+  // by editor.js.
+  var MODAL_COOLDOWN_MS = 800;
+  window.immobotShowModal = function (dlg) {
+    if (dlg.open) return;
+    dlg.showModal();
+    dlg.setAttribute("data-cooling", "");
+    clearTimeout(dlg._coolTimer);
+    dlg._coolTimer = setTimeout(function () { dlg.removeAttribute("data-cooling"); }, MODAL_COOLDOWN_MS);
+  };
+  ["click", "submit", "cancel", "keydown"].forEach(function (type) {
+    document.addEventListener(type, function (e) {
+      if (type === "keydown" && e.key !== "Enter" && e.key !== " " && e.key !== "Escape") return;
+      if (e.target.closest && e.target.closest("dialog[data-cooling]")) { e.preventDefault(); e.stopImmediatePropagation(); }
+    }, true);
+  });
+
   // Confirm buttons: <button data-confirm="Frage?">. Copy buttons: <button data-copy="element-id">.
   document.addEventListener("click", function (e) {
     var ask = e.target.closest("[data-confirm]");
@@ -326,7 +345,7 @@
       var since = openedAt();
       if (!since || document.visibilityState !== "visible" || Date.now() - since < 800) return;
       openedAt(null);
-      if (!dlg.open) dlg.showModal();
+      window.immobotShowModal(dlg);
     };
     document.addEventListener("visibilitychange", back);
     window.addEventListener("focus", back);

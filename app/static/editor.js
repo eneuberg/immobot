@@ -353,7 +353,8 @@
       var since = leftAt();
       if (!since || document.visibilityState !== "visible") return;
       leftAt(null);
-      if (Date.now() - since >= LEAVE_MS && !ask.open) ask.showModal();
+      if (Date.now() - since < LEAVE_MS || ask.open) return;
+      if (window.immobotShowModal) window.immobotShowModal(ask); else ask.showModal();
     };
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState === "hidden") leave(); else back();
