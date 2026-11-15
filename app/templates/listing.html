@@ -3,6 +3,7 @@
 {% from "outcome_macros.html" import outcome_steps, outcome_form %}
 {% from "listing_macros.html" import media_label, details_article %}
 {% block title %}{{ listing.title or "Inserat" }}{% endblock %}
+{% block head %}{% if listing.address|maps_url %}<link rel="stylesheet" href="/static/vendor/leaflet-1.9.4/leaflet.css">{% endif %}{% endblock %}
 
 
 {% block content %}
@@ -166,17 +167,18 @@
       {% set map_link = listing.address|maps_url %}
       {% if map_link %}
       {# ---- map (begin) ----
-         "🗺 Karte" opens Google's embedded map; no request to Google before that: app.js puts the iframe in on the
-         first opening (from data-map-src). Without JS the box only offers the link. The link comes first so it can
-         float beside the toggle. #}
-      <div class="lh-map">
-        <a class="map-open" href="{{ map_link }}" target="_blank" rel="noopener noreferrer">In Google Maps öffnen ↗</a>
-        <details class="map-toggle" data-map-src="{{ listing.address|maps_embed_url }}" data-map-title="Karte: {{ listing.address }}">
-          <summary>Karte</summary>
-          <div class="map-frame">
-            <p class="map-nojs">Die Karte braucht JavaScript. <a href="{{ map_link }}" target="_blank" rel="noopener noreferrer">In Google Maps öffnen ↗</a></p>
-          </div>
-        </details>
+         Always shown, loaded when it scrolls into view (app.js "map"): OpenStreetMap with Leaflet - a pin for an exact
+         address, the outline of the PLZ area / Stadtteil when the ad names only that (geo.py; data-geo: what is
+         cached, else app.js polls data-geo-url while the server looks it up). Nothing found or the lookup failed:
+         Google's embedded search instead (data-map-src). Without JS: the link. #}
+      <div class="lh-map" data-map data-geo-url="/listing/{{ listing.id }}/geo" data-geo='{{ geo|tojson }}'
+        data-map-src="{{ listing.address|maps_embed_url }}" data-map-title="Karte: {{ listing.address }}">
+        <div class="map-frame" data-map-frame>
+          <p class="map-nojs">Die Karte braucht JavaScript. <a href="{{ map_link }}" target="_blank" rel="noopener noreferrer">In Google Maps öffnen ↗</a></p>
+        </div>
+        <p class="map-caption">
+          {%- if geo_label %}<span class="map-label">{{ geo_label }}</span>{% endif -%}
+          <a class="map-open" href="{{ map_link }}" target="_blank" rel="noopener noreferrer">In Google Maps öffnen ↗</a></p>
       </div>
       {# ---- map (end) ---- #}
       {% endif %}

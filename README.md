@@ -184,6 +184,12 @@ Bilder-Fehler.
 - **Entwürfe** bekommen den vollen Text, die Ansprechperson (ImmoScout24) und so viele Fotos, wie unter „Fotos für
   Claude pro Entwurf“ eingestellt (Einstellungen → Verhalten, 0–20, Standard 10). Jedes Foto kostet ca. 1.000 Tokens (≈ 0,1–4 ct je
   nach Modell) und ist beschriftet („Bild 1: Grundriss“); Grundrisse kommen zuerst.
+- **Karte:** Die Inseratseite zeigt immer eine Karte (OpenStreetMap, Leaflet liegt unter `app/static/vendor`). Bei
+  genauer Adresse ein Punkt, steht nur PLZ oder Stadtteil im Inserat (ImmoScout24 zeigt die Straße oft erst nach
+  Kontakt), der Umriss dieses Gebiets – PLZ vor Stadtteil, ohne erfundenen Punkt. Die Umrisse fragt immobot einmal je
+  Gebiet bei Nominatim bzw. Overpass ab (serverseitig, höchstens eine Anfrage pro Sekunde, nur wenn eine Inseratseite
+  geöffnet wird) und speichert sie vereinfacht in der Tabelle `geo_cache`. Findet sich nichts, kommt wie bisher Googles
+  Karte der Adresssuche. Alle Suchen ohne Stadt laufen in `MAPS_CITY` (Standard Köln).
 - **Telegram:** „🔗 Dashboard“ öffnet die Inseratseite mit allen Bildern. (Den Button „🖼 Bilder“ gibt es nicht mehr; auf
   älteren Nachrichten schickt er weiter bis zu 10 Fotos als Album.)
 - **Dashboard:** Die Inseratseite zeigt alle Bilder mit ihrer Quelle („Bilder von Fredy“ / „von ImmoScout24 geladen“),

@@ -490,20 +490,89 @@
   // ---- Listing page: picture carousel (end) ------------------------------------------------------------------
 
   // ---- Listing page: map (begin) -----------------------------------------------------------------------------
-  // <details data-map-src> ("🗺 Karte", listing.html): Google's iframe goes in only when it is opened, so loading the
-  // page sends nothing to Google. "toggle" doesn't bubble: caught in the capture phase.
-  document.addEventListener("toggle", function (e) {
-    var details = e.target;
-    if (!details.open || !details.matches || !details.matches("details[data-map-src]") || details.querySelector("iframe")) return;
-    var frame = details.querySelector(".map-frame");
-    var iframe = document.createElement("iframe");
-    iframe.title = details.dataset.mapTitle || "Karte";
-    iframe.setAttribute("referrerpolicy", "no-referrer");
-    iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox");
-    iframe.setAttribute("allowfullscreen", "");
-    iframe.src = details.dataset.mapSrc;
-    frame.textContent = "";
-    frame.appendChild(iframe);
-  }, true);
+  // [data-map] (listing.html): always shown, set up when it comes near the screen. data-geo is what the server had
+  // cached (geo.py): "ok" → Leaflet + OpenStreetMap tiles with a pin (exact address) or the outlined region (PLZ,
+  // Stadtteil); "pending" → ask data-geo-url every 1.5 s while the server looks it up; "failed" / nothing after a
+  // while / Leaflet not loadable → Google's embedded search (data-map-src) as before. Leaflet is vendored
+  // (/static/vendor) and loaded only here, on demand.
+  var LEAFLET_JS = "/static/vendor/leaflet-1.9.4/leaflet.js";
+  var leafletWaiting = null;
+  function loadLeaflet(done, failed) {
+    if (window.L && window.L.map) { done(); return; }
+    if (!leafletWaiting) {
+      leafletWaiting = [];
+      var script = document.createElement("script");
+      script.src = LEAFLET_JS;
+      script.onload = function () { var w = leafletWaiting; leafletWaiting = null; w.forEach(function (c) { c[0](); }); };
+      script.onerror = function () { var w = leafletWaiting; leafletWaiting = null; w.forEach(function (c) { c[1](); }); };
+      document.head.appendChild(script);
+    }
+    leafletWaiting.push([done, failed]);
+  }
+  function setupMap(box) {
+    var frame = box.querySelector("[data-map-frame]");
+    var geo = {};
+    try { geo = JSON.parse(box.dataset.geo || "{}"); } catch (err) { geo = {}; }
+    var tries = 0;
+    var google = function () {
+      if (frame.querySelector("iframe") || !box.dataset.mapSrc) return;
+      box.classList.add("is-google");
+      var iframe = document.createElement("iframe");
+      iframe.title = box.dataset.mapTitle || "Karte";
+      iframe.setAttribute("referrerpolicy", "no-referrer");
+      iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox");
+      iframe.setAttribute("loading", "lazy");
+      iframe.src = box.dataset.mapSrc;
+      frame.textContent = "";
+      frame.appendChild(iframe);
+    };
+    var draw = function (data) {
+      loadLeaflet(function () {
+        var L = window.L;
+        frame.textContent = "";
+        box.classList.add("is-osm");
+        var touch = L.Browser.mobile;  // one finger scrolls the page; zoom with the buttons
+        var map = L.map(frame, { scrollWheelZoom: false, dragging: !touch, zoomSnap: 0.5 });
+        map.attributionControl.setPrefix(false);
+        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19, referrerPolicy: "strict-origin-when-cross-origin",
+          attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>-Mitwirkende'
+        }).addTo(map);
+        var accent = getComputedStyle(box).getPropertyValue("--map-accent").trim() || "#0f766e";
+        var g = data.geometry;
+        if (g.type === "Point") {
+          var at = [g.coordinates[1], g.coordinates[0]];
+          L.circleMarker(at, { radius: 9, weight: 3, color: "#fff", fillColor: accent, fillOpacity: 1 }).addTo(map);
+          map.setView(at, 16);
+        } else {
+          var area = L.geoJSON(g, { style: { color: accent, weight: 2, opacity: 0.9, fillColor: accent, fillOpacity: 0.14 } }).addTo(map);
+          map.fitBounds(area.getBounds(), { padding: [14, 14] });
+        }
+      }, google);
+    };
+    var ask = function () {
+      tries += 1;
+      fetch(box.dataset.geoUrl, { cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json" } })
+        .then(function (r) { return r.ok ? r.json() : { state: "failed" }; })
+        .then(function (data) { route(data); })
+        .catch(google);
+    };
+    var route = function (data) {
+      if (data.state === "ok" && data.geometry) draw(data);
+      else if (data.state === "pending" && tries < 14) setTimeout(ask, 1500);
+      else google();
+    };
+    var start = function () { if (geo.state === "pending") ask(); else route(geo); };
+    if (!("IntersectionObserver" in window)) { start(); return; }
+    var seen = new IntersectionObserver(function (entries) {
+      if (!entries.some(function (e) { return e.isIntersecting; })) return;
+      seen.disconnect();
+      start();
+    }, { rootMargin: "300px 0px" });
+    seen.observe(box);
+  }
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("[data-map]").forEach(setupMap);
+  });
   // ---- Listing page: map (end) -------------------------------------------------------------------------------
 })();

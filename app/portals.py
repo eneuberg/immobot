@@ -90,7 +90,7 @@ def provider_label(provider: str | None) -> str:
     return PROVIDER_LABELS.get(provider, provider)
 
 
-# --- map links (listing page: "🗺 Karte" and "In Google Maps öffnen") -----------------------------------------
+# --- map links (listing page: "In Google Maps öffnen" and the map's fallback; the map itself: geo.py) ----------
 # Listings only carry a free-text address ("Venloer Straße 123, 50823 Köln, Ehrenfeld", "Ehrenfeld, Köln",
 # "50823 Köln - Ehrenfeld"), no coordinates: Google searches for it. All searches are in one city (env MAPS_CITY,
 # default Köln; empty = none), so an address without the city gets ", <city>" appended (else "Ehrenfeld" alone may
@@ -119,7 +119,8 @@ def maps_url(address: str | None) -> str | None:
 
 
 def maps_embed_url(address: str | None) -> str | None:
-    """The key-less Google embed for the iframe behind "🗺 Karte" (set only when the map is opened, app.js).
+    """The key-less Google embed: the listing page's map when OpenStreetMap has nothing for the address (geo.py,
+    app.js puts the iframe in only then).
     Its hosts are the ones allowed in the CSP's frame-src (web.CSP)."""
     query = maps_query(address)
     return f"https://maps.google.com/maps?q={quote(query, safe='')}&z=15&output=embed" if query else None

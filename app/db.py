@@ -104,6 +104,15 @@ CREATE TABLE IF NOT EXISTS drafts (
 CREATE INDEX IF NOT EXISTS idx_drafts_listing ON drafts(listing_id);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- The map on the listing page (geo.py): one row per distinct place ("plz:50823", "district:ehrenfeld|köln", ...),
+-- looked up once at Nominatim / Overpass. status ok (geometry: GeoJSON Point or simplified polygon), none (no such
+-- place), error (the lookup failed; asked again after geo.ERROR_RETRY_S).
+CREATE TABLE IF NOT EXISTS geo_cache (
+    key TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    geometry TEXT,
+    fetched_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pending_prompts (
     prompt_message_id INTEGER PRIMARY KEY,
     listing_id INTEGER NOT NULL,
@@ -1026,6 +1035,19 @@ def get_meta(key: str) -> str | None:
     with connect() as conn:
         row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         return row["value"] if row else None
+
+
+def get_geo(key: str) -> dict | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM geo_cache WHERE key = ?", (key,)).fetchone()
+        return dict(row) if row else None
+
+
+def set_geo(key: str, status: str, geometry: str | None) -> None:
+    with connect() as conn:
+        conn.execute("INSERT INTO geo_cache (key, status, geometry, fetched_at) VALUES (?, ?, ?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET status = excluded.status, geometry = excluded.geometry, "
+                     "fetched_at = excluded.fetched_at", (key, status, geometry, now_iso()))
 
 
 def delete_meta(key: str) -> None:

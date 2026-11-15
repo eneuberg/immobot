@@ -33,8 +33,8 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import (bot, cards, db, drafting, editor_access, housekeeping, is24, learning, llm, media, portals, rent, search,
-               settings, textdiff, textfmt, triage, vault)
+from . import (bot, cards, db, drafting, editor_access, geo, housekeeping, is24, learning, llm, media, portals, rent,
+               search, settings, textdiff, textfmt, triage, vault)
 
 log = logging.getLogger(__name__)
 
@@ -139,7 +139,7 @@ templates.env.filters["word_diff"] = textdiff.word_diff  # {{ text_diff(old|word
 templates.env.filters["trim_diff"] = textdiff.trim_equal  # {{ text_diff(old|word_diff(new)|trim_diff) }}
 templates.env.filters["md"] = textfmt.basic_markdown  # Claude's notes only (hint, reasons), never a draft
 templates.env.filters["maps_url"] = portals.maps_url  # {{ listing.address|maps_url }}: "In Google Maps öffnen"
-templates.env.filters["maps_embed_url"] = portals.maps_embed_url  # the iframe behind "🗺 Karte" (listing page)
+templates.env.filters["maps_embed_url"] = portals.maps_embed_url  # the listing page map's fallback (geo.py)
 templates.env.globals["STATUSES"] = settings.STATUSES
 templates.env.globals["DISCARD_REASONS"] = settings.DISCARD_REASONS
 templates.env.globals["MANUAL_DISCARD"] = settings.MANUAL_DISCARD
@@ -170,8 +170,10 @@ def redact(request: Request, text: str) -> str:
 
 CSP = (
     "default-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline'; "
-    "img-src 'self' https: data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; "
-    # "🗺 Karte" on the listing page (portals.maps_embed_url): maps.google.com redirects to www.google.com/maps/embed.
+    # img-src https: covers the OpenStreetMap tiles of the listing page's map (Leaflet, app.js); its geometry comes
+    # from our own /listing/{id}/geo only (connect-src).
+    "img-src 'self' https: data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; "
+    # The map's fallback (portals.maps_embed_url): maps.google.com redirects to www.google.com/maps/embed.
     "frame-src https://maps.google.com https://www.google.com"
 )
 SECURITY_HEADERS = {
@@ -590,6 +592,9 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
         "final_session": db.latest_session(listing["id"], "done"),  # the editor's finished text
         "session": db.latest_session(listing["id"]),  # open or done: what the one main button says
         "writing": not drafts and (drafting.job(listing["id"]) or {}).get("state") == "running",
+        # the map (geo.py): what is cached for the address, and the caption for a region ("Nur Gebiet bekannt: …")
+        "geo": geo.cached(listing.get("address")),
+        "geo_label": geo.label(geo.parse_address(listing.get("address"))),
         # the top of the page: rent that matters, rooms, district and Claude's hint of the newest draft
         "card": cards.facts(listing, hint),
         "hint": hint,
@@ -770,6 +775,13 @@ async def listing_add(request: Request, url: str = Form("")):
     posted = not request.app.state.config.disable_bot and bot.schedule_post_manual(listing_id)
     added = "tg" if posted else "ohne"
     return RedirectResponse(f"/listing/{listing_id}?neu={added}", status_code=303)
+
+
+@router.get("/listing/{listing_id}/geo", dependencies=PAGE)
+async def listing_geo(listing_id: int):
+    """The map's geometry (geo.cached), looked up in the background on the first ask; the page polls while it says
+    "pending". Login only: the lookups go to OpenStreetMap's services."""
+    return geo.ensure(_listing_or_404(listing_id).get("address"))
 
 
 @router.get("/listing/{listing_id}/media/{position}", dependencies=PAGE)

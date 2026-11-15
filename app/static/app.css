@@ -591,25 +591,30 @@ html:not(.js) .cr-thumbs::-webkit-scrollbar { display: block; height: 6px; }
 /* ---- listing detail: picture carousel (end) ---- */
 
 /* ---- listing detail: map (begin) -- listing.html .lh-map, app.js "map" ----
-   "🗺 Karte" (a <details>) with "In Google Maps öffnen ↗" floating beside it; the map opens below both. */
-.lh-map { display: flow-root; margin: -.35rem 0 .95rem; }
-.map-open { float: right; margin-left: .75rem; font-size: .86rem; line-height: 2.1rem; }
-.map-toggle { margin: 0; }
-.map-toggle > summary {
-  display: inline-flex; align-items: center; gap: .3rem; padding: .3rem .8rem; font-size: .86rem; font-weight: 600; line-height: 1.4;
-  border: 1px solid var(--pico-form-element-border-color); border-radius: 999px; color: var(--text); background: var(--pico-card-background-color);
-}
-.map-toggle > summary::after { float: none; margin-inline-start: .1rem; width: .85rem; height: .85rem; background-size: .85rem auto; }
-.map-toggle > summary:hover { background: var(--surface-2); }
-.map-toggle > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.map-toggle[open] > summary { margin-bottom: .6rem; background: var(--accent-soft); border-color: transparent; color: var(--accent-strong); }
+   Always open: the frame (OpenStreetMap via Leaflet, or Google's embed as the fallback), below it the region caption
+   and "In Google Maps öffnen ↗". Dark: the OSM tiles are inverted to match, the outline keeps its colour. */
+.lh-map { --map-accent: var(--accent); margin: -.35rem 0 .95rem; }
 .map-frame {
-  clear: both; height: clamp(240px, 62vw, 300px); border: 1px solid var(--pico-card-border-color); border-radius: var(--radius-sm);
-  overflow: hidden; background: var(--surface-2);
+  position: relative; z-index: 0; height: clamp(240px, 62vw, 320px); overflow: hidden;
+  border: 1px solid var(--pico-card-border-color); border-radius: var(--radius-sm); background: var(--surface-2);
 }
 .map-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
+.lh-map .map-frame.leaflet-container { font: inherit; font-size: .8rem; background: var(--surface-2); }
+.lh-map .map-frame .leaflet-control-attribution { font-size: .68rem; background: color-mix(in srgb, var(--pico-card-background-color) 85%, transparent); color: var(--pico-muted-color); }
+.lh-map .map-frame .leaflet-control-attribution a { color: var(--pico-primary); }
+.lh-map .map-frame .leaflet-bar a { color: var(--text); background: var(--pico-card-background-color); border-color: var(--pico-muted-border-color); }
 .map-nojs { margin: 0; padding: 1rem; font-size: .88rem; color: var(--pico-muted-color); }
 .js .map-nojs { display: none; }  /* app.js replaces it with the map */
+.map-caption {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .2rem .9rem;
+  margin: .45rem 0 0; font-size: .86rem;
+}
+.map-label { color: var(--pico-muted-color); }
+.map-open { margin-left: auto; }
+@media only screen and (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .lh-map { --map-accent: #4fd1bf; }
+  :root:not([data-theme]) .map-frame .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.9) saturate(.6); }
+}
 /* ---- listing detail: map (end) ---- */
 
 .description { font-size: .95rem; line-height: 1.6; }

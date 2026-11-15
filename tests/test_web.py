@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import bot, db, drafting, editor_access, llm, main, settings, vault, web
+from app import bot, db, drafting, editor_access, geo, llm, main, settings, vault, web
 
 from .conftest import TEST_SECRETS
 
@@ -127,7 +127,8 @@ def test_security_headers(client):
     # Frames only for the map on the listing page (maps.google.com redirects to www.google.com/maps/embed).
     directives = dict(d.strip().split(" ", 1) for d in r.headers["content-security-policy"].split(";"))
     assert directives["frame-src"] == "https://maps.google.com https://www.google.com"
-    assert directives["default-src"] == "'self'" and directives["img-src"] == "'self' https: data:"
+    assert directives["default-src"] == "'self'" and directives["img-src"] == "'self' https: data:"  # OSM tiles
+    assert directives["connect-src"] == "'self'"  # the map's geometry only from our own /listing/{id}/geo
 
 
 @pytest.mark.parametrize("method,path", [
@@ -2031,9 +2032,12 @@ def test_listing_page_map(client):
     query = "Venloer%20Stra%C3%9Fe%20123%2C%2050823%20K%C3%B6ln%2C%20Ehrenfeld"
     link = f"https://www.google.com/maps/search/?api=1&amp;query={query}"
     assert f'<a class="map-open" href="{link}" target="_blank" rel="noopener noreferrer">In Google Maps öffnen ↗</a>' in page
-    # The embed sits only in a data attribute (app.js sets the iframe on opening): no request to Google before.
+    # Always shown, no toggle; the Google embed is only the fallback in a data attribute (app.js), no iframe in the
+    # page. Nothing cached yet: app.js asks /geo; an exact address has no region caption.
     assert f'data-map-src="https://maps.google.com/maps?q={query}&amp;z=15&amp;output=embed"' in page
-    assert "<iframe" not in page and "<summary>Karte</summary>" in page
+    assert "<iframe" not in page and "<summary>Karte</summary>" not in page and "map-toggle" not in page
+    assert f'data-geo-url="/listing/{lid}/geo"' in page and """data-geo='{"kind": "address", "state": "pending"}'""" in page
+    assert "Nur Gebiet bekannt" not in page and 'href="/static/vendor/leaflet-1.9.4/leaflet.css"' in page
     assert page.index('class="chips lh-chips"') < page.index('class="lh-addr"') < page.index('class="lh-map"')
     # Without the city the search would land anywhere: ", Köln" is added.
     lid = add_listing(fredy_id="x2", address="Ehrenfeld <b>&")
@@ -2042,7 +2046,30 @@ def test_listing_page_map(client):
     for address in (None, "", "   "):
         lid = add_listing(fredy_id=f"x-{address!r}", address=address)
         page = client.get(f"/listing/{lid}").text
-        assert "lh-map" not in page and "google.com" not in page
+        assert "lh-map" not in page and "google.com" not in page and "leaflet" not in page
+
+
+def test_listing_page_map_region_and_cache(client, monkeypatch):
+    """Only a PLZ / Stadtteil: the caption says so; a cached outline goes into the page, so the map needs no request;
+    /geo starts the lookup once (geo.ensure) and is behind the login."""
+    started = []
+    monkeypatch.setattr(geo, "ensure", lambda address: started.append(address) or {"state": "pending", "kind": "plz"})
+    login(client)
+    lid = add_listing(address="50823 Köln - Ehrenfeld")
+    page = client.get(f"/listing/{lid}").text
+    assert '<span class="map-label">Nur Gebiet bekannt: PLZ 50823 (Ehrenfeld)</span>' in page
+    assert client.get(f"/listing/{lid}/geo").json() == {"state": "pending", "kind": "plz"}
+    assert started == ["50823 Köln - Ehrenfeld"]
+    db.set_geo("plz:50823", "ok", json.dumps({"type": "Polygon", "coordinates": [[[6.9, 50.9], [7.0, 50.9], [7.0, 51.0], [6.9, 50.9]]]}))
+    page = client.get(f"/listing/{lid}").text
+    assert '"state": "ok"' in page and '"type": "Polygon"' in page and '"bounds": [50.9, 6.9, 51.0, 7.0]' in page
+    other = add_listing(fredy_id="x2", address="Ehrenfeld, Köln")
+    assert "Nur Gebiet bekannt: Ehrenfeld</span>" in client.get(f"/listing/{other}").text
+    db.set_geo("district:ehrenfeld|köln", "error", None)  # the lookup failed: the page falls back to Google's map
+    assert """data-geo='{"kind": "district", "state": "failed"}'""" in client.get(f"/listing/{other}").text
+    client.cookies.clear()
+    assert client.get(f"/listing/{lid}/geo").status_code in (303, 401)
+    assert client.get("/listing/999/geo").status_code in (303, 401)
 
 
 def test_media_route(client):
