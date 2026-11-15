@@ -425,6 +425,7 @@
         state = job.dataset.draftJob = "running";
         title.textContent = "Claude schreibt dein Anschreiben …";
         bar.classList.remove("is-error");
+        bar.hidden = false;
         errorBox.hidden = true;
         slowBox.textContent = "";
       }

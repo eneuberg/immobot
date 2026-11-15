@@ -1355,7 +1355,7 @@ details.rule-why > summary { min-height: 2.75rem; color: var(--pico-muted-color)
 /* ---- editor: progress bar while Claude writes the first draft (begin) -- editor.html .ed-writing, editor.js ----
    data-draft-job: idle (with JS the same as running: editor.js starts at once) | running | error. The fill is
    scaled by editor.js (transform, towards ~93 % at the expected time, then creeping); "is-done" runs it to the end. */
-.ed-writing { max-width: 40rem; margin: 0 auto 1rem; }
+.ed-writing { max-width: 40rem; margin: 0 0 1rem; }
 .ed-writing-title { margin: 0 0 1rem; font-size: 1.15rem; }
 .draftbar {
   position: relative; height: .6rem; overflow: hidden; border-radius: 999px;
@@ -1381,7 +1381,7 @@ html:not(.js) .ed-writing[data-draft-job=running] .draftbar-fill {  /* no JS: no
 .draftbar-slow:empty { display: none; }
 .draftbar-away { margin: .85rem 0 0; font-size: .82rem; }
 .ed-writing [data-draft-error] { margin: .9rem 0 0; }
-.ed-writing [data-draft-error][hidden] { display: none; }
+.ed-writing :is([data-draft-error], .draftbar)[hidden] { display: none; }
 .ed-writing .ed-write { max-width: none; margin: 1rem 0 0; }
 .ed-writing .ed-write button { width: auto; margin: 0; }
 .ed-writing:is([data-draft-job=running], .js [data-draft-job=idle]) [data-draft-start] { display: none; }

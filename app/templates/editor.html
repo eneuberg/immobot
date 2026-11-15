@@ -123,7 +123,7 @@
       {%- elif dj.state == "running" %}Claude schreibt dein Anschreiben …
       {%- else %}<span class="nojs-only">Noch kein Anschreiben</span><span class="js-only">Claude schreibt dein Anschreiben …</span>{% endif -%}
     </h2>
-    <div class="draftbar{% if dj.state == 'error' %} is-error{% endif %}" data-draft-bar role="progressbar"
+    <div class="draftbar" data-draft-bar role="progressbar"{% if dj.state == "error" %} hidden{% endif %}
       aria-label="Claude schreibt dein Anschreiben" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
       <span class="draftbar-fill"></span></div>
     <p class="draftbar-meta"><span data-draft-note>Dauert meist etwa {{ expected_s }} s.</span>
@@ -133,7 +133,7 @@
     <p class="help draftbar-away" data-draft-away>Du kannst die Seite solange verlassen – Claude schreibt weiter.</p>
     <form method="post" action="/editor/{{ listing.id }}/draft" class="ed-write" data-draft-start>
       {{ hidden() }}
-      {% if dj.state == "idle" %}<p class="help">Claude schreibt ein Anschreiben zu diesem Inserat – mit deinem Profil
+      {% if dj.state == "idle" %}<p class="help nojs-only">Claude schreibt ein Anschreiben zu diesem Inserat – mit deinem Profil
         und Schreibstil. Ein Satz von dir dazu macht es persönlicher.</p>{% endif %}
       {{ personal_fields(listing, "en") }}
       <button type="submit">{{ "Nochmal versuchen" if dj.state == "error" else "Anschreiben schreiben lassen" }}</button>
