@@ -132,7 +132,7 @@
   {% if rules_proposed %}
   <section class="rule-group" aria-labelledby="h-proposed">
     <h3 id="h-proposed">Warten auf deine Entscheidung <span class="count">{{ rules_proposed|length }}</span></h3>
-    <p class="help">Vorschläge von Claude nach „Fertig“ im Editor, über die noch nicht entschieden wurde.</p>
+    <p class="help">Vorschläge von Claude aus deinen fertigen Anschreiben, über die du noch nicht entschieden hast.</p>
     <ul class="rule-list">
       {% for r in rules_proposed %}
       <li class="rule is-proposed" id="regel-{{ r.id }}">
@@ -150,7 +150,7 @@
           <label class="sr-only" for="rule-text-{{ r.id }}">Text der Regel</label>
           <textarea id="rule-text-{{ r.id }}" name="text" rows="3" maxlength="300">{{ r.text }}</textarea>
           {% endif %}
-          {% if r.reason %}<div class="rule-reason md"><span class="md-label">Warum:</span> {{ r.reason|md }}</div>{% endif %}
+          {% if r.reason %}<details class="rule-why"><summary>Warum?</summary><div class="rule-reason md"><span class="md-label">Warum:</span> {{ r.reason|md }}</div></details>{% endif %}
           <p class="rule-meta">{{ origin(r) }}</p>
           <div class="actions">
             <button type="submit" name="accept" value="1" class="btn-sm">✅ Übernehmen</button>

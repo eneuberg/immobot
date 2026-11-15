@@ -1308,3 +1308,11 @@ details.lh-section > summary .chip { font-weight: 500; }
 .logout button { min-height: 2.75rem; }
 .subnav a { min-height: 2.75rem; display: inline-flex; align-items: center; }
 .lh-actions > [role=button].secondary:last-child:nth-child(2) { grid-column: 1 / -1; }
+
+/* "Gelernt": proposals as short as their text (browsers without field-sizing keep the rows), reason folded */
+.rule textarea { field-sizing: content; min-height: 2.75rem; }
+details.rule-why { margin: .2rem 0 .3rem; font-size: .88rem; }
+details.rule-why > summary { min-height: 2.75rem; color: var(--pico-muted-color); }
+.ed-facts a, .lh-chips .chip a, .draft-card > footer a { display: inline-flex; align-items: center; min-height: 2.75rem; }
+.ed-unsent button.linkish, .copy-btn, .ed-done .ed-actions .copy-btn { min-height: 2.75rem; }
+.details-section.is-list > summary { min-height: 2.75rem; }
