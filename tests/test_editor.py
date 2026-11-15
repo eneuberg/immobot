@@ -575,14 +575,15 @@ def test_mark_sent(client, lid):
 
 
 def test_mark_dismissed_after_finish(client, lid):
-    """Not sent after all: "Doch uninteressant" in the card and the overlay sorts the listing out (by hand); the
+    """Not sent after all: "Doch uninteressant" in the card sorts the listing out (by hand; the overlay only asks
+    "Abgeschickt?"); the
     banner then offers "↩️ Zurückholen"."""
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     editor_cookie(client, lid)
     _, fields = open_editor(client, lid)
     post(client, lid, "finish", fields, text="Ende")
     page = client.get(f"/editor/{lid}").text
-    assert page.count(f'action="/editor/{lid}/dismiss"') == 2 and "❌ Doch uninteressant" in page
+    assert page.count(f'action="/editor/{lid}/dismiss"') == 1 and "❌ Doch uninteressant" in page
     r = post(client, lid, "dismiss", {"token": fields["token"]})
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=dismissed#ende"
     listing = db.get_listing(lid)
@@ -633,14 +634,15 @@ def test_editor_counts_as_seen(client, lid):
 
 
 def test_asks_after_opening_the_listing_while_writing(client, lid):
-    """Before "Fertig", "Weiter anschreiben?" waits on the page; once the ad was opened (here, on the dashboard or in
+    """Before "Fertig", "Uninteressant?" waits on the page; once the ad was opened (here, on the dashboard or in
     Telegram - the /go link) it is armed for every return. "Uninteressant" there dismisses."""
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     editor_cookie(client, lid)
     r, fields = open_editor(client, lid)
     page = r.text
     assert f'href="{editor_access.make_open_path(lid)}"' in page and "data-opens-listing" in page
-    assert f'data-ask-return="editor-{lid}" aria-labelledby' in page and "Weiter anschreiben?" in page  # not armed
+    assert f'data-ask-return="editor-{lid}" aria-labelledby' in page and ">Uninteressant?</h2>" in page  # not armed
+    assert "❌ Ja, aussortieren" in page and "data-dialog-close autofocus>Nein</button>" in page
     db.mark_opened(lid)
     _, fields = open_editor(client, lid)
     assert f'data-ask-return="editor-{lid}" data-opened' in client.get(f"/editor/{lid}").text
@@ -655,7 +657,7 @@ def test_no_after_open_question_once_finished(client, lid):
     _, fields = open_editor(client, lid)
     post(client, lid, "finish", fields, text="Ende")
     page = client.get(f"/editor/{lid}").text
-    assert "Weiter anschreiben?" not in page and page.count("data-ask-return") == 1  # "Abgeschickt?" instead
+    assert 'id="after-open-title"' not in page and page.count("data-ask-return") == 1  # "Abgeschickt?" instead
 
 
 def test_new_round_from_a_newer_draft(client, lid):

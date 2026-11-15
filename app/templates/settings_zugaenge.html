@@ -256,8 +256,7 @@
   <input type="hidden" name="section" value="zugaenge">
   <article id="fredy-adresse" class="setting-card">
     <label>Adresse deiner Fredy-Instanz {{ need_tag("optional") }}
-      <small>Für die Links „In Fredy öffnen“ und – mit dem Fredy-MCP-Token – für den Abgleich, welche Inserate offline
-        sind. Leer = die Links, die Fredy mitschickt, und kein Abgleich.</small>
+      <small>Mit dem Fredy-MCP-Token für den Abgleich, welche Inserate offline sind. Leer = kein Abgleich.</small>
       <input type="text" inputmode="url" name="fredy_base_url" value="{{ values.fredy_base_url }}"
         placeholder="https://fredy.example.com" autocomplete="off" spellcheck="false" autocapitalize="off"
         {% if errors.fredy_base_url %}aria-invalid="true"{% endif %}>

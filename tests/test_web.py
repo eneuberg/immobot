@@ -269,7 +269,7 @@ def test_listing_detail_escapes_and_shows_drafts(client):
     assert "<script>alert(1)" not in r.text and "&lt;script&gt;alert(1)" in r.text
     assert "<b>fett</b>" not in r.text and "<i>x</i>" not in r.text
     assert 'src="https://img.example/1.jpg"' in r.text and 'referrerpolicy="no-referrer"' in r.text
-    assert 'href="https://fredy.example/l/1"' in r.text and "Inserat öffnen" in r.text
+    assert "fredy.example" not in r.text and "Inserat öffnen" in r.text
     for text in ["Anpassung", "mit Hund", "Codewort", "Claude Sonnet 5.5", "111", "45,5 ct (≈ 0,500 $)", "Kopieren"]:
         assert text in r.text
     assert client.get("/listing/9999").status_code == 404
@@ -295,20 +295,17 @@ def test_javascript_urls_not_rendered(client):
     assert "<img" not in r.text and "Inserat öffnen" not in r.text and "In Fredy öffnen" not in r.text
 
 
-def test_fredy_link_built_from_the_fredy_address(client):
-    """With "Adresse deiner Fredy-Instanz" set, "In Fredy öffnen" points there instead of the stored fredyUrl -
-    but only for listings from a Fredy job; one without job_id keeps its stored link."""
+def test_no_fredy_link_on_the_listing_page(client):
+    """No "In Fredy öffnen" button on the listing page any more (never used), with or without the Fredy address."""
     login(client)
     hook(client, {"jobId": "job1", "provider": "immowelt", "listings": [fredy_listing("a/1")]})
     lid = next(row["id"] for row in db.list_listings() if row["fredy_id"] == "a/1")
     other = add_listing(fredy_id="m1", fredy_url="https://fredy.example/listings/m1")  # no job_id
-    assert 'href="https://fredy.example/listings/1"' in client.get(f"/listing/{lid}").text  # not set: as Fredy sent it
-
+    assert "In Fredy öffnen" not in client.get(f"/listing/{lid}").text
     db.update_settings({"fredy_base_url": "https://new-fredy.example.com/app"})
-    r = client.get(f"/listing/{lid}")
-    assert 'href="https://new-fredy.example.com/app/#/listings/listing/a%2F1"' in r.text and "In Fredy öffnen" in r.text
-    assert "fredy.example/listings/1" not in r.text
-    assert 'href="https://fredy.example/listings/m1"' in client.get(f"/listing/{other}").text
+    for listing_id in (lid, other):
+        page = client.get(f"/listing/{listing_id}").text
+        assert "In Fredy öffnen" not in page and "fredy.example" not in page
 
 
 def test_only_safe_urls_with_stored_pictures(client):
@@ -441,27 +438,29 @@ def test_listing_page_locked_while_aussortiert(client):
 
 def test_listing_page_asks_after_opening_the_listing(client):
     """"Inserat öffnen" goes through the signed /go link; the question is armed (data-opened) once the ad was opened.
-    It follows the status: "Interessant?" (editor / Uninteressant), with a draft "Abgeschickt?", uninteressant
-    "Doch interessant?"; nothing once sent or offline. "Später" is a small link below, not a third button."""
+    It asks only what the person wouldn't do by themselves: "Uninteressant?" (Ja, aussortieren / Nein), with a draft
+    "Abgeschickt?", uninteressant "Doch interessant?"; nothing once sent or offline. Two buttons, no title or help
+    text, no "Später"."""
     login(client)
     lid = add_listing()
     page = client.get(f"/listing/{lid}").text
     assert f'href="{editor_access.make_open_path(lid)}"' in page and "data-opens-listing" in page
     overlay = page.split(f'data-ask-return="listing-{lid}"')[1].split("</dialog>")[0]
     assert not overlay.startswith(" data-opened")  # never opened: only a click here arms it
-    assert "✍️ Interessant – im Editor anschreiben" in overlay and f'action="/listing/{lid}/dismiss"' in overlay
-    assert '<p class="ed-ask-later"><button type="button" class="linkish" data-dialog-close>Später' in overlay
+    assert ">Uninteressant?</h2>" in overlay and "❌ Ja, aussortieren" in overlay
+    assert f'action="/listing/{lid}/dismiss"' in overlay and "data-dialog-close autofocus>Nein</button>" in overlay
+    assert "Später" not in overlay and "im Editor" not in overlay and "ed-ask-listing" not in overlay
     db.mark_opened(lid)
     overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</dialog>")[0]
     assert overlay.startswith(" data-opened")
     db.add_draft(lid, "initial", "Hallo", "claude-opus-5-5")
     db.advance_status(lid, "drafted")
     overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</dialog>")[0]
-    assert "Hast du die Nachricht abgeschickt?" in overlay and f'action="/listing/{lid}/sent"' in overlay
-    assert "Interessant – im Editor" not in overlay
+    assert ">Abgeschickt?</h2>" in overlay and f'action="/listing/{lid}/sent"' in overlay
+    assert "aussortieren" not in overlay and "data-dialog-close>Noch nicht</button>" in overlay
     db.discard(lid)
     overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</dialog>")[0]
-    assert "Doch interessant?" in overlay and "❌ Uninteressant" not in overlay
+    assert "Doch interessant?" in overlay and "aussortieren" not in overlay
     assert f'action="/listing/{lid}/restore"' in overlay
     db.restore(lid)
     db.mark_sent(lid)

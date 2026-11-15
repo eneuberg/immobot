@@ -8,7 +8,7 @@
 
   // Overlays that open by themselves (coming back to the page): for the first moment after they appear they ignore
   // clicks, Enter and Escape. A tap meant for the page underneath (the browser shows the cached page first, the
-  // overlay comes a moment later) must not hit "Später"/"Ja" or the backdrop. window.immobotShowModal is also used
+  // overlay comes a moment later) must not hit "Nein"/"Ja" or the backdrop. window.immobotShowModal is also used
   // by editor.js.
   var MODAL_COOLDOWN_MS = 800;
   window.immobotShowModal = function (dlg) {
@@ -324,7 +324,7 @@
     Array.prototype.forEach.call(document.querySelectorAll("[data-expose-preview]"), exposePreview);
   });
 
-  // The question when the person comes back (<dialog data-ask-return="key">, listing and editor page): "Interessant?"
+  // The question when the person comes back (<dialog data-ask-return="key">, listing and editor page): "Uninteressant?"
   // / "Abgeschickt?". It opens every time the person comes back to the page, once data-opened is set - by the server
   // (the ad was opened before: dashboard, editor or Telegram; the finished editor always) or by a click on
   // "Inserat öffnen" (<a data-opens-listing>) here. "Coming back" =

@@ -51,13 +51,11 @@
       <article>
         <header>
           <button type="button" aria-label="Schließen" rel="prev" data-dialog-close></button>
-          <h2 id="after-open-title">Weiter anschreiben?</h2>
+          <h2 id="after-open-title">Uninteressant?</h2>
         </header>
-        <p class="ed-ask-listing">{{ listing.title or "Dieses Inserat" }}</p>
-        <p class="help">„Uninteressant“ sortiert das Inserat aus, auch in Telegram. Dein Text bleibt gespeichert.</p>
         <footer class="ed-actions">
-          <button type="button" data-dialog-close autofocus>✍️ Ja, interessant</button>
-          <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit" class="secondary outline">❌ Uninteressant</button></form>
+          <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit">❌ Ja, aussortieren</button></form>
+          <button type="button" class="secondary outline" data-dialog-close autofocus>Nein</button>
         </footer>
       </article>
     </dialog>
@@ -268,16 +266,12 @@
         <article>
           <header>
             <button type="button" aria-label="Schließen" rel="prev" data-dialog-close></button>
-            <h2 id="ask-sent-title">Hast du die Nachricht abgeschickt?</h2>
+            <h2 id="ask-sent-title">Abgeschickt?</h2>
           </header>
-          <p class="ed-ask-listing">{{ listing.title or "Dieses Inserat" }}</p>
-          <p class="help">„Ja“ setzt das Inserat auf „Gesendet“, „Doch uninteressant“ sortiert es aus – beides auch in
-            Telegram. Willst du noch etwas ändern, schließ das Fenster einfach.</p>
           <footer class="ed-actions">
             <form method="post" action="/editor/{{ listing.id }}/sent">{{ hidden() }}<button type="submit" autofocus>✅ Ja, abgeschickt</button></form>
-            <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit" class="secondary outline">❌ Doch uninteressant</button></form>
+            <button type="button" class="secondary outline" data-dialog-close>Noch nicht</button>
           </footer>
-          <p class="ed-ask-later"><button type="button" class="linkish" data-dialog-close>Noch nicht</button></p>
         </article>
       </dialog>
       {% endif %}

@@ -117,7 +117,6 @@
       <div class="lh-actions">
         {% if contact_url %}<a href="{{ open_path(listing.id) }}" target="_blank" rel="noopener noreferrer" role="button" data-opens-listing>Inserat öffnen ↗</a>{% endif %}
         <a href="/editor/{{ listing.id }}" role="button" class="secondary">📝 Im Editor bearbeiten</a>
-        {% if fredy_url %}<a href="{{ fredy_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline">In Fredy öffnen ↗</a>{% endif %}
       </div>
       {# ---- status (begin) ----
          The status only shows where the listing is (Neu → Gesehen → Entwurf → Gesendet happen by themselves); by hand
@@ -166,31 +165,30 @@
 {% if asks_after_open %}
 {# Once the ad was opened ("Inserat öffnen" here, in the editor or in Telegram: listing.opened_at, or a click on this
    page), app.js opens this every time the person comes back to the page (other tab or app, back button, from
-   Telegram). What it asks follows the status: a draft exists → "Abgeschickt?", aussortiert → "Doch interessant?",
-   else "Interessant?". Closes with ✕, Später, Esc or a click beside it. Not once sent, not for offline / veraltet. #}
+   Telegram). It asks only what the person would otherwise not do by themselves: without a draft "Uninteressant?"
+   (whoever is interested just goes on writing), with a draft "Abgeschickt?", aussortiert "Doch interessant?".
+   Two buttons, "Nein"/"Noch nicht" just closes (as do ✕, Esc and a click beside it). Not once sent, not for
+   offline / veraltet. #}
 {% set dismissed = listing.discard_reason == MANUAL_DISCARD %}
 {% set ask_sent = not dismissed and listing.status == "drafted" %}
 <dialog class="ed-ask-dialog" data-ask-return="listing-{{ listing.id }}"{% if listing.opened_at %} data-opened{% endif %} aria-labelledby="after-open-title">
   <article>
     <header>
       <button type="button" aria-label="Schließen" rel="prev" data-dialog-close></button>
-      <h2 id="after-open-title">{{ "Doch interessant?" if dismissed else ("Hast du die Nachricht abgeschickt?" if ask_sent else "Interessant?") }}</h2>
+      <h2 id="after-open-title">{{ "Doch interessant?" if dismissed else ("Abgeschickt?" if ask_sent else "Uninteressant?") }}</h2>
     </header>
-    <p class="ed-ask-listing">{{ listing.title or "Dieses Inserat" }}</p>
-    {% if dismissed %}<p class="help">Es ist als uninteressant aussortiert. „Zurückholen“ nimmt es wieder in die Liste.</p>
-    {% elif ask_sent %}<p class="help">Es steht auf „Entwurf“. „Ja“ setzt es auf „Gesendet“, auch in Telegram.</p>{% endif %}
     <footer class="ed-actions">
       {% if dismissed %}
-      <form method="post" action="/listing/{{ listing.id }}/restore"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit" autofocus>↩️ Zurückholen</button></form>
+      <form method="post" action="/listing/{{ listing.id }}/restore"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit">↩️ Zurückholen</button></form>
+      <button type="button" class="secondary outline" data-dialog-close autofocus>Nein</button>
       {% elif ask_sent %}
       <form method="post" action="/listing/{{ listing.id }}/sent"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit" autofocus>✅ Ja, abgeschickt</button></form>
-      <form method="post" action="/listing/{{ listing.id }}/dismiss"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit" class="secondary outline">❌ Doch uninteressant</button></form>
+      <button type="button" class="secondary outline" data-dialog-close>Noch nicht</button>
       {% else %}
-      <a href="/editor/{{ listing.id }}" role="button" autofocus>✍️ Interessant – im Editor anschreiben</a>
-      <form method="post" action="/listing/{{ listing.id }}/dismiss"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit" class="secondary outline">❌ Uninteressant</button></form>
+      <form method="post" action="/listing/{{ listing.id }}/dismiss"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit">❌ Ja, aussortieren</button></form>
+      <button type="button" class="secondary outline" data-dialog-close autofocus>Nein</button>
       {% endif %}
     </footer>
-    <p class="ed-ask-later"><button type="button" class="linkish" data-dialog-close>Später</button></p>
   </article>
 </dialog>
 {% endif %}
