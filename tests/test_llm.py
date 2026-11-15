@@ -545,7 +545,7 @@ def test_draft_moves_seen_forward_also_while_aussortiert(fresh_db, listing_id, f
 def test_variants_get_latest_non_test_draft(fresh_db, listing_id, fake_generate):
     asyncio.run(llm.create_and_store_draft(listing_id, "initial"))   # Entwurf 1
     asyncio.run(llm.create_and_store_draft(listing_id, "test"))      # Entwurf 2, ignored for variants
-    row = asyncio.run(llm.create_and_store_draft(listing_id, "custom", "  Erwähne mein Fahrrad " + "x" * 600))
+    row = asyncio.run(llm.create_and_store_draft(listing_id, "custom", "  Erwähne mein Fahrrad " + "x" * llm.INSTRUCTION_MAX_CHARS))
     assert fake_generate[2]["kind"] == "custom"
     assert fake_generate[2]["previous_text"] == "Entwurf 1"
     assert len(row["instruction"]) == llm.INSTRUCTION_MAX_CHARS

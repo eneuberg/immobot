@@ -45,7 +45,7 @@ MAX_IMAGES_LIMIT = 20  # upper bound of the llm_max_images setting
 
 # Kinds that rework the latest stored draft.
 VARIANT_KINDS = ("regenerate", "shorter", "formal", "custom")
-INSTRUCTION_MAX_CHARS = 500
+INSTRUCTION_MAX_CHARS = 20000  # no limit for the person (no maxlength); only a guard against absurd input
 DESCRIPTION_MAX_CHARS = 12000
 EXAMPLE_COUNT = 6  # finished editor texts in "## Beispiele": the newest half, the rest spread over older ones
 EXAMPLE_MAX_CHARS = 1500

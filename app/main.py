@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -57,13 +58,17 @@ app.add_middleware(
 
 
 class StaticAssets(StaticFiles):
-    """Stylesheet and script of the dashboard: public, no secrets (CSP allows 'self'). Cacheable for a day;
-    base.html adds a content hash to the URLs, so a deploy is picked up at once. The security middleware
-    keeps this Cache-Control and adds its other headers."""
+    """Stylesheet and script of the dashboard: public, no secrets (CSP allows 'self'). Cacheable for a day, but
+    only under this version's content hash (base.html adds ?v=<hash> to the URLs): during a deploy the old and the
+    new container run side by side, and the old one may answer a request for the new hash - a browser must not
+    keep that old file for a day under the new address. The security middleware keeps this Cache-Control and adds
+    its other headers."""
 
     async def get_response(self, path, scope):
         response = await super().get_response(path, scope)
-        response.headers["Cache-Control"] = "public, max-age=86400"
+        version = parse_qs(scope.get("query_string", b"").decode("latin-1")).get("v", [""])[0]
+        current = version == web.templates.env.globals["STATIC_VERSION"]
+        response.headers["Cache-Control"] = "public, max-age=86400" if current else "no-store"
         return response
 
 

@@ -792,7 +792,7 @@ def test_edit_asks_for_instruction_and_reply_generates_custom_draft(tg, monkeypa
     assert prompt["reply_markup"].input_field_placeholder
     prompt_id = 101
 
-    reply = text_update("  Bitte Homeoffice erwähnen " + "x" * 600, message_id=900, reply_to=prompt_id)
+    reply = text_update("  Bitte Homeoffice erwähnen " + "x" * bot.INSTRUCTION_MAX, message_id=900, reply_to=prompt_id)
     asyncio.run(bot._on_reply(reply, SimpleNamespace(bot=tg)))
 
     assert len(calls) == 1

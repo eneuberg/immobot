@@ -301,7 +301,7 @@
         {# ❤️ and one line of her own: go into every revision (llm.personal_block); changed alone, "Überarbeiten
            lassen" works them into the first paragraph (editor.PERSONAL_REVISION). #}
         {{ personal_fields(listing, "ed") }}
-        <textarea id="ed-critique" name="critique" rows="2" maxlength="500" placeholder="z. B. Homeoffice erwähnen, Balkon weglassen, persönlicher">{{ critique or "" }}</textarea>
+        <textarea id="ed-critique" name="critique" rows="2" placeholder="z. B. Homeoffice erwähnen, Balkon weglassen, persönlicher">{{ critique or "" }}</textarea>
         {% if calls_today >= calls_shown_from %}<p class="help">Heute schon {{ calls_today }} von {{ calls_limit }} Claude-Aufrufen für dieses Inserat.</p>{% endif %}
         <button type="submit" formaction="/editor/{{ listing.id }}/revise" class="secondary outline ed-revise" data-busy-label="Claude schreibt …">Überarbeiten lassen <small>(10–60 s)</small></button>
         {# Quick buttons (editor.py editor_quick), like Telegram's. "Ganz neu schreiben" starts a new round: it asks

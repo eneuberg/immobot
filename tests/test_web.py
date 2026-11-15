@@ -388,10 +388,14 @@ def test_details_sections():
 
 
 def test_static_assets_served_without_login(client):
+    version = web.templates.env.globals["STATIC_VERSION"]
     for path, kind in [("/static/app.css", "text/css"), ("/static/app.js", "javascript")]:
-        r = client.get(path)
+        r = client.get(f"{path}?v={version}")
         assert r.status_code == 200 and kind in r.headers["content-type"]
         assert r.headers["cache-control"] == "public, max-age=86400"  # only /static is cacheable (and the pictures)
+        # another version's hash (an old container answering during a deploy) or none: never kept by the browser
+        for other in (path, f"{path}?v=0123456789ab"):
+            assert client.get(other).headers["cache-control"] == "no-store"
         assert "frame-ancestors 'none'" in r.headers["content-security-policy"]  # security headers apply here too
         assert r.headers["x-content-type-options"] == "nosniff"
     assert client.get("/static/../app/web.py").status_code == 404
