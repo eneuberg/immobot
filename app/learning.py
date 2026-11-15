@@ -30,7 +30,7 @@ from .textdiff import sentence_diff
 
 log = logging.getLogger(__name__)
 
-EDITOR_DAILY_LIMIT = 30  # Claude calls per listing within 24 hours through the editor (revisions + rule proposals)
+EDITOR_DAILY_LIMIT = 30  # Claude calls per listing within 24 hours through the editor (revisions, questions, rules)
 TEXT_MAX_CHARS = 20_000
 RULE_MAX_CHARS = 300
 MAX_PROPOSED_RULES = 4
@@ -237,14 +237,15 @@ def set_session_example(session_id: int, use: bool) -> dict:
 
 def editor_calls_today(listing_id: int) -> int:
     """Claude calls through the editor for this listing within the last 24 hours (revisions after a critique, quick
-    buttons and rule proposals)."""
+    buttons, "Nur fragen" and rule proposals). Questions are only counted here: they are no feedback."""
     since = _since(24)
     return (db.count_feedback_since(listing_id, "editor", since, kind="critique")
             + db.count_feedback_since(listing_id, "editor", since, kind="quick")
-            + db.count_llm_usage_since(listing_id, "rules", since))
+            + db.count_llm_usage_since(listing_id, "rules", since)
+            + db.count_llm_usage_since(listing_id, "question", since))
 
 
-def _check_editor_limit(listing_id: int) -> None:
+def check_editor_limit(listing_id: int) -> None:
     if editor_calls_today(listing_id) >= EDITOR_DAILY_LIMIT:
         raise LearningError(f"Tageslimit erreicht: höchstens {EDITOR_DAILY_LIMIT} Claude-Aufrufe pro Inserat "
                             "und Tag über den Editor.")
@@ -270,7 +271,7 @@ async def _editor_draft(session_id: int, text: str, kind: str, instruction: str 
     listing = db.get_listing(listing_id)
     if listing is None:
         raise LearningError("Inserat nicht gefunden.")
-    _check_editor_limit(listing_id)
+    check_editor_limit(listing_id)
     settings = db.get_settings()
     llm.check_budget(settings)
 
@@ -696,7 +697,7 @@ async def propose_rules(session_id: int) -> list[dict]:
     if session["rules_basis"] == basis:
         return db.list_rules("proposed", session_id=session_id)
     listing_id = session["listing_id"]
-    _check_editor_limit(listing_id)
+    check_editor_limit(listing_id)
     active = db.list_rules("active")
     declined = db.list_rules(("rejected", "inactive"), newest_first=True, limit=RULES_DECLINED_MAX)
     pending = [r for r in db.list_rules("proposed") if r["session_id"] != session_id and r["action"] != "fact"]

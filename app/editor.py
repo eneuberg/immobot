@@ -248,8 +248,10 @@ def _proposals(session: dict) -> tuple[list[dict], list[dict]]:
 
 def _render(request: Request, listing: dict, mode: str, *, message: str | None = None, error: str | None = None,
             critique: str | None = None, lost_text: str | None = None, manual_rule: str | None = None,
-            open_media: bool = False, learn_view: bool = False, undo_dismiss: bool = False, status_code: int = 200):
-    """The editor page; learn_view: its "Was Claude daraus lernt" view (/editor/{id}/lernen, a finished text)."""
+            open_media: bool = False, learn_view: bool = False, undo_dismiss: bool = False,
+            answer: dict | None = None, status_code: int = 200):
+    """The editor page; learn_view: its "Was Claude daraus lernt" view (/editor/{id}/lernen, a finished text).
+    answer: {"question", "answer"} of a "Nur fragen" without JS (with JS editor.js puts it in place)."""
     listing_id = listing["id"]
     session = learning.open_or_create_session(listing_id)
     current = db.get_settings()
@@ -266,7 +268,6 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
         "message": message,
         "undo_dismiss": undo_dismiss,  # "Aussortiert · Rückgängig" after "Aussortieren"
         "error": web.redact(request, error) if error else None,
-        "critique": critique,
         "lost_text": lost_text,
         "manual_rule": manual_rule,  # "Regel selbst eintragen" typed, but refused: shown again
         "use_rules": settings.as_bool(current.get("use_rules")),
@@ -296,6 +297,17 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
         job = _rule_job(session["id"])
         if job and job["state"] == "done" and (learn_view or manual_rule is not None):
             _rule_jobs.pop(session["id"], None)  # shown now: the page lists the proposals
+        # A revision / question running in the background (drafting.start_editor_job): its bar; a failed one: the
+        # error with the critique back in its field; an answered question: the answer (each shown once).
+        editor_job = drafting.take_editor_job(listing_id) if session["status"] == "open" and not learn_view else None
+        if editor_job and editor_job["state"] == "error" and critique is None:
+            critique = editor_job.get("critique")
+        if editor_job and editor_job["state"] == "done" and editor_job["kind"] == drafting.ASK and answer is None:
+            answer = {"question": editor_job.get("critique"), "answer": editor_job.get("answer")}
+        if editor_job and editor_job["state"] == "done":
+            editor_job = None
+        if editor_job and editor_job.get("error"):
+            editor_job = {**editor_job, "error": web.redact(request, editor_job["error"])}
         context.update(
             text=text,
             changed=textdiff.has_changes(textdiff.word_diff(session["original_text"], text)),
@@ -310,12 +322,16 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
             review={**review, "quick_label": learning.QUICK_LABELS.get(review["text"])} if review else None,
             job=job if job and job["state"] != "done" else None,
             job_error=web.redact(request, job["error"]) if job and job.get("error") else None,
+            editor_job=editor_job,
+            revising=bool(editor_job and editor_job["state"] == "running" and editor_job["kind"] != drafting.ASK),
+            answer=answer,
             calls_today=learning.editor_calls_today(listing_id),
             calls_limit=learning.EDITOR_DAILY_LIMIT,
             calls_shown_from=CALLS_SHOWN_FROM,
             # after "Fertig" without proposals and without a running job: may Claude still be asked (button)?
             rule_state=learning.rule_round_state(session) if session["status"] == "done" else "off",
         )
+    context["critique"] = critique
     return web.render(request, "editor.html", context, status_code=status_code)
 
 
@@ -523,18 +539,112 @@ async def editor_revise(request: Request, listing_id: str, token: str = Form("")
     critique, Claude is asked to rework the first paragraph for it (personal_revision)."""
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
-        return denied
+        return _job_denied(request, denied)
     session = _current_session(listing, session_id)
     if session is None:
-        return _stale(request, listing, mode, text)
+        return _job_stale(request, listing, mode, text)
     if _store_personal(listing["id"], personal, own_words, effort_level) and not critique.strip():
         critique = personal_revision(db.get_listing(listing["id"]))
+    if _wants_json(request):
+        if not critique.strip():
+            return _job_error(request, learning.LearningError("Bitte schreiben, was Claude ändern soll."))
+        return _start_job(request, listing, session, "custom", text, critique)
     try:
         learning.save_text(session["id"], text)
         await learning.revise_in_editor(session["id"], text, critique)
     except Exception as exc:
         return _failed(request, listing, mode, exc, critique=critique)
     return _back(listing["id"], "revised", "text")
+
+
+@router.post("/editor/{listing_id}/ask", dependencies=ACTION)
+async def editor_ask(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
+                     text: str = Form(""), critique: str = Form(""), personal: str = Form(""),
+                     own_words: str = Form(""), effort_level: str = Form("")):
+    """"Nur fragen": the critique field holds a question; Claude answers from the ad, the profile and the letter
+    (drafting.ask). The letter isn't changed (only its hand edits saved) and nothing goes into learning. With JS in
+    the background like a revision (editor.js shows the answer under the card), without JS synchronously."""
+    listing, mode, denied = _gate(request, listing_id, token)
+    if denied is not None:
+        return _job_denied(request, denied)
+    session = _current_session(listing, session_id)
+    if session is None:
+        return _job_stale(request, listing, mode, text)
+    _store_personal(listing["id"], personal, own_words, effort_level)
+    if not critique.strip():
+        return _job_error(request, learning.LearningError("Bitte schreiben, was du wissen willst."),
+                          listing=listing, mode=mode)
+    if _wants_json(request):
+        return _start_job(request, listing, session, drafting.ASK, text, critique)
+    try:
+        learning.save_text(session["id"], text)
+        answer = await drafting.ask(listing["id"], critique, text)
+    except Exception as exc:
+        return _failed(request, listing, mode, exc, critique=critique)
+    return _render(request, db.get_listing(listing["id"]) or listing, mode, answer={"question": critique.strip(),
+                                                                                    "answer": answer})
+
+
+@router.get("/editor/{listing_id}/job/status")
+def editor_job_status(request: Request, listing_id: str):
+    """For the progress bar while Claude revises the letter or answers a question (drafting.editor_status): state
+    "running" | "done" | "error" | "idle", the error, the answer (as HTML), elapsed and expected milliseconds and
+    where to go when a revision is done."""
+    lid = _listing_id(listing_id)
+    if lid is None or _access(request, lid) not in ("dashboard", "editor"):
+        return JSONResponse({"state": "denied"}, status_code=403)
+    return _job_answer(request, lid)
+
+
+def _job_answer(request: Request, listing_id: int, status_code: int = 200) -> JSONResponse:
+    job = drafting.editor_status(listing_id)
+    answer = job.pop("answer")
+    message = job.pop("message")
+    job.pop("critique", None)
+    body = {**job, "error": web.redact(request, job["error"]) if job["error"] else None,
+            "answer_html": str(web.templates.env.filters["md"](answer)) if answer else None,
+            "done_url": f"/editor/{listing_id}?m={message}#text" if message and job["state"] == "done" else None}
+    return JSONResponse(body, status_code=status_code)
+
+
+def _start_job(request: Request, listing: dict, session: dict, kind: str, text: str, critique: str = ""):
+    """editor.js's "Überarbeiten lassen" / quick button / "Nur fragen": save the hand edits, check the daily limit
+    and the budget at once (so a refusal shows before the bar), then let drafting run it in the background."""
+    try:
+        learning.save_text(session["id"], text)
+        if not drafting.editor_running(listing["id"]):
+            learning.check_editor_limit(listing["id"])
+            llm.check_budget(db.get_settings())
+    except Exception as exc:
+        return _job_error(request, exc)
+    drafting.start_editor_job(listing["id"], session["id"], kind, text, critique)
+    return _job_answer(request, listing["id"])
+
+
+def _job_error(request: Request, exc: Exception, *, listing: dict | None = None, mode: str | None = None):
+    """A job that couldn't start: JSON for editor.js ({"state": "error", "error"}), else the page with the error."""
+    if not _wants_json(request) and listing is not None:
+        return _failed(request, listing, mode, exc)
+    if isinstance(exc, llm.LLMError):
+        message = str(exc) or GENERIC_ERROR
+    else:
+        log.exception("Editor job could not start")
+        message = GENERIC_ERROR
+    return JSONResponse({"state": "error", "error": web.redact(request, message)}, status_code=400)
+
+
+def _job_denied(request: Request, denied):
+    if not _wants_json(request):
+        return denied
+    status = 401 if isinstance(denied, RedirectResponse) else denied.status_code
+    return JSONResponse({"state": "denied", "error": AUTOSAVE_DENIED.get(status, AUTOSAVE_DENIED[403])},
+                        status_code=status)
+
+
+def _job_stale(request: Request, listing: dict, mode: str, text: str):
+    if not _wants_json(request):
+        return _stale(request, listing, mode, text)
+    return JSONResponse({"state": "stale", "error": STALE_PAGE}, status_code=409)
 
 
 @router.post("/editor/{listing_id}/revision", dependencies=ACTION)
@@ -567,11 +677,15 @@ async def editor_quick(request: Request, listing_id: str, token: str = Form(""),
     field but not sent stays there afterwards."""
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
-        return denied
+        return _job_denied(request, denied)
     session = _current_session(listing, session_id)
     if session is None:
-        return _stale(request, listing, mode, text)
+        return _job_stale(request, listing, mode, text)
     _store_personal(listing["id"], personal, own_words, effort_level)
+    if _wants_json(request):
+        if kind not in learning.QUICK_LABELS:
+            return _job_error(request, learning.LearningError("Unbekannte Aktion."))
+        return _start_job(request, listing, session, kind, text)
     try:
         learning.save_text(session["id"], text)
         await learning.quick_in_editor(session["id"], text, kind)

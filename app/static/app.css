@@ -1023,7 +1023,10 @@ details.notes-box .notes { margin: 0; font-size: .9rem; }
 .ed-diff .diff { font-size: .93rem; }
 .ed-nodiff { margin: 0; font-size: .9rem; }
 .ed-card #ed-critique { margin-bottom: .5rem; }
-.ed-card .ed-revise { width: 100%; margin: 0; }
+.ed-ask-row { display: flex; gap: .45rem; }
+.ed-ask-row button { margin: 0; }
+.ed-card .ed-ask-row .ed-revise { flex: 1 1 auto; width: auto; }
+.ed-card .ed-ask-row .ed-ask-btn { flex: 0 1 auto; width: auto; white-space: nowrap; }
 .ed button[type=button] { font-weight: 600; }  /* Pico's [type=button] rule would make "Kopieren" thinner */
 .ed-card > .ed-history-title:first-child { margin-top: 0; }
 .ed-history-title { margin: 1.1rem 0 .35rem; font-size: .76rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--pico-muted-color); }
@@ -1455,6 +1458,31 @@ html:not(.js) .ed-writing[data-draft-job=running] .draftbar-fill {  /* no JS: no
 html:not(.js) .ed-writing[data-draft-job=idle] .draftbar { display: none; }
 /* ---- editor: progress bar (end) ---- */
 #kritik .personal { margin-top: .2rem; }
+
+/* ---- editor: Claude revises / answers in the background (begin) -- editor.html .ed-job, editor.js, drafting.py ----
+   Same bar as the first draft; data-editor-job: idle (hidden) | running | error. While a revision runs the letter is
+   read-only and its header says so; the answer to "Nur fragen" goes into .ed-answer under the card. */
+.ed-job { margin: .8rem 0 0; }
+.ed-job-title { margin: 0 0 .5rem; font-size: .95rem; font-weight: 600; }
+.ed-job .draftbar-meta { margin-top: .4rem; }
+.ed-job[hidden], .ed-job :is(.draftbar, [data-job-error])[hidden] { display: none; }
+.ed-job:not([data-editor-job=running]) :is(.draftbar-meta, .draftbar-away) { display: none; }
+.ed-job .draftbar-away { margin: .5rem 0 0; font-size: .82rem; }
+.ed-job [data-job-error] { margin: .5rem 0 0; }
+html:not(.js) .ed-job[data-editor-job=running] .draftbar-fill {
+  right: auto; width: 35%; animation: draftbar-sweep 1.6s ease-in-out infinite;
+}
+.ed-revising-badge[hidden] { display: none; }
+#ed-text[readonly] { opacity: .7; background: var(--surface-2); }
+.ed-askhint { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .6rem 0 0; padding: .5rem .65rem;
+  border-radius: var(--radius-sm); background: var(--accent-soft); font-size: .9rem; }
+.ed-askhint[hidden] { display: none; }
+.ed-askhint > span { flex: 1 0 100%; font-weight: 600; color: var(--accent-strong); }
+.ed-askhint button { width: auto; margin: 0; }
+.ed-answer h2 { margin: 0 0 .4rem; font-size: 1rem; }
+.ed-answer-q { margin: 0 0 .45rem; font-size: .9rem; }
+.ed-answer-a > :last-child { margin-bottom: 0; }
+/* ---- editor: background revisions (end) ---- */
 
 /* Bewerbungen (bewerbungen.html, listing page): rows like the cards, the next step folded */
 .ap-funnel { font-size: .92rem; }

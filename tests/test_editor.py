@@ -29,6 +29,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(web, "LOGIN_FAIL_DELAY_S", 0)
     monkeypatch.setattr(editor, "_rule_jobs", {})
     monkeypatch.setattr(drafting, "_jobs", {})
+    monkeypatch.setattr(drafting, "_editor_jobs", {})
+    monkeypatch.setattr(drafting, "_ask_durations", drafting.deque(maxlen=drafting.SAMPLES))
     monkeypatch.setattr(bot, "_locks", {})
     monkeypatch.setattr(learning, "_busy_sessions", set())
     refreshed = []

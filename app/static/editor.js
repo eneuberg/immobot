@@ -1,7 +1,7 @@
 // immobot draft editor (/editor/{id}): comfort on top of plain forms, which work without JS.
 // Autosize, "Kopieren" for the text field, "Kopieren & Inserat öffnen", autosave of the text (with a warning on leaving while it isn't saved),
-// "Claude schreibt …" while revising, a live word diff against Claude's original, polling while Claude looks for
-// rules and the progress bar while Claude writes the first draft. Loaded with defer, only on this page.
+// a live word diff against Claude's original, polling while Claude looks for rules, and the progress bar while Claude
+// writes the first draft, revises the letter or answers a question. Loaded with defer, only on this page.
 (function () {
   "use strict";
 
@@ -364,94 +364,131 @@
     setTimeout(check, 2000);
   }
 
-  // --- the first draft: progress bar while Claude writes it in the background (drafting.py) ------------------------
-  // "idle": start it right away (POST /draft with the form token, as the button would). "running": poll
-  // /draft/status every second; the bar runs to ~93 % at the expected time (the mean of the last drafts), then
-  // creeps on, and "Dauert länger als gewöhnlich" comes 15 s after it. Done: a short run to the end, then the page
-  // with the letter. Error: the bar stops, the text and "Nochmal versuchen" show. A tab in the background stops
-  // polling and checks again when it comes back. Reduced motion: no smooth fill, the seconds as text instead.
-  var job = document.querySelector("[data-draft-job]");
-  if (job) {
-    var bar = job.querySelector("[data-draft-bar]");
+  // --- the progress bar (the first draft, a revision, a question) ------------------------------------------------
+  // Runs to ~93 % at the expected time (the mean of the last ones), then creeps on; "Dauert länger als gewöhnlich"
+  // comes slowAfter ms after that. Reduced motion: no smooth fill, the seconds as text instead.
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var SLOW_TEXT = "Dauert länger als gewöhnlich – bitte noch einen Moment Geduld.";
+  function progressBar(bar, clock, note, slowBox) {
     var fill = bar.querySelector(".draftbar-fill");
-    var title = job.querySelector("[data-draft-title]");
-    var clock = job.querySelector("[data-draft-clock]");
-    var note = job.querySelector("[data-draft-note]");
-    var slowBox = job.querySelector("[data-draft-slow]");
-    var errorBox = job.querySelector("[data-draft-error]");
-    var startForm = job.querySelector("[data-draft-start]");
-    var startButton = startForm.querySelector("[type=submit]");
-    var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    var expected = Number(job.dataset.expectedMs) || 40000;
-    var slowAfter = Number(job.dataset.slowMs) || 15000;
-    var SLOW_TEXT = "Dauert länger als gewöhnlich – bitte noch einen Moment Geduld.";
-    var t0 = null, frame = null, pollTimer = null, failures = 0, restarts = 0, state = job.dataset.draftJob;
-
+    var self = { expected: 40000, slowAfter: 15000, t0: null, frame: null, running: false };
     var progress = function (ms) {  // percent of the bar for ms since the start
-      if (ms <= expected) return 93 * (1 - Math.pow(1 - ms / expected, 1.5));
-      return 93 + 5 * (1 - Math.exp(-(ms - expected) / 30000));  // never quite 100 before it is done
+      if (ms <= self.expected) return 93 * (1 - Math.pow(1 - ms / self.expected, 1.5));
+      return 93 + 5 * (1 - Math.exp(-(ms - self.expected) / 30000));  // never quite 100 before it is done
     };
     var setFill = function (percent) {
       fill.style.transform = "scaleX(" + (percent / 100).toFixed(4) + ")";
       bar.setAttribute("aria-valuenow", String(Math.round(percent)));
     };
-    var setNote = function (seconds) {
-      note.textContent = "Dauert meist etwa " + Math.round(seconds) + " s.";
-    };
-    var stopTimers = function () {
-      if (frame !== null) { if (reduce) clearTimeout(frame); else cancelAnimationFrame(frame); frame = null; }
-      clearTimeout(pollTimer);
+    var stop = function () {
+      if (self.frame !== null) { if (reduce) clearTimeout(self.frame); else cancelAnimationFrame(self.frame); self.frame = null; }
     };
     var tick = function () {
-      frame = null;
-      if (state !== "running") return;
-      var ms = performance.now() - t0;
+      self.frame = null;
+      if (!self.running) return;
+      var ms = performance.now() - self.t0;
       setFill(progress(ms));
-      clock.textContent = reduce || ms > expected ? "seit " + Math.floor(ms / 1000) + " s" : "≈ " + Math.max(1, Math.ceil((expected - ms) / 1000)) + " s";
-      if (ms > expected + slowAfter && !slowBox.textContent) slowBox.textContent = SLOW_TEXT;
-      frame = reduce ? setTimeout(tick, 1000) : requestAnimationFrame(tick);
+      clock.textContent = reduce || ms > self.expected ? "seit " + Math.floor(ms / 1000) + " s" : "≈ " + Math.max(1, Math.ceil((self.expected - ms) / 1000)) + " s";
+      if (ms > self.expected + self.slowAfter && !slowBox.textContent) slowBox.textContent = SLOW_TEXT;
+      self.frame = reduce ? setTimeout(tick, 1000) : requestAnimationFrame(tick);
     };
-    var schedulePoll = function (delay) {
-      clearTimeout(pollTimer);
-      if (document.hidden || state !== "running") return;  // visibilitychange polls again
-      pollTimer = setTimeout(poll, delay);
-    };
-    var running = function (data) {
-      if (data.expected_ms) { expected = data.expected_ms; setNote(expected / 1000); }
-      if (data.slow_after_ms) slowAfter = data.slow_after_ms;
+    // data: {elapsed_ms, expected_ms, slow_after_ms} from the server; follows the server's clock
+    self.run = function (data) {
+      if (data.expected_ms) { self.expected = data.expected_ms; note.textContent = "Dauert meist etwa " + Math.round(self.expected / 1000) + " s."; }
+      if (data.slow_after_ms) self.slowAfter = data.slow_after_ms;
       var since = performance.now() - (data.elapsed_ms || 0);
-      if (state !== "running" || t0 === null || Math.abs(since - t0) > 3000) t0 = since;  // follow the server's clock
-      if (state !== "running") {
-        state = job.dataset.draftJob = "running";
-        title.textContent = "Claude schreibt dein Anschreiben …";
-        bar.classList.remove("is-error");
+      if (!self.running || self.t0 === null || Math.abs(since - self.t0) > 3000) self.t0 = since;
+      if (!self.running) {
+        self.running = true;
+        bar.classList.remove("is-error", "is-done");
         bar.hidden = false;
-        errorBox.hidden = true;
         slowBox.textContent = "";
+        setFill(0);
       }
-      if (frame === null) tick();
-      schedulePoll(1000);
+      if (self.frame === null) tick();
     };
-    var done = function () {
-      state = "done";
-      stopTimers();
-      title.textContent = "Fertig – dein Anschreiben kommt …";
+    self.finish = function (then) {  // a short run to the end, then `then`
+      self.running = false;
+      stop();
       clock.textContent = "";
       slowBox.textContent = "";
-      var go = function () { window.location.replace(job.dataset.doneUrl); };
-      if (reduce) { setFill(100); go(); return; }
+      if (reduce) { setFill(100); then(); return; }
       bar.classList.add("is-done");
       bar.getBoundingClientRect();  // the current width first, so the run to 100 % is animated
       setFill(100);
-      setTimeout(go, 500);
+      setTimeout(then, 500);
     };
-    var failed = function (message) {
-      state = job.dataset.draftJob = "error";
-      stopTimers();
-      title.textContent = "Claude konnte nicht schreiben";
+    self.fail = function () {
+      self.running = false;
+      stop();
       bar.classList.add("is-error");
       clock.textContent = "";
       slowBox.textContent = "";
+    };
+    return self;
+  }
+
+  // Polls a status URL every second while `isRunning()`; a tab in the background stops and checks again when it
+  // comes back. apply(data) gets {state: …} (403: "denied").
+  function poller(url, isRunning, apply) {
+    var timer = null, failures = 0;
+    var self = {};
+    self.schedule = function (delay) {
+      clearTimeout(timer);
+      if (document.hidden || !isRunning()) return;  // visibilitychange polls again
+      timer = setTimeout(self.poll, delay);
+    };
+    self.poll = function () {
+      fetch(url, { cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json" } })
+        .then(function (r) { return r.status === 403 ? { state: "denied" } : (r.ok ? r.json() : Promise.reject(r.status)); })
+        .then(function (data) { failures = 0; apply(data); })
+        .catch(function () { failures += 1; self.schedule(Math.min(5000, 1000 + 1000 * failures)); });
+    };
+    self.cancel = function () { clearTimeout(timer); };
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden && isRunning()) { clearTimeout(timer); self.poll(); }
+    });
+    window.addEventListener("pageshow", function (e) { if (e.persisted && isRunning()) self.poll(); });
+    return self;
+  }
+
+  // --- the first draft: progress bar while Claude writes it in the background (drafting.py) ------------------------
+  // "idle": start it right away (POST /draft with the form token, as the button would). "running": poll
+  // /draft/status every second. Done: a short run to the end, then the page with the letter. Error: the bar stops,
+  // the text and "Nochmal versuchen" show.
+  var job = document.querySelector("[data-draft-job]");
+  if (job) {
+    var title = job.querySelector("[data-draft-title]");
+    var errorBox = job.querySelector("[data-draft-error]");
+    var startForm = job.querySelector("[data-draft-start]");
+    var startButton = startForm.querySelector("[type=submit]");
+    var draftBar = progressBar(job.querySelector("[data-draft-bar]"), job.querySelector("[data-draft-clock]"),
+                               job.querySelector("[data-draft-note]"), job.querySelector("[data-draft-slow]"));
+    draftBar.expected = Number(job.dataset.expectedMs) || 40000;
+    draftBar.slowAfter = Number(job.dataset.slowMs) || 15000;
+    var restarts = 0, state = job.dataset.draftJob;
+    var draftPoll = poller(job.dataset.statusUrl, function () { return state === "running"; }, function (data) { apply(data); });
+
+    var running = function (data) {
+      if (state !== "running") {
+        state = job.dataset.draftJob = "running";
+        title.textContent = "Claude schreibt dein Anschreiben …";
+        errorBox.hidden = true;
+      }
+      draftBar.run(data);
+      draftPoll.schedule(1000);
+    };
+    var done = function () {
+      state = "done";
+      draftPoll.cancel();
+      title.textContent = "Fertig – dein Anschreiben kommt …";
+      draftBar.finish(function () { window.location.replace(job.dataset.doneUrl); });
+    };
+    var failed = function (message) {
+      state = job.dataset.draftJob = "error";
+      draftPoll.cancel();
+      draftBar.fail();
+      title.textContent = "Claude konnte nicht schreiben";
       errorBox.textContent = message || "Unerwarteter Fehler – bitte nochmal versuchen.";
       errorBox.hidden = false;
       startButton.textContent = "Nochmal versuchen";
@@ -468,15 +505,9 @@
       else if (data.state === "idle" && restarts < 1) { restarts += 1; start(); }  // e.g. the server restarted
       else failed("Claude hat aufgehört zu schreiben – bitte nochmal versuchen.");
     };
-    var poll = function () {
-      fetch(job.dataset.statusUrl, { cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json" } })
-        .then(function (r) { return r.status === 403 ? { state: "denied" } : (r.ok ? r.json() : Promise.reject(r.status)); })
-        .then(function (data) { failures = 0; apply(data); })
-        .catch(function () { failures += 1; schedulePoll(Math.min(5000, 1000 + 1000 * failures)); });
-    };
     var start = function () {
       running({ elapsed_ms: 0 });
-      clearTimeout(pollTimer);  // the answer to the start says how it stands
+      draftPoll.cancel();  // the answer to the start says how it stands
       fetch(startForm.action, { method: "POST", body: new FormData(startForm), credentials: "same-origin",
                                 headers: { Accept: "application/json" } })
         .then(function (r) { return r.json(); })
@@ -485,12 +516,157 @@
     };
 
     startForm.addEventListener("submit", function (e) { e.preventDefault(); restarts = 0; start(); });
-    document.addEventListener("visibilitychange", function () {
-      if (!document.hidden && state === "running") { clearTimeout(pollTimer); poll(); }
-    });
-    window.addEventListener("pageshow", function (e) { if (e.persisted && state === "running") poll(); });
     if (state === "idle") start();
     else if (state === "running") running({ elapsed_ms: Number(job.dataset.elapsedMs) || 0 });
+  }
+
+  // --- revisions and "Nur fragen" in the background (drafting.start_editor_job) -------------------------------------
+  // Buttons with data-job post the form as JSON (the server saves the hand edits, starts the job and answers with
+  // its status); the bar under the buttons follows /job/status. A revision makes the letter read-only meanwhile and
+  // replaces the page with the result when it is done (the review with its diff, as before); a question leaves the
+  // letter alone and puts the answer into the box under the card, the question field empties (a question is no
+  // critique: "Fertig" must not keep it as a note). Errors: the bar turns red, the buttons work again.
+  var panel = document.querySelector("[data-editor-job]");
+  if (panel && form) {
+    var jobTitle = panel.querySelector("[data-job-title]");
+    var jobError = panel.querySelector("[data-job-error]");
+    var badge = document.querySelector("[data-revising-badge]");
+    var critiqueField = document.getElementById("ed-critique");
+    var answerBox = document.querySelector("[data-answer]");
+    var askHint = document.querySelector("[data-ask-hint]");
+    var jobBar = progressBar(panel.querySelector("[data-job-bar]"), panel.querySelector("[data-job-clock]"),
+                             panel.querySelector("[data-job-note]"), panel.querySelector("[data-job-slow]"));
+    var jobState = panel.dataset.editorJob, jobKind = panel.dataset.jobKind || "custom";
+    var jobPoll = poller(panel.dataset.statusUrl, function () { return jobState === "running"; }, function (data) { jobApply(data); });
+    var TITLES = { ask: ["Claude beantwortet deine Frage …", "Claude konnte nicht antworten"],
+                   other: ["Claude überarbeitet deinen Text …", "Claude konnte nicht überarbeiten"] };
+    var titles = function () { return TITLES[jobKind === "ask" ? "ask" : "other"]; };
+    var lockText = function (on) {
+      if (!text) return;
+      text.readOnly = on;
+      if (on) text.setAttribute("aria-describedby", "ed-job-title"); else text.removeAttribute("aria-describedby");
+      if (badge) badge.hidden = !on;
+    };
+    var release = function () {  // the form's buttons work again (app.js marked it as sent)
+      delete form.dataset.sent;
+      form.querySelectorAll("[aria-busy=true]").forEach(function (b) { b.removeAttribute("aria-busy"); b.removeAttribute("aria-disabled"); });
+      form.querySelectorAll("[data-idle-label]").forEach(function (b) { b.textContent = b.dataset.idleLabel; delete b.dataset.idleLabel; });
+      leaving = false;
+    };
+    var jobRunning = function (data) {
+      if (data.kind) jobKind = data.kind;
+      if (jobState !== "running") {
+        jobState = panel.dataset.editorJob = "running";
+        jobError.hidden = true;
+      }
+      panel.dataset.jobKind = jobKind;
+      panel.hidden = false;
+      jobTitle.textContent = titles()[0];
+      form.dataset.sent = "1";  // no second action meanwhile
+      lockText(jobKind !== "ask");
+      jobBar.run(data);
+      jobPoll.schedule(1000);
+    };
+    var jobFailed = function (message) {
+      jobState = panel.dataset.editorJob = "error";
+      jobPoll.cancel();
+      jobBar.fail();
+      panel.hidden = false;
+      jobTitle.textContent = titles()[1];
+      jobError.textContent = message || "Unerwarteter Fehler – bitte nochmal versuchen.";
+      jobError.hidden = false;
+      lockText(false);
+      release();
+    };
+    var showAnswer = function (data) {
+      if (!answerBox) return;
+      var question = critiqueField ? critiqueField.value.trim() : "";
+      answerBox.querySelector("[data-answer-q]").textContent = question || answerBox.querySelector("[data-answer-q]").textContent;
+      answerBox.querySelector("[data-answer-a]").innerHTML = data.answer_html || "";  // server-rendered, escaped markdown
+      answerBox.hidden = false;
+      if (critiqueField) { critiqueField.value = ""; autosize(critiqueField); }
+      answerBox.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
+    };
+    var jobDone = function (data) {
+      jobState = "done";
+      jobPoll.cancel();
+      if (jobKind === "ask") {
+        jobBar.finish(function () {
+          panel.hidden = true;
+          panel.dataset.editorJob = "idle";
+          showAnswer(data);
+          release();
+        });
+        return;
+      }
+      jobTitle.textContent = "Fertig – dein Text kommt …";
+      leaving = true;
+      jobBar.finish(function () { window.location.replace(data.done_url || location.pathname + "#text"); });
+    };
+    var jobApply = function (data) {
+      if (jobState === "done") return;
+      if (data.state === "running") jobRunning(data);
+      else if (data.state === "done") jobDone(data);
+      else if (data.state === "error" || data.state === "stale" || data.state === "denied") {
+        jobFailed(data.error || "Sitzung abgelaufen – bitte die Seite neu laden.");
+      } else jobFailed("Claude hat aufgehört – bitte nochmal versuchen.");  // idle: e.g. the server restarted
+    };
+    var startJob = function (btn) {
+      if (text) { clearTimeout(saveTimer); savedValue = text.value; }  // the start saves the text (server side)
+      jobKind = btn.dataset.job;
+      if (askHint) askHint.hidden = true;
+      var data;
+      try { data = new FormData(form, btn); } catch (err) { data = new FormData(form); }
+      if (btn.name && !data.has(btn.name)) data.append(btn.name, btn.value);
+      jobState = "starting";
+      jobRunning({ elapsed_ms: 0, kind: jobKind });
+      jobPoll.cancel();  // the answer to the start says how it stands
+      fetch(btn.formAction, { method: "POST", body: data, credentials: "same-origin", headers: { Accept: "application/json" } })
+        .then(function (r) { return r.json(); })
+        .then(function (res) { jobState = "running"; jobApply(res); })
+        .catch(function () { jobFailed("Keine Verbindung – bitte nochmal versuchen."); });
+    };
+
+    // "Überarbeiten lassen" with something that reads like a question (and nothing else changed): ask first.
+    var QUESTION = /^\s*(wo|was|wann|wie|wer|wieso|warum|welche[rsmn]?|ist|sind|hat|haben|gibt|gibt's|kann|muss|soll)\b[^]*\?\s*$/i;
+    var looksLikeQuestion = function (btn) {
+      return btn.dataset.job === "custom" && critiqueField && QUESTION.test(critiqueField.value) && !btn.dataset.forced;
+    };
+
+    // Registered after app.js (spinner, no double submit) and before submitInPlace below: a data-job button never
+    // reaches it.
+    form.addEventListener("submit", function (e) {
+      var btn = e.submitter;
+      if (!btn || !btn.dataset.job || !window.fetch || !window.FormData) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (jobState === "running" || jobState === "starting") return;  // one at a time
+      if (looksLikeQuestion(btn)) {
+        release();
+        askHint.hidden = false;
+        askHint.querySelector("[data-ask-hint-ask]").focus();
+        return;
+      }
+      delete btn.dataset.forced;
+      if (btn.dataset.idleLabel) { btn.textContent = btn.dataset.idleLabel; delete btn.dataset.idleLabel; }
+      startJob(btn);
+    });
+    if (askHint) {
+      askHint.addEventListener("click", function (e) {
+        var ask = e.target.closest("[data-ask-hint-ask]"), revise = e.target.closest("[data-ask-hint-revise]");
+        if (!ask && !revise) return;
+        askHint.hidden = true;
+        var btn = form.querySelector(ask ? "[data-job=ask]" : "[data-job=custom]");
+        if (revise) btn.dataset.forced = "1";
+        if (form.requestSubmit) form.requestSubmit(btn); else btn.click();
+      });
+      if (critiqueField) critiqueField.addEventListener("input", function () { askHint.hidden = true; });
+    }
+
+    if (jobState === "running") jobRunning({ elapsed_ms: Number(panel.dataset.elapsedMs) || 0,
+                                             expected_ms: Number(panel.dataset.expectedMs) || 0,
+                                             slow_after_ms: Number(panel.dataset.slowMs) || 0 });
+    else if (jobState === "error") jobBar.fail();
   }
 
   if (form && text && window.location.hash === "#text" && window.matchMedia("(min-width: 768px)").matches) {

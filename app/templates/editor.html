@@ -263,6 +263,7 @@
         <header class="ed-card-head">
           <h2><label for="ed-text">Dein Anschreiben</label></h2>
           {% if version_no > 1 %}<span class="badge accent">Fassung {{ version_no }}</span>{% endif %}
+          <span class="badge warn ed-revising-badge" data-revising-badge{% if not revising %} hidden{% endif %}>wird überarbeitet …</span>
           <span class="ed-save" data-save-state role="status"></span>
           <button type="submit" class="linkish ed-save-reload" data-save-reload hidden>Neu laden (Text bleibt erhalten)</button>
           <button type="submit" class="linkish ed-save-nojs nojs-only" title="Speichern, ohne Claude">Zwischenspeichern</button>
@@ -285,7 +286,8 @@
           </div>
         </div>
         {% endif %}
-        <textarea id="ed-text" name="text" rows="12" maxlength="20000" spellcheck="true" data-autosize>{{ text }}</textarea>
+        <textarea id="ed-text" name="text" rows="12" maxlength="20000" spellcheck="true" data-autosize
+          {%- if revising %} readonly aria-describedby="ed-job-title"{% endif %}>{{ text }}</textarea>
         <div class="ed-bar">
           <button type="submit" formaction="/editor/{{ listing.id }}/finish" data-copy-open
             {%- if contact_url %} data-go="{{ open_path(listing.id) }}"{% endif %} aria-describedby="ed-done-note">
@@ -297,28 +299,67 @@
 
     <div class="ed-side">
       <article class="ed-card" id="kritik">
-        <h2><label for="ed-critique">Was soll Claude ändern?</label></h2>
+        <h2><label for="ed-critique">Ändern lassen oder fragen</label></h2>
         {# "Wie viel Mühe?" and one line of her own: go into every revision (llm.personal_block); changed alone,
            "Überarbeiten lassen" reworks the first paragraph for them (editor.personal_revision). #}
         {{ personal_fields(listing, "ed") }}
-        <textarea id="ed-critique" name="critique" rows="2" placeholder="z. B. Homeoffice erwähnen, Balkon weglassen, persönlicher">{{ critique or "" }}</textarea>
+        <textarea id="ed-critique" name="critique" rows="2" placeholder="z. B. Homeoffice erwähnen, Balkon weglassen – oder fragen: Ab wann ist sie frei?">{{ critique or "" }}</textarea>
         {% if calls_today >= calls_shown_from %}<p class="help">Heute schon {{ calls_today }} von {{ calls_limit }} Claude-Aufrufen für dieses Inserat.</p>{% endif %}
-        <button type="submit" formaction="/editor/{{ listing.id }}/revise" class="secondary outline ed-revise" data-busy-label="Claude schreibt …">Überarbeiten lassen <small>(10–60 s)</small></button>
+        {# Claude's actions run in the background with JS (data-job: editor.js posts them as JSON and shows the bar
+           below; drafting.start_editor_job), without JS as plain form posts that wait for Claude. "Nur fragen"
+           changes nothing at the letter and is no feedback (editor.editor_ask). #}
+        <div class="ed-ask-row">
+          <button type="submit" formaction="/editor/{{ listing.id }}/revise" class="secondary outline ed-revise" data-job="custom"
+                  data-busy-label="Claude schreibt …">Überarbeiten lassen</button>
+          <button type="submit" formaction="/editor/{{ listing.id }}/ask" class="secondary outline ed-ask-btn" data-job="ask"
+                  data-busy-label="Claude antwortet …" title="Claude beantwortet eine Frage zum Inserat oder zu deinem Text – der Text bleibt, wie er ist">Nur fragen</button>
+        </div>
+        {# "Überarbeiten lassen" with something that reads like a question: editor.js asks first (no JS: no check) #}
+        <div class="ed-askhint" data-ask-hint role="group" aria-label="Frage erkannt" hidden>
+          <span>Das klingt nach einer Frage – nur fragen?</span>
+          <button type="button" class="btn-sm" data-ask-hint-ask>Nur fragen</button>
+          <button type="button" class="secondary outline btn-sm" data-ask-hint-revise>Trotzdem überarbeiten</button>
+        </div>
+        {% set ej = editor_job %}
+        {% set ej_expected_s = (((ej.expected_ms if ej else 35000) or 35000) / 1000)|round|int %}
+        <div class="ed-job" data-editor-job="{{ ej.state if ej else 'idle' }}" data-job-kind="{{ ej.kind if ej else '' }}"
+          data-status-url="/editor/{{ listing.id }}/job/status" data-expected-ms="{{ ej.expected_ms if ej else '' }}"
+          data-elapsed-ms="{{ ej.elapsed_ms if ej else 0 }}" data-slow-ms="{{ ej.slow_after_ms if ej else '' }}"{% if not ej %} hidden{% endif %}>
+          <p class="ed-job-title" id="ed-job-title" data-job-title>
+            {%- if ej and ej.state == "error" %}{{ "Claude konnte nicht antworten" if ej.kind == "ask" else "Claude konnte nicht überarbeiten" }}
+            {%- elif ej and ej.kind == "ask" %}Claude beantwortet deine Frage …
+            {%- else %}Claude überarbeitet deinen Text …{% endif -%}
+          </p>
+          <div class="draftbar" data-job-bar role="progressbar" aria-labelledby="ed-job-title" aria-valuemin="0" aria-valuemax="100"
+            aria-valuenow="0"{% if ej and ej.state == "error" %} hidden{% endif %}><span class="draftbar-fill"></span></div>
+          <p class="draftbar-meta"><span data-job-note>Dauert meist etwa {{ ej_expected_s }} s.</span>
+            <span class="draftbar-clock" data-job-clock></span></p>
+          <p class="draftbar-slow" data-job-slow aria-live="polite"></p>
+          <div class="flash err" role="alert" data-job-error{% if not (ej and ej.error) %} hidden{% endif %}>{{ ej.error if ej and ej.error else "" }}</div>
+          <p class="help draftbar-away" data-job-away>Du kannst die Seite verlassen – Claude arbeitet weiter.</p>
+          {% if ej and ej.state == "running" %}<noscript><p class="help">Seite gleich neu laden, um das Ergebnis zu sehen.</p></noscript>{% endif %}
+        </div>
         {# Quick buttons (editor.py editor_quick), like Telegram's. "Ganz neu schreiben" starts a new round: it asks
            first when the text differs from Claude's original (editor.js keeps data-confirm up to date while typing). #}
         {% set regen_question = "Dein Text samt deinen Änderungen wird durch ein ganz neues Anschreiben ersetzt. Trotzdem neu schreiben?" %}
         <div class="ed-quick" role="group" aria-labelledby="ed-quick-label">
           <span class="ed-quick-label" id="ed-quick-label">Oder mit einem Tipp:</span>
-          <button type="submit" formaction="/editor/{{ listing.id }}/quick" name="kind" value="shorter" class="secondary outline"
+          <button type="submit" formaction="/editor/{{ listing.id }}/quick" name="kind" value="shorter" class="secondary outline" data-job="shorter"
                   title="Auf etwa 60 % kürzen" data-busy-label="Claude kürzt …">Kürzer</button>
-          <button type="submit" formaction="/editor/{{ listing.id }}/quick" name="kind" value="formal" class="secondary outline"
+          <button type="submit" formaction="/editor/{{ listing.id }}/quick" name="kind" value="formal" class="secondary outline" data-job="formal"
                   title="Sie-Form, sachlich-höflicher Ton" data-busy-label="Claude schreibt …">Förmlicher</button>
-          <button type="submit" formaction="/editor/{{ listing.id }}/quick" name="kind" value="regenerate" class="secondary outline"
+          <button type="submit" formaction="/editor/{{ listing.id }}/quick" name="kind" value="regenerate" class="secondary outline" data-job="regenerate"
                   title="Neues Anschreiben, deutlich anders als dieses" data-busy-label="Claude schreibt neu …"
                   data-confirm-changed="{{ regen_question }}"{% if changed %} data-confirm="{{ regen_question }}"{% endif %}>Ganz neu schreiben</button>
         </div>
         {% if history or notes %}{{ history_list() }}{% endif %}
       </article>
+      {# The last answer to "Nur fragen": until the next question or reload; never part of the letter or of learning #}
+      <section class="ed-card ed-answer" data-answer aria-labelledby="ed-answer-title" aria-live="polite"{% if not answer %} hidden{% endif %}>
+        <h2 id="ed-answer-title">Claudes Antwort</h2>
+        <p class="ed-answer-q"><span class="muted">Deine Frage:</span> <span data-answer-q>{{ answer.question if answer else "" }}</span></p>
+        <div class="md ed-answer-a" data-answer-a>{% if answer %}{{ answer.answer|md }}{% endif %}</div>
+      </section>
       <details class="disclosure ed-diff">
         <summary>Deine Änderungen an Claudes Entwurf <span class="badge {{ 'warn' if changed else '' }}" data-diff-state>{{ "geändert" if changed else "keine" }}</span></summary>
         <div class="disclosure-body" data-diff data-original="{{ session.original_text }}">

@@ -918,11 +918,18 @@ def add_draft(
         return cur.lastrowid
 
 
-def recent_draft_durations(kind: str = "initial", limit: int = 20) -> list[int]:
-    """duration_ms of the newest `limit` drafts of `kind` that have one (newest first)."""
+def recent_draft_durations(kind: str | tuple[str, ...] = "initial", limit: int = 20,
+                           source: str | None = None) -> list[int]:
+    """duration_ms of the newest `limit` drafts of `kind` (one kind or several) that have one (newest first);
+    with `source` only drafts from there ("editor": the editor's revisions)."""
+    kinds = (kind,) if isinstance(kind, str) else tuple(kind)
+    sql = f"SELECT duration_ms FROM drafts WHERE kind IN ({_placeholders(kinds)}) AND duration_ms IS NOT NULL"
+    params: list = list(kinds)
+    if source is not None:
+        sql += " AND source = ?"
+        params.append(source)
     with connect() as conn:
-        rows = conn.execute("SELECT duration_ms FROM drafts WHERE kind = ? AND duration_ms IS NOT NULL "
-                            "ORDER BY id DESC LIMIT ?", (kind, limit)).fetchall()
+        rows = conn.execute(sql + " ORDER BY id DESC LIMIT ?", (*params, limit)).fetchall()
     return [int(row["duration_ms"]) for row in rows]
 
 
