@@ -98,20 +98,20 @@
       {% if hint %}{{ hints_box(hint, hint_flag, open=hint_flag and hint_flag.alarm) }}{% endif %}
 
       {# ---- one main action (begin) ----
-         What comes next for this listing: write (Claude drafts, then the editor opens), go on writing, or look at the
-         finished text (the editor asks "Abgeschickt?"). Beside it the ad itself and "Uninteressant"; the rest
+         What comes next for this listing: write ("✍️ Anschreiben": the editor opens at once and shows a progress bar
+         while Claude writes, web.listing_create_draft), go on writing, or look at the finished text (the editor asks
+         "Abgeschickt?"). Beside it the ad itself and "Uninteressant"; the rest
          ("Als gesendet markieren", Fredy) is under "Mehr". #}
       {% set done = session and session.status == "done" %}
       <div class="lh-actions">
         {% if not drafts %}
         <form method="post" action="/listing/{{ listing.id }}/draft" data-once class="lh-main lh-write">
-          <input type="hidden" name="then" value="editor">
           {{ personal_fields(listing, "lp") }}
-          <button type="submit" data-busy-label="Claude schreibt …">{{ icon("pen") }} Anschreiben schreiben lassen</button>
+          <button type="submit">{{ icon("pen") }} {{ "Claude schreibt … – ansehen" if writing else "Anschreiben" }}</button>
         </form>
         {% else %}
         <a href="/editor/{{ listing.id }}" role="button" class="lh-main">{{ icon("pen") }}
-          {%- if listing.status == "sent" %} Anschreiben ansehen{% elif done %} Fertiges Anschreiben öffnen{% else %} Anschreiben bearbeiten{% endif %}</a>
+          {%- if listing.status == "sent" %} Anschreiben ansehen{% elif done %} Fertiges Anschreiben öffnen{% else %} Anschreiben öffnen{% endif %}</a>
         {% endif %}
         {% if contact_url %}<a href="{{ open_path(listing.id) }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline" data-opens-listing>Inserat öffnen ↗</a>{% endif %}
         {% if not listing.discard_reason and listing.status != "sent" %}
@@ -119,7 +119,7 @@
           <button type="submit" class="secondary outline">❌ Uninteressant</button></form>
         {% endif %}
       </div>
-      {% if not drafts %}<p class="help lh-main-help">Claude schreibt mit deinem Profil, das dauert 10–60 Sekunden. Danach öffnet sich der Editor.</p>{% endif %}
+      {% if not drafts %}<p class="help lh-main-help">Der Editor öffnet sich sofort – Claude schreibt dort mit deinem Profil, ein Balken zeigt, wie weit.</p>{% endif %}
       {# ---- one main action (end) ---- #}
 
       {# ---- status (begin) ----
@@ -261,14 +261,9 @@
     <footer class="chips">{{ draft_meta(d) }}</footer>
   </article>
   {% else %}
-  <p class="muted">Noch kein Anschreiben. „Anschreiben schreiben lassen“ oben schreibt eins mit deinem Profil.</p>
+  <p class="muted">Noch kein Anschreiben. „Anschreiben“ oben öffnet den Editor, Claude schreibt dort eins mit deinem Profil.</p>
   {% endfor %}
-  {% if drafts %}
-  <form method="post" action="/listing/{{ listing.id }}/draft" data-once class="lh-regen">
-    <button type="submit" class="secondary outline">{{ icon("pen") }} Neues Anschreiben erzeugen</button>
-    <small class="muted">Ruft Claude auf (ein paar Cent, einige Sekunden). Ändern geht am besten im Editor.</small>
-  </form>
-  {% endif %}
+  {% if drafts %}<p class="help">Neu schreiben, kürzen oder ändern: im Editor („Anschreiben öffnen“ oben).</p>{% endif %}
   </div>
 </details>
 {% endblock %}

@@ -228,7 +228,8 @@ def test_followup_generating_and_collapsed_views():
     listing = listing_dict(id=12)
     text, markup = bot.followup_view(listing)
     assert text == bot.header(listing)
-    assert callback_data(markup) == [["gen:12", "skip:12"], ["img:12"]]  # IS24 listing: pictures button
+    assert callback_data(markup) == [["gen:12"], ["skip:12"]]  # no public address: "✍️ Anschreiben" writes here
+    assert "🖼 Bilder" not in str(texts(markup))
     assert bot.generating_text(listing).endswith("\n\n⏳ schreibe Entwurf …")
 
     text, markup = bot.collapsed_view(listing_dict(id=12, status="sent", title="A & B"))
@@ -249,7 +250,7 @@ def test_offline_and_stale_views_have_only_links(fresh_vault):
     assert list(markup.inline_keyboard) == []  # no dashboard address known yet: no links either
     assert bot.current_view(gone)[0] == text
     bot.init_public_url("https://immobot.example.com")
-    assert texts(bot.collapsed_view(gone)[1]) == [["📝 Bearbeiten", "🔗 Dashboard"]]
+    assert texts(bot.collapsed_view(gone)[1]) == [["✍️ Anschreiben", "🔗 Dashboard"]]
     assert texts(bot.collapsed_view(gone, editor=False)[1]) == [["🔗 Dashboard"]]
     old = listing_dict(id=12, status="seen", discard_reason="veraltet")
     text, markup = bot.collapsed_view(old)
@@ -274,9 +275,9 @@ def test_draft_keyboard_layout_with_contact_url(monkeypatch):
 def test_draft_keyboard_omits_url_button_without_contact_url(monkeypatch):
     monkeypatch.setattr(portals, "contact_url", lambda provider, url: None)
     rows = bot.draft_keyboard(listing_dict(id=12)).inline_keyboard
-    assert len(rows) == 4
+    assert len(rows) == 3  # no "🖼 Bilder" row any more, no dashboard address known
     assert [b.callback_data for b in rows[1]] == ["edit:12"]
-    assert [b.callback_data for b in rows[3]] == ["img:12"]
+    assert [b.callback_data for b in rows[2]] == ["sent:12", "skip:12"]
 
 
 def texts(markup):
@@ -284,26 +285,31 @@ def texts(markup):
 
 
 def test_draft_keyboard_editor_first(fresh_vault, monkeypatch):
-    """With a usable "📝 Bearbeiten" button the editor replaces Neu / Kürzer / Förmlicher / Anpassen."""
+    """With a usable editor button ("✍️ Anschreiben") the editor replaces Neu / Kürzer / Förmlicher / Anpassen."""
     monkeypatch.setattr(portals, "contact_url", lambda provider, url: "https://example.org/contact")
     monkeypatch.setattr(bot, "_public_base", "https://immobot.example.com")
     rows = bot.draft_keyboard(listing_dict(id=12)).inline_keyboard
     assert texts(bot.draft_keyboard(listing_dict(id=12))) == [
-        ["📝 Bearbeiten", "📨 Inserat öffnen ↗"], ["✅ Gesendet", "❌ Uninteressant"], ["🖼 Bilder", "🔗 Dashboard"]]
+        ["✍️ Anschreiben", "📨 Inserat öffnen ↗"], ["✅ Gesendet", "❌ Uninteressant"], ["🔗 Dashboard"]]
     editor, open_listing = rows[0]
     assert editor.login_url.url.startswith("https://immobot.example.com/e/12/") and editor.callback_data is None
     assert open_listing.url == "https://immobot.example.com" + editor_access.make_open_path(12)  # records the opening
     assert [b.callback_data for b in rows[1]] == ["sent:12", "skip:12"]
     monkeypatch.setattr(portals, "contact_url", lambda provider, url: None)
-    assert texts(bot.draft_keyboard(listing_dict(id=12)))[0] == ["📝 Bearbeiten"]
-    # a listing without a draft gets it next to "✍️ Anschreiben"; collapsed messages never carry it
+    assert texts(bot.draft_keyboard(listing_dict(id=12)))[0] == ["✍️ Anschreiben"]
+    # a listing without a draft: "✍️ Anschreiben" is the editor button (the editor starts the draft), beside it the
+    # dashboard where "📝 Bearbeiten" was; collapsed messages never carry the button
     followup = bot.followup_view(listing_dict(id=12))[1]
-    assert texts(followup)[:2] == [["✍️ Anschreiben", "📝 Bearbeiten"], ["❌ Uninteressant"]]
-    assert followup.inline_keyboard[0][1].login_url.url.startswith("https://immobot.example.com/e/12/")
-    assert texts(bot.followup_view(listing_dict(id=12), editor=False)[1])[0] == ["✍️ Anschreiben", "❌ Uninteressant"]
+    assert texts(followup) == [["✍️ Anschreiben", "🔗 Dashboard"], ["❌ Uninteressant"]]
+    write, dashboard = followup.inline_keyboard[0]
+    assert write.login_url.url.startswith("https://immobot.example.com/e/12/") and write.callback_data is None
+    assert dashboard.url == "https://immobot.example.com/listing/12"
+    without = bot.followup_view(listing_dict(id=12), editor=False)[1]  # the retry after a rejection
+    assert texts(without) == [["✍️ Anschreiben", "🔗 Dashboard"], ["❌ Uninteressant"]]
+    assert callback_data(without)[0][0] == "gen:12"
     assert not any(b.login_url for row in bot.collapsed_view(listing_dict())[1].inline_keyboard for b in row)
     bot.db.set_meta(bot.EDITOR_BUTTON_ERROR_META, "2026-10-13T07:12:00+00:00 Telegram lehnt den Editor-Button ab.")
-    assert texts(bot.followup_view(listing_dict(id=12))[1])[0] == ["✍️ Anschreiben", "❌ Uninteressant"]
+    assert callback_data(bot.followup_view(listing_dict(id=12))[1])[0][0] == "gen:12"
 
 
 def test_draft_keyboard_full_layout_while_telegram_rejects_the_button(fresh_vault, monkeypatch):
@@ -313,16 +319,16 @@ def test_draft_keyboard_full_layout_while_telegram_rejects_the_button(fresh_vaul
     rows = bot.draft_keyboard(listing_dict(id=12)).inline_keyboard
     # the full layout, still trying the button so that it notices when the domain is linked
     assert [[b.text for b in row] for row in rows] == [
-        ["🔁 Neu", "✂️ Kürzer", "🎩 Förmlicher"], ["📝 Bearbeiten", "✏️ Anpassen"], ["📨 Inserat öffnen ↗"],
-        ["✅ Gesendet", "❌ Uninteressant"], ["🖼 Bilder", "🔗 Dashboard"]]
+        ["🔁 Neu", "✂️ Kürzer", "🎩 Förmlicher"], ["✍️ Anschreiben", "✏️ Anpassen"], ["📨 Inserat öffnen ↗"],
+        ["✅ Gesendet", "❌ Uninteressant"], ["🔗 Dashboard"]]
     assert rows[1][0].login_url is not None and rows[1][1].callback_data == "edit:12"
     # the retry after a rejection: the full layout without it, as without a public address (minus "🔗 Dashboard")
     full = [["🔁 Neu", "✂️ Kürzer", "🎩 Förmlicher"], ["✏️ Anpassen", "📨 Inserat öffnen ↗"],
             ["✅ Gesendet", "❌ Uninteressant"]]
-    assert texts(bot.draft_keyboard(listing_dict(id=12), editor=False)) == full + [["🖼 Bilder", "🔗 Dashboard"]]
+    assert texts(bot.draft_keyboard(listing_dict(id=12), editor=False)) == full + [["🔗 Dashboard"]]
     monkeypatch.setattr(bot, "_public_base", None)
     bot.db.delete_meta(bot.EDITOR_BUTTON_ERROR_META)
-    assert texts(bot.draft_keyboard(listing_dict(id=12))) == full + [["🖼 Bilder"]]
+    assert texts(bot.draft_keyboard(listing_dict(id=12))) == full
 
 
 class PickyBot(FakeBot):
@@ -365,10 +371,10 @@ def test_rejected_editor_button_falls_back_and_is_noted(tg, monkeypatch):
 
     picky.error = None  # domain linked now: the next message keeps the button and the note goes away
     press(picky, f"formal:{listing_id}")
-    assert texts(picky.edits[-2]["reply_markup"])[1] == ["📝 Bearbeiten", "✏️ Anpassen"]  # full layout, button accepted
+    assert texts(picky.edits[-2]["reply_markup"])[1] == ["✍️ Anschreiben", "✏️ Anpassen"]  # full layout, button accepted
     assert bot.editor_button_error() is None
     assert texts(picky.edits[-1]["reply_markup"]) == [  # from then on: editor first
-        ["📝 Bearbeiten", "📨 Inserat öffnen ↗"], ["✅ Gesendet", "❌ Uninteressant"], ["🔗 Dashboard"]]
+        ["✍️ Anschreiben", "📨 Inserat öffnen ↗"], ["✅ Gesendet", "❌ Uninteressant"], ["🔗 Dashboard"]]
 
 
 def test_rejected_editor_button_on_a_listing_without_draft(tg, monkeypatch):
@@ -378,7 +384,16 @@ def test_rejected_editor_button_on_a_listing_without_draft(tg, monkeypatch):
     picky = PickyBot()
     asyncio.run(bot._edit(picky, db.get_listing(listing_id), "text", bot.followup_view(db.get_listing(listing_id))[1]))
     assert picky.rejected == 1
-    assert texts(picky.edits[-1]["reply_markup"])[0] == ["✍️ Anschreiben", "❌ Uninteressant"]  # not a draft keyboard
+    retried = picky.edits[-1]["reply_markup"]  # not a draft keyboard; "✍️ Anschreiben" writes right in Telegram
+    assert texts(retried) == [["✍️ Anschreiben", "🔗 Dashboard"], ["❌ Uninteressant"]]
+    assert callback_data(retried)[0][0] == f"gen:{listing_id}"
+
+    # a new message (announce) is retried the same way: "✍️ Anschreiben" stays, as the "gen" callback
+    db.delete_meta(bot.EDITOR_BUTTON_ERROR_META)
+    picky = PickyBot()
+    asyncio.run(bot._send(picky, CHAT, *bot.followup_view(db.get_listing(listing_id)), listing=db.get_listing(listing_id)))
+    assert picky.rejected == 1
+    assert callback_data(picky.sent[-1]["reply_markup"]) == [[f"gen:{listing_id}", None], [f"skip:{listing_id}"]]
 
 
 def test_editor_button_fallback_when_sending_and_other_errors(tg, monkeypatch, fresh_vault):
@@ -503,7 +518,7 @@ def test_announce_sends_followups_and_stores_message_ids(tg, monkeypatch):
     assert call["chat_id"] == CHAT and call["parse_mode"] == "HTML"
     assert call["link_preview_options"].is_disabled is True
     assert "Erste &lt;Wohnung&gt;" in call["text"]
-    assert callback_data(call["reply_markup"]) == [[f"gen:{first}", f"skip:{first}"]]
+    assert callback_data(call["reply_markup"]) == [[f"gen:{first}"], [f"skip:{first}"]]
     assert db.get_listing(first)["tg_message_id"] == 101
     assert db.get_listing(second)["tg_message_id"] == 102
 
@@ -596,7 +611,7 @@ def test_gen_shows_an_existing_draft_instead_of_writing_one(tg, monkeypatch):
     final = tg.edits[-1]
     assert final["message_id"] == 556 and "<pre>Aus dem &lt;Dashboard&gt;</pre>" in final["text"]
     assert final["text"].endswith("\n\n⚠️ " + bot.DRAFT_EXISTS)
-    assert texts(final["reply_markup"])[0] == ["📝 Bearbeiten", "📨 Inserat öffnen ↗"]
+    assert texts(final["reply_markup"])[0] == ["✍️ Anschreiben", "📨 Inserat öffnen ↗"]
 
     finished = db.latest_draft(other)  # a finished editor session: its Endversion is shown
     session_id = db.create_session(other, finished["id"], finished["text"], None)
@@ -624,7 +639,7 @@ def test_llm_error_restores_view_with_warning(tg, monkeypatch):
 
     final = tg.edits[-1]
     assert final["text"].endswith("\n\n⚠️ Monatsbudget von 15 $ erreicht.")
-    assert callback_data(final["reply_markup"]) == [[f"gen:{listing_id}", f"skip:{listing_id}"]]
+    assert callback_data(final["reply_markup"]) == [[f"gen:{listing_id}"], [f"skip:{listing_id}"]]
     assert db.get_listing(listing_id)["status"] == "seen"  # the button press counted as seen, no draft
 
 
@@ -683,7 +698,7 @@ def test_sent_skip_and_undo(tg, monkeypatch):
 
     press(tg, f"undo:{listing_id}")  # "Gesendet" undone, no draft yet -> "Gesehen" + follow-up buttons
     assert db.get_listing(listing_id)["status"] == "seen"
-    assert callback_data(tg.edits[-1]["reply_markup"]) == [[f"gen:{listing_id}", f"skip:{listing_id}"]]
+    assert callback_data(tg.edits[-1]["reply_markup"]) == [[f"gen:{listing_id}"], [f"skip:{listing_id}"]]
 
     db.add_draft(listing_id, "test", "Testentwurf", "claude-opus-5-5")  # test drafts don't count
     press(tg, f"skip:{listing_id}")
@@ -1380,7 +1395,7 @@ def test_pictures_button_without_pictures_shows_error_and_keeps_buttons(tg, albu
     assert album_bot.albums == [] and album_bot.photos == []
     edit = album_bot.edits[-1]
     assert edit["text"].endswith("⚠️ Bilder: Exposé nicht abrufbar (HTTP 404).")
-    assert callback_data(edit["reply_markup"]) == [[f"gen:{listing_id}", f"skip:{listing_id}"], [f"img:{listing_id}"]]
+    assert callback_data(edit["reply_markup"]) == [[f"gen:{listing_id}"], [f"skip:{listing_id}"]]
     assert bot.db.get_listing(listing_id)["album_message_id"] is None
 
 
@@ -1408,25 +1423,29 @@ def test_pictures_button_works_while_a_draft_is_generated(tg, album_listing):
     album_bot = AlbumBot()
 
     async def main():
-        async with bot._lock(listing_id):  # a generation is running for this listing
+        async with bot.listing_lock(listing_id):  # a generation is running for this listing
             await bot._on_callback(callback_update(FakeQuery(f"img:{listing_id}")), SimpleNamespace(bot=album_bot))
 
     asyncio.run(main())
     assert len(album_bot.albums) == 1
 
 
-def test_keyboards_have_pictures_and_dashboard_buttons(fresh_vault, monkeypatch):
+def test_keyboards_have_dashboard_but_no_pictures_buttons(fresh_vault, monkeypatch):
+    """"🖼 Bilder" is gone from every keyboard (its callback still answers old messages); "🔗 Dashboard" links the
+    listing's dashboard page whenever the public address is known, and "📝 Bearbeiten" is never there."""
     is24_listing = listing_dict(id=12, url=IS24_URL)
     other = listing_dict(id=13, provider="immowelt", url="https://www.immowelt.de/expose/x")
     assert bot.followup_view(other)[1].inline_keyboard[-1][-1].callback_data == "skip:13"  # no extra row
     monkeypatch.setattr(bot, "_public_base", "https://immobot.example.de")
-    for markup, extra in [(bot.followup_view(is24_listing)[1], ["img:12"]), (bot.draft_keyboard(is24_listing), ["img:12"]),
-                          (bot.followup_view(other)[1], [])]:
-        row = markup.inline_keyboard[-1]
-        assert [b.callback_data for b in row if b.callback_data] == extra
-        assert row[-1].text == "🔗 Dashboard" and row[-1].url.endswith("/listing/" + str(row[-1].url.split("/")[-1]))
+    for markup in [bot.followup_view(is24_listing)[1], bot.draft_keyboard(is24_listing),
+                   bot.draft_keyboard(is24_listing, editor=False), bot.followup_view(other)[1],
+                   bot.followup_view(is24_listing, editor=False)[1]]:
+        labels = [b.text for row in markup.inline_keyboard for b in row]
+        assert "🖼 Bilder" not in labels and "📝 Bearbeiten" not in labels and "🔗 Dashboard" in labels
+        assert not any(b.callback_data == "img:12" for row in markup.inline_keyboard for b in row)
         assert all(len(r) <= 3 for r in markup.inline_keyboard)
-    assert bot.followup_view(is24_listing)[1].inline_keyboard[-1][-1].url == "https://immobot.example.de/listing/12"
+    assert bot.followup_view(is24_listing)[1].inline_keyboard[0][-1].url == "https://immobot.example.de/listing/12"
+    assert bot.draft_keyboard(is24_listing).inline_keyboard[-1][-1].url == "https://immobot.example.de/listing/12"
 
 
 @pytest.mark.parametrize("url,expected", [
@@ -1560,3 +1579,45 @@ def test_kleinanzeigen_listing_is_posted_with_album_and_badge(tg, monkeypatch):
     (message,) = album_bot.sent
     assert "<b>🟢 Kleinanzeigen</b>" in message["text"]
     assert db.get_listing(listing_id)["tg_message_id"] == 101
+
+
+def test_old_gen_button_waits_for_the_editor_draft(tg, monkeypatch):
+    """The editor's background draft (drafting.py) holds the listing's lock: an old "✍️ Anschreiben" (gen) callback
+    pressed meanwhile only says it is running, and once the draft is there it shows it instead of writing one."""
+    from app import drafting
+    db = bot.db
+    listing_id = add_listing(db)
+    calls = fake_llm(monkeypatch, db)
+    monkeypatch.setattr(drafting, "_jobs", {})
+    started = []
+
+    async def editor_draft(lid, kind, instruction=None, *, source="dashboard", record_feedback=True):
+        started.append((lid, kind, source))
+        await asyncio.sleep(0.1)
+        db.add_draft(lid, kind, "Aus dem Editor", "claude-opus-5-5")
+        return db.latest_draft(lid)
+
+    async def main():
+        monkeypatch.setattr(llm, "create_and_store_draft", editor_draft)
+        drafting.start(listing_id)
+        await asyncio.sleep(0.02)
+        query = FakeQuery(f"gen:{listing_id}")
+        await bot._on_callback(callback_update(query), SimpleNamespace(bot=tg))
+        assert query.answers == [bot.BUSY]
+        while drafting.status(listing_id)["state"] == "running":
+            await asyncio.sleep(0.01)
+
+    asyncio.run(main())
+    assert started == [(listing_id, "initial", "editor")] and drafting.status(listing_id)["state"] == "done"
+    fake_llm(monkeypatch, db)
+    press(tg, f"gen:{listing_id}")  # old message, draft there now: shown, nothing written
+    assert calls == [] and "Aus dem Editor" in tg.edits[-1]["text"]
+
+
+def test_old_img_button_still_answers(tg, monkeypatch):
+    """"🖼 Bilder" is gone from the keyboards; a press on an old message must still be answered, never crash."""
+    listing_id = add_listing(bot.db)  # not an IS24 URL: no gallery
+    query = press(tg, f"img:{listing_id}")
+    assert query.answers == [bot.NO_PICTURES_HERE]
+    assert bot.parse_callback(f"img:{listing_id}") == ("img", listing_id)
+    assert bot.parse_callback(f"gen:{listing_id}") == ("gen", listing_id)

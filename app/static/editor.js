@@ -1,7 +1,7 @@
 // immobot draft editor (/editor/{id}): comfort on top of plain forms, which work without JS.
 // Autosize, "Kopieren" for the text field, "Kopieren & Inserat öffnen", autosave of the text (with a warning on leaving while it isn't saved),
-// "Claude schreibt …" while revising, a live word diff against Claude's original and polling while Claude looks for
-// rules. Loaded with defer, only on this page.
+// "Claude schreibt …" while revising, a live word diff against Claude's original, polling while Claude looks for
+// rules and the progress bar while Claude writes the first draft. Loaded with defer, only on this page.
 (function () {
   "use strict";
 
@@ -362,6 +362,134 @@
         .catch(function () { if (tries < 240) setTimeout(check, 5000); });
     };
     setTimeout(check, 2000);
+  }
+
+  // --- the first draft: progress bar while Claude writes it in the background (drafting.py) ------------------------
+  // "idle": start it right away (POST /draft with the form token, as the button would). "running": poll
+  // /draft/status every second; the bar runs to ~93 % at the expected time (the mean of the last drafts), then
+  // creeps on, and "Dauert länger als gewöhnlich" comes 15 s after it. Done: a short run to the end, then the page
+  // with the letter. Error: the bar stops, the text and "Nochmal versuchen" show. A tab in the background stops
+  // polling and checks again when it comes back. Reduced motion: no smooth fill, the seconds as text instead.
+  var job = document.querySelector("[data-draft-job]");
+  if (job) {
+    var bar = job.querySelector("[data-draft-bar]");
+    var fill = bar.querySelector(".draftbar-fill");
+    var title = job.querySelector("[data-draft-title]");
+    var clock = job.querySelector("[data-draft-clock]");
+    var note = job.querySelector("[data-draft-note]");
+    var slowBox = job.querySelector("[data-draft-slow]");
+    var errorBox = job.querySelector("[data-draft-error]");
+    var startForm = job.querySelector("[data-draft-start]");
+    var startButton = startForm.querySelector("[type=submit]");
+    var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var expected = Number(job.dataset.expectedMs) || 40000;
+    var slowAfter = Number(job.dataset.slowMs) || 15000;
+    var SLOW_TEXT = "Dauert länger als gewöhnlich – bitte noch einen Moment Geduld.";
+    var t0 = null, frame = null, pollTimer = null, failures = 0, restarts = 0, state = job.dataset.draftJob;
+
+    var progress = function (ms) {  // percent of the bar for ms since the start
+      if (ms <= expected) return 93 * (1 - Math.pow(1 - ms / expected, 1.5));
+      return 93 + 5 * (1 - Math.exp(-(ms - expected) / 30000));  // never quite 100 before it is done
+    };
+    var setFill = function (percent) {
+      fill.style.transform = "scaleX(" + (percent / 100).toFixed(4) + ")";
+      bar.setAttribute("aria-valuenow", String(Math.round(percent)));
+    };
+    var setNote = function (seconds) {
+      note.textContent = "Dauert meist etwa " + Math.round(seconds) + " s.";
+    };
+    var stopTimers = function () {
+      if (frame !== null) { if (reduce) clearTimeout(frame); else cancelAnimationFrame(frame); frame = null; }
+      clearTimeout(pollTimer);
+    };
+    var tick = function () {
+      frame = null;
+      if (state !== "running") return;
+      var ms = performance.now() - t0;
+      setFill(progress(ms));
+      clock.textContent = reduce || ms > expected ? "seit " + Math.floor(ms / 1000) + " s" : "≈ " + Math.max(1, Math.ceil((expected - ms) / 1000)) + " s";
+      if (ms > expected + slowAfter && !slowBox.textContent) slowBox.textContent = SLOW_TEXT;
+      frame = reduce ? setTimeout(tick, 1000) : requestAnimationFrame(tick);
+    };
+    var schedulePoll = function (delay) {
+      clearTimeout(pollTimer);
+      if (document.hidden || state !== "running") return;  // visibilitychange polls again
+      pollTimer = setTimeout(poll, delay);
+    };
+    var running = function (data) {
+      if (data.expected_ms) { expected = data.expected_ms; setNote(expected / 1000); }
+      if (data.slow_after_ms) slowAfter = data.slow_after_ms;
+      var since = performance.now() - (data.elapsed_ms || 0);
+      if (state !== "running" || t0 === null || Math.abs(since - t0) > 3000) t0 = since;  // follow the server's clock
+      if (state !== "running") {
+        state = job.dataset.draftJob = "running";
+        title.textContent = "Claude schreibt dein Anschreiben …";
+        bar.classList.remove("is-error");
+        errorBox.hidden = true;
+        slowBox.textContent = "";
+      }
+      if (frame === null) tick();
+      schedulePoll(1000);
+    };
+    var done = function () {
+      state = "done";
+      stopTimers();
+      title.textContent = "Fertig – dein Anschreiben kommt …";
+      clock.textContent = "";
+      slowBox.textContent = "";
+      var go = function () { window.location.replace(job.dataset.doneUrl); };
+      if (reduce) { setFill(100); go(); return; }
+      bar.classList.add("is-done");
+      bar.getBoundingClientRect();  // the current width first, so the run to 100 % is animated
+      setFill(100);
+      setTimeout(go, 500);
+    };
+    var failed = function (message) {
+      state = job.dataset.draftJob = "error";
+      stopTimers();
+      title.textContent = "Claude konnte nicht schreiben";
+      bar.classList.add("is-error");
+      clock.textContent = "";
+      slowBox.textContent = "";
+      errorBox.textContent = message || "Unerwarteter Fehler – bitte nochmal versuchen.";
+      errorBox.hidden = false;
+      startButton.textContent = "Nochmal versuchen";
+      startButton.removeAttribute("aria-busy");
+      startButton.removeAttribute("aria-disabled");
+      delete startForm.dataset.sent;
+    };
+    var apply = function (data) {
+      if (state === "done") return;
+      if (data.state === "running") running(data);
+      else if (data.state === "done") done();
+      else if (data.state === "error") failed(data.error);
+      else if (data.state === "denied") failed(data.error || "Sitzung abgelaufen – bitte die Seite neu laden.");
+      else if (data.state === "idle" && restarts < 1) { restarts += 1; start(); }  // e.g. the server restarted
+      else failed("Claude hat aufgehört zu schreiben – bitte nochmal versuchen.");
+    };
+    var poll = function () {
+      fetch(job.dataset.statusUrl, { cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json" } })
+        .then(function (r) { return r.status === 403 ? { state: "denied" } : (r.ok ? r.json() : Promise.reject(r.status)); })
+        .then(function (data) { failures = 0; apply(data); })
+        .catch(function () { failures += 1; schedulePoll(Math.min(5000, 1000 + 1000 * failures)); });
+    };
+    var start = function () {
+      running({ elapsed_ms: 0 });
+      clearTimeout(pollTimer);  // the answer to the start says how it stands
+      fetch(startForm.action, { method: "POST", body: new FormData(startForm), credentials: "same-origin",
+                                headers: { Accept: "application/json" } })
+        .then(function (r) { return r.json(); })
+        .then(apply)
+        .catch(function () { failed("Keine Verbindung – bitte nochmal versuchen."); });
+    };
+
+    startForm.addEventListener("submit", function (e) { e.preventDefault(); restarts = 0; start(); });
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden && state === "running") { clearTimeout(pollTimer); poll(); }
+    });
+    window.addEventListener("pageshow", function (e) { if (e.persisted && state === "running") poll(); });
+    if (state === "idle") start();
+    else if (state === "running") running({ elapsed_ms: Number(job.dataset.elapsedMs) || 0 });
   }
 
   if (form && text && window.location.hash === "#text" && window.matchMedia("(min-width: 768px)").matches) {

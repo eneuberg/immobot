@@ -98,7 +98,8 @@ CREATE TABLE IF NOT EXISTS drafts (
     provider TEXT NOT NULL DEFAULT 'anthropic',
     currency TEXT NOT NULL DEFAULT 'USD',
     cost_native REAL,
-    source TEXT
+    source TEXT,
+    duration_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_drafts_listing ON drafts(listing_id);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -276,6 +277,9 @@ ADDED_COLUMNS = {
         ("currency", "TEXT NOT NULL DEFAULT 'USD'"),
         ("cost_native", "REAL"),
         ("source", "TEXT"),  # telegram | dashboard | editor; NULL for older drafts (count as "Entwürfe")
+        # how long the person waited for it (pictures + Claude call, measured around the generation; NULL for
+        # older drafts): the editor's progress bar expects the mean of the last initial drafts (drafting.py)
+        ("duration_ms", "INTEGER"),
     ],
     "credentials": [("hint", "TEXT")],
     "edit_sessions": [("last_draft_id", "INTEGER REFERENCES drafts(id)"), ("rules_note", "TEXT")],
@@ -858,20 +862,31 @@ def add_draft(
     currency: str = "USD",
     cost_native: float | None = None,
     source: str | None = None,
+    duration_ms: int | None = None,
 ) -> int:
     """cost_usd counts toward budget and totals; cost_native is what the provider bills, in `currency`.
-    source: where the draft was asked for (telegram | dashboard | editor), for the cost breakdown."""
+    source: where the draft was asked for (telegram | dashboard | editor), for the cost breakdown.
+    duration_ms: how long its generation took (None: not measured)."""
     with connect() as conn:
         cur = conn.execute(
             """INSERT INTO drafts (listing_id, kind, instruction, text, hint, model, input_tokens, output_tokens,
                                    cache_read_tokens, cache_write_tokens, cost_usd, created_at,
-                                   provider, currency, cost_native, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   provider, currency, cost_native, source, duration_ms)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (listing_id, kind, instruction, text, hint, model, input_tokens, output_tokens,
              cache_read_tokens, cache_write_tokens, cost_usd, now_iso(),
-             provider, currency, cost_usd if cost_native is None else cost_native, source),
+             provider, currency, cost_usd if cost_native is None else cost_native, source,
+             None if duration_ms is None else max(0, round(duration_ms))),
         )
         return cur.lastrowid
+
+
+def recent_draft_durations(kind: str = "initial", limit: int = 20) -> list[int]:
+    """duration_ms of the newest `limit` drafts of `kind` that have one (newest first)."""
+    with connect() as conn:
+        rows = conn.execute("SELECT duration_ms FROM drafts WHERE kind = ? AND duration_ms IS NOT NULL "
+                            "ORDER BY id DESC LIMIT ?", (kind, limit)).fetchall()
+    return [int(row["duration_ms"]) for row in rows]
 
 
 def latest_draft(listing_id: int, include_test: bool = False) -> dict | None:

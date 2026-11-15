@@ -332,18 +332,17 @@ def buttons(markup):
     return [b.callback_data for row in markup.inline_keyboard for b in row if b.callback_data]
 
 
-def test_pictures_button_visibility(fresh_db):
+def test_no_pictures_button_any_more(fresh_db):
+    """"🖼 Bilder" left the keyboards (pictures are in the editor and on the dashboard); old messages' "img" still
+    works (test_bot)."""
     is24_listing = fresh_db.get_listing(add_listing("a"))
-    other = fresh_db.get_listing(add_listing("b", provider="immowelt", url="https://www.immowelt.de/expose/1"))
     with_fredy = add_listing("c", provider="immowelt", url="https://www.immowelt.de/expose/2")
     media.store_fredy_images(with_fredy, media.parse_fredy_images(FREDY_IMAGES))
     with_fredy = fresh_db.get_listing(with_fredy)
-    assert f"img:{is24_listing['id']}" in buttons(bot.followup_view(is24_listing)[1])
-    assert f"img:{other['id']}" not in buttons(bot.followup_view(other)[1])
-    assert f"img:{with_fredy['id']}" in buttons(bot.followup_view(with_fredy)[1])  # Fredy images, any portal
-    switch_off()
-    assert f"img:{is24_listing['id']}" not in buttons(bot.followup_view(is24_listing)[1])
-    assert f"img:{with_fredy['id']}" in buttons(bot.draft_keyboard(with_fredy))
+    for listing in (is24_listing, with_fredy):
+        assert media.has_gallery(listing)
+        assert f"img:{listing['id']}" not in buttons(bot.followup_view(listing)[1])
+        assert f"img:{listing['id']}" not in buttons(bot.draft_keyboard(listing))
 
 
 @pytest.fixture

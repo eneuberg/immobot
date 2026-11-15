@@ -1,9 +1,9 @@
 # immobot
 
 Kleiner Begleitdienst zu [Fredy](https://github.com/orangecoding/fredy). Unter jedes Fredy-Inserat in Telegram setzt immobot eine
-Nachricht mit **✍️ Anschreiben** / **❌ Uninteressant**. Auf Knopfdruck schreibt Claude einen Anschreiben-Entwurf, den du
-mit **📝 Bearbeiten** im Entwurfs-Editor fertig machst (ohne Editor-Button: **Neu / Kürzer / Förmlicher / Anpassen** direkt
-in Telegram). Ein Dashboard (mit Passwort) zeigt Inserate, alle Entwürfe und die API-Kosten
+Nachricht mit **✍️ Anschreiben** / **🔗 Dashboard** / **❌ Uninteressant**. „✍️ Anschreiben“ öffnet den Entwurfs-Editor:
+Claude schreibt dort sofort einen Anschreiben-Entwurf (ein Balken zeigt, wie weit), den du gleich fertig machst (ohne
+Editor-Button schreibt Claude direkt in Telegram, mit **Neu / Kürzer / Förmlicher / Anpassen**). Ein Dashboard (mit Passwort) zeigt Inserate, alle Entwürfe und die API-Kosten
 und die Einstellungen in drei Reitern: **Profil** (Über mich, Wünsche, Stil, System-Prompt, Verlauf), **Verhalten**
 (Denkaufwand, Budget, Fotos, Bot, Lernen) und **Zugänge** (Anbieter Anthropic oder DeutschlandGPT samt API-Key und Modell,
 Telegram, Fredy).
@@ -184,9 +184,8 @@ Bilder-Fehler.
 - **Entwürfe** bekommen den vollen Text, die Ansprechperson (ImmoScout24) und so viele Fotos, wie unter „Fotos für
   Claude pro Entwurf“ eingestellt (Einstellungen → Verhalten, 0–20, Standard 10). Jedes Foto kostet ca. 1.000 Tokens (≈ 0,1–4 ct je
   nach Modell) und ist beschriftet („Bild 1: Grundriss“); Grundrisse kommen zuerst.
-- **Telegram:** „🖼 Bilder“ (bei Inseraten mit Galerie) schickt bis zu 10 Fotos als Album unter die immobot-Nachricht
-  (einmal pro Inserat). Das ist Telegrams Grenze pro Album und hat mit der Einstellung für Claude nichts zu tun.
-  „🔗 Dashboard“ öffnet die Inseratseite.
+- **Telegram:** „🔗 Dashboard“ öffnet die Inseratseite mit allen Bildern. (Den Button „🖼 Bilder“ gibt es nicht mehr; auf
+  älteren Nachrichten schickt er weiter bis zu 10 Fotos als Album.)
 - **Dashboard:** Die Inseratseite zeigt alle Bilder mit ihrer Quelle („Bilder von Fredy“ / „von ImmoScout24 geladen“),
   Details und Ansprechperson. Solange nichts geladen ist oder etwas schiefging, gibt es „Bilder laden“ bzw.
   „Erneut versuchen“. Fehlversuche wiederholt immobot nicht selbst.
@@ -229,8 +228,13 @@ Eine Seite pro Inserat (`/editor/<id>`), auf dem Handy gut bedienbar, zum Fertig
 - Danach: Kopieren, „Inserat öffnen“, „Als gesendet markieren“ (ändert auch die Telegram-Nachricht), „Weiter bearbeiten“.
 - Monatsbudget und höchstens 30 Claude-Aufrufe pro Inserat und Tag gelten auch hier.
 
-Aufrufen lässt er sich über „📝 Im Editor bearbeiten“ auf der Inseratsseite (mit Dashboard-Login) oder über den Button
-„📝 Bearbeiten“ unter einem Entwurf in Telegram, ohne Dashboard-Passwort:
+Aufrufen lässt er sich über „✍️ Anschreiben“ auf der Inseratsseite (mit Dashboard-Login) oder über den Button
+„✍️ Anschreiben“ unter einem Inserat in Telegram, ohne Dashboard-Passwort. Gibt es noch keinen Entwurf, startet Claude
+ihn sofort im Hintergrund (nie durch das bloße Öffnen der Seite, sondern per POST aus der Seite bzw. dem Button der
+Inseratsseite) und der Editor zeigt einen Fortschrittsbalken: Er rechnet mit dem Durchschnitt der letzten 20 ersten
+Entwürfe (ab 3 gemessenen, sonst 40 s), läuft bis dahin auf gut 90 % und wartet dann am Ende; dauert es 15 s länger als
+üblich, sagt er das. Ist der Text da, erscheint er im Editor. Ohne JavaScript gibt es einen Knopf und die Seite lädt alle
+5 s neu.
 
 1. **Einmalig:** Bei [@BotFather](https://t.me/BotFather) `/setdomain` senden, den Bot wählen und die Domain des
    Dashboards eintragen (z. B. `immobot.example.com`, ohne `https://`). Das ist je Bot nötig, also auch für jede weitere
@@ -245,10 +249,11 @@ Aufrufen lässt er sich über „📝 Im Editor bearbeiten“ auf der Inseratsse
 
 Die Telegram-Nachricht unter einem Entwurf hat zwei Formen:
 
-- **Editor zuerst** (sobald der Button geht): „📝 Bearbeiten“ und „📨 Inserat öffnen“, „✅ Gesendet“ / „❌ Uninteressant“,
-  „🖼 Bilder“ / „🔗 Dashboard“. Kürzer, förmlicher, neu und eigene Wünsche gibt es im Editor.
+- **Editor zuerst** (sobald der Button geht): „✍️ Anschreiben“ und „📨 Inserat öffnen“, „✅ Gesendet“ / „❌ Uninteressant“,
+  „🔗 Dashboard“. Kürzer, förmlicher, neu und eigene Wünsche gibt es im Editor.
 - **Ohne Editor** (Rückfall): „🔁 Neu“ / „✂️ Kürzer“ / „🎩 Förmlicher“, „✏️ Anpassen“ (Wunsch als Antwort schreiben) und
-  „📨 Inserat öffnen“, dazu Gesendet / Uninteressant und Bilder / Dashboard. Die Buttons älterer Nachrichten gehen weiter.
+  „📨 Inserat öffnen“, dazu Gesendet / Uninteressant und Dashboard. Die Buttons älterer Nachrichten (auch „🖼 Bilder“) gehen
+  weiter.
 
 „✍️ Anschreiben“ schreibt nur, wenn es noch keinen Entwurf gibt; sonst zeigt die Nachricht den vorhandenen (oder die
 Endversion aus dem Editor). Ein Entwurf von der Inseratsseite oder aus dem Editor aktualisiert die Nachricht gleich mit.

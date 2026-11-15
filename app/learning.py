@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 
 from . import db, llm, portals
@@ -274,6 +275,7 @@ async def _editor_draft(session_id: int, text: str, kind: str, instruction: str 
     llm.check_budget(settings)
 
     _claim(session_id)
+    started = time.monotonic()
     try:
         listing, pictures = await llm.prepare_listing(listing_id, listing, settings)
         rules, examples = llm.learned_context(settings)
@@ -281,7 +283,8 @@ async def _editor_draft(session_id: int, text: str, kind: str, instruction: str 
                                           pictures=pictures, rules=rules, examples=examples)
     finally:
         _busy_sessions.discard(session_id)
-    return text, db.get_draft(llm.store_draft(listing_id, kind, result, instruction, source="editor"))
+    return text, db.get_draft(llm.store_draft(listing_id, kind, result, instruction, source="editor",
+                                              started=started))
 
 
 async def revise_in_editor(session_id: int, text: str, critique: str) -> dict:

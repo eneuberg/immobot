@@ -13,7 +13,7 @@ after the other with a short pause, size and type limits, and the first refusal 
 ends the run. Nothing is fetched again automatically - after a failure only on a user action, at most once a
 minute. New listings get their pictures in the background right after they arrive (schedule_pictures: Fredy's
 right away, ImmoScout24's once the exposé text is there), one listing after the other; listings from before that
-are caught up at startup. Used by drafts (llm.py), the "🖼 Bilder" album (bot.py), the dashboard gallery (web.py)
+are caught up at startup. Used by drafts (llm.py), the "🖼 Bilder" album of old Telegram messages (bot.py), the dashboard gallery (web.py)
 and the editor.
 """
 

@@ -10,7 +10,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from app import bot, db, editor, editor_access, learning, llm, main, media, vault, web
+from app import bot, db, drafting, editor, editor_access, learning, llm, main, media, vault, web
 from app.textdiff import word_diff
 
 from .conftest import TEST_SECRETS
@@ -28,6 +28,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main.app.state, "config", cfg)
     monkeypatch.setattr(web, "LOGIN_FAIL_DELAY_S", 0)
     monkeypatch.setattr(editor, "_rule_jobs", {})
+    monkeypatch.setattr(drafting, "_jobs", {})
+    monkeypatch.setattr(bot, "_locks", {})
     monkeypatch.setattr(learning, "_busy_sessions", set())
     refreshed = []
     monkeypatch.setattr(bot, "schedule_refresh", refreshed.append)
@@ -683,31 +685,149 @@ def test_new_round_from_a_newer_draft(client, lid):
     assert db.latest_session(lid)["current_text"] == "Kürzer aus Telegram"
 
 
-def test_create_first_draft_in_the_editor(client, lid, monkeypatch):
+def fake_create(monkeypatch, delay=0.0, error=None):
+    """llm.create_and_store_draft replaced: records its calls, waits `delay` s, raises `error` or stores a draft."""
+    import asyncio
     calls = []
 
     async def create(listing_id, kind, instruction=None, *, source="dashboard", record_feedback=True):
         calls.append((listing_id, kind, source, record_feedback))
-        db.add_draft(listing_id, kind, "Erster Entwurf", "claude-opus-5-5")
+        await asyncio.sleep(delay)
+        if error is not None:
+            raise error
+        db.add_draft(listing_id, kind, "Erster Entwurf", "claude-opus-5-5", duration_ms=1234)
         return db.latest_draft(listing_id)
 
     monkeypatch.setattr(llm, "create_and_store_draft", create)
+    return calls
+
+
+def draft_status(client, listing_id) -> dict:
+    r = client.get(f"/editor/{listing_id}/draft/status")
+    assert r.status_code == 200
+    return r.json()
+
+
+def wait_for_draft(client, listing_id, timeout=5.0) -> dict:
+    """Poll the status like editor.js until the background job is no longer running."""
+    end = time.monotonic() + timeout
+    while True:
+        status = draft_status(client, listing_id)
+        if status["state"] != "running" or time.monotonic() > end:
+            return status
+        time.sleep(0.02)
+
+
+def test_editor_without_draft_shows_the_bar_and_a_get_starts_nothing(client, lid, monkeypatch):
+    """Opening the editor (here from Telegram) never calls Claude: the page has the progress bar, editor.js posts
+    the start; without JS the button "Anschreiben schreiben lassen" does."""
+    calls = fake_create(monkeypatch)
     editor_cookie(client, lid)
     r, fields = open_editor(client, lid)
-    assert "Noch kein Anschreiben" in r.text and "session_id" not in fields
-    r = post(client, lid, "draft", fields)
-    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=draft#text"
+    assert 'data-draft-job="idle"' in r.text and 'role="progressbar"' in r.text and "session_id" not in fields
+    assert f'data-status-url="/editor/{lid}/draft/status"' in r.text and 'data-expected-ms="40000"' in r.text
+    assert f'action="/editor/{lid}/draft"' in r.text and "Anschreiben schreiben lassen</button>" in r.text
+    assert 'aria-live="polite"' in r.text
+    client.get(f"/editor/{lid}")
+    status = draft_status(client, lid)
+    assert status["state"] == "idle" and status["expected_ms"] == 40000 and status["slow_after_ms"] == 15000
+    assert calls == []
+
+
+def test_start_draft_in_the_background_then_the_editor_shows_it(client, lid, monkeypatch):
+    calls = fake_create(monkeypatch)
+    editor_cookie(client, lid)
+    _, fields = open_editor(client, lid)
+    r = post(client, lid, "draft", fields)  # without JS: back to the page with the bar
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}#text"
+    assert wait_for_draft(client, lid)["state"] == "done"
     assert calls == [(lid, "initial", "editor", False)] and client.refreshed == [lid]
-    assert "Erster Entwurf</textarea>" in client.get(f"/editor/{lid}").text
-    post(client, lid, "draft", fields)  # with a draft the button is gone and the action does nothing
+    page = client.get(f"/editor/{lid}?m=draft").text
+    assert "Erster Entwurf</textarea>" in page and "Claude hat ein Anschreiben geschrieben." in page
+    assert "data-draft-job" not in page and drafting._jobs == {}  # shown: the job is forgotten
+    post(client, lid, "draft", fields)  # with a draft the action does nothing
     assert len(calls) == 1
+
+
+def test_start_draft_is_idempotent_and_answers_json(client, lid, monkeypatch):
+    """A double tap (or the listing page and Telegram at once) reuses the running job."""
+    calls = fake_create(monkeypatch, delay=0.3)
+    login(client)
+    _, fields = open_editor(client, lid)
+    first = client.post(f"/editor/{lid}/draft", data=fields, headers={"Accept": "application/json"})
+    second = client.post(f"/editor/{lid}/draft", data=fields, headers={"Accept": "application/json"})
+    assert first.status_code == second.status_code == 200
+    assert first.json()["state"] == "running" and second.json()["state"] == "running"
+    assert second.json()["elapsed_ms"] >= 0 and second.json()["expected_ms"] == drafting.DEFAULT_EXPECTED_MS
+    running = client.get(f"/editor/{lid}").text  # the page while it runs: the bar, no auto start needed
+    assert 'data-draft-job="running"' in running and 'http-equiv="refresh"' in running  # <noscript> reload
+    assert wait_for_draft(client, lid)["state"] == "done"
+    assert len(calls) == 1
+
+
+def test_start_draft_needs_the_form_token(client, lid, monkeypatch):
+    calls = fake_create(monkeypatch)
+    login(client)
+    r = client.post(f"/editor/{lid}/draft", data={"token": "0" * 32}, headers={"Accept": "application/json"})
+    assert r.status_code == 403 and r.json()["state"] == "denied"
+    assert client.post(f"/editor/{lid}/draft", data={}).status_code == 403
+    client.cookies.clear()
+    assert client.get(f"/editor/{lid}/draft/status").status_code == 403
+    assert calls == [] and drafting._jobs == {}
+
+
+def test_draft_error_stops_and_offers_a_retry(client, lid, monkeypatch):
+    calls = fake_create(monkeypatch, error=llm.LLMError("Monatsbudget aufgebraucht."))
+    login(client)
+    _, fields = open_editor(client, lid)
+    client.post(f"/editor/{lid}/draft", data=fields, headers={"Accept": "application/json"})
+    status = wait_for_draft(client, lid)
+    assert status["state"] == "error" and status["error"] == "Monatsbudget aufgebraucht."
+    page = client.get(f"/editor/{lid}").text  # shows the error; nothing starts again by itself
+    assert 'data-draft-job="error"' in page and "Monatsbudget aufgebraucht." in page and "Nochmal versuchen</button>" in page
+    assert len(calls) == 1
+    fake_create(monkeypatch)  # "Nochmal versuchen" works
+    post(client, lid, "draft", fields)
+    assert wait_for_draft(client, lid)["state"] == "done" and db.latest_draft(lid)["text"] == "Erster Entwurf"
+
+
+def test_unexpected_draft_error_is_generic(client, lid, monkeypatch):
+    fake_create(monkeypatch, error=RuntimeError("secret detail"))
+    login(client)
+    _, fields = open_editor(client, lid)
+    post(client, lid, "draft", fields)
+    status = wait_for_draft(client, lid)
+    assert status["state"] == "error" and status["error"] == drafting.GENERIC_ERROR and "secret" not in str(status)
+
+
+def test_old_error_is_forgotten(client, lid, monkeypatch):
+    drafting._jobs[lid] = {"state": "error", "error": "alt", "started": 0.0,
+                           "ended": time.monotonic() - drafting.ERROR_KEEP_S - 1}
+    login(client)
+    assert draft_status(client, lid)["state"] == "idle"
+
+
+def test_listing_page_starts_the_draft_and_opens_the_editor(client, lid, monkeypatch):
+    """"✍️ Anschreiben" on the listing page: personal words stored, the job started, the editor opens at once."""
+    calls = fake_create(monkeypatch, delay=0.2)
+    login(client)
+    page = client.get(f"/listing/{lid}").text
+    assert f'action="/listing/{lid}/draft"' in page and "Anschreiben</button>" in page
+    r = client.post(f"/listing/{lid}/draft", data={"personal": "1", "own_words": "kenne die Ecke", "dream": "1"})
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}#text"
+    assert db.get_listing(lid)["own_words"] == "kenne die Ecke" and db.get_listing(lid)["dream"]
+    assert "Claude schreibt … – ansehen" in client.get(f"/listing/{lid}").text  # while it runs
+    assert wait_for_draft(client, lid)["state"] == "done" and len(calls) == 1
+    r = client.post(f"/listing/{lid}/draft")  # with a draft: only opens the editor
+    assert r.headers["location"] == f"/editor/{lid}#text" and len(calls) == 1
+    assert "Anschreiben öffnen" in client.get(f"/listing/{lid}").text
 
 
 def test_listing_page_links_the_editor_and_shows_the_final_version(client, lid):
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     login(client)
     page = client.get(f"/listing/{lid}").text
-    assert f'href="/editor/{lid}"' in page and "Anschreiben bearbeiten" in page and "Fertiges Anschreiben" not in page
+    assert f'href="/editor/{lid}"' in page and "Anschreiben öffnen" in page and "Fertiges Anschreiben" not in page
     session = learning.open_or_create_session(lid)
     learning.finish(session["id"], "Meine Endversion")
     page = client.get(f"/listing/{lid}").text
@@ -937,6 +1057,9 @@ def test_first_editor_visit_fetches_pictures(client, lid, monkeypatch):
     monkeypatch.setattr(media, "ensure_media", fetch)
     monkeypatch.setattr(media, "has_gallery", lambda listing: True)
     login(client)
+    client.get(f"/editor/{lid}")
+    assert calls == []  # no draft yet: the page shows its progress bar at once, the draft job fetches them
+    db.add_draft(lid, "initial", "Entwurf", "claude-opus-5-5")
     assert "Frisch geladen." in client.get(f"/editor/{lid}").text
     client.get(f"/editor/{lid}")
     assert calls == [lid]  # once; later visits read what's stored
@@ -954,6 +1077,7 @@ def test_first_editor_visit_downloads_pictures_known_by_url(client, lid, monkeyp
     monkeypatch.setattr(media, "has_gallery", lambda listing: True)
     db.set_media_state(lid, db.now_iso(), None)
     db.replace_media(lid, [{"position": 1, "caption": "Balkon", "source_url": "https://x.example/1", "file": ""}])
+    db.add_draft(lid, "initial", "Entwurf", "claude-opus-5-5")
     login(client)
     page = client.get(f"/editor/{lid}").text
     assert calls == [lid] and "Bilder laden</button>" in page  # still missing (fake fetch): the button stays

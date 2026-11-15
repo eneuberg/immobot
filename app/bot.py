@@ -12,21 +12,23 @@ says how to fill it). "/pair CODE" is handled completely inside the guard (_guar
 the other handlers, so pairing works with an empty list and fills it; strangers with a wrong code get no
 answer at all. All listing and draft text is HTML-escaped. The bot token is never logged.
 
-Listings with a gallery (pictures from Fredy, or ImmoScout24 with the own fetch switched on, see media.py) get
-a "🖼 Bilder" button: it sends the stored pictures as one album
-(uploaded bytes, max 10) under the listing's message. Every listing gets a "🔗 Dashboard" link when the
-dashboard's public address is known (IMMOBOT_PUBLIC_URL, else remembered from dashboard requests).
+Every listing gets a "🔗 Dashboard" link (its dashboard page) when the dashboard's public address is known
+(IMMOBOT_PUBLIC_URL, else remembered from dashboard requests). "✍️ Anschreiben" is a login_url button to the draft
+editor (editor_access.py) whenever it can be used: without a draft the editor starts one at once and shows a
+progress bar (drafting.py); otherwise it is the "gen" callback that writes the draft here in Telegram.
+Messages without a draft: "✍️ Anschreiben" + "🔗 Dashboard", "❌ Uninteressant" (followup_view).
 Draft messages have two layouts (draft_keyboard):
-- editor first, whenever the "📝 Bearbeiten" button can be used: "📝 Bearbeiten" (a login_url button to the draft
-  editor, editor_access.py) and "📨 Inserat öffnen", "✅ Gesendet" / "❌ Uninteressant", pictures / dashboard.
-  Shorter, more formal, new and own wishes happen in the editor (its quick buttons and critique field).
+- editor first, whenever the editor button can be used: "✍️ Anschreiben" (editor) and "📨 Inserat öffnen",
+  "✅ Gesendet" / "❌ Uninteressant", dashboard. Shorter, more formal, new and own wishes happen in the editor (its
+  quick buttons and critique field).
 - full, the fallback while the public address is unknown or Telegram rejected the button: "🔁 Neu" / "✂️ Kürzer" /
-  "🎩 Förmlicher", "✏️ Anpassen" (reply with a wish), "📨 Inserat öffnen", sent / skip, pictures / dashboard.
+  "🎩 Förmlicher", "✏️ Anpassen" (reply with a wish), "📨 Inserat öffnen", sent / skip, dashboard.
+The "🖼 Bilder" button (pictures as an album) is gone; its callback "img" still answers on older messages.
 Telegram rejects a message with the login_url button while the dashboard domain isn't linked to the bot (@BotFather
 /setdomain): it is then sent with the full layout and meta EDITOR_BUTTON_ERROR_META says why (shown on the status
 and settings pages). The full layout keeps trying the button, so the first message Telegram accepts with it clears
-the note and the next drafts get the editor layout again. Buttons of older messages ("new", "short", "formal",
-"edit") keep working in either layout. "✍️ Anschreiben" shows the existing draft if there already is one.
+the note and the next drafts get the editor layout again. Buttons of older messages ("gen", "new", "short",
+"formal", "edit", "img") keep working in either layout. "✍️ Anschreiben" shows the existing draft if there already is one.
 A sent or aussortiert listing (settings.DISCARD_REASONS) collapses to one line (collapsed_view): "↩️ Rückgängig" /
 "↩️ Zurückholen", or for offline / veraltet (final) only the editor and dashboard links. Any button of the listing
 counts as seen (db.mark_seen: "Neu" -> "Gesehen"); buttons of an older message of an aussortiert listing only show
@@ -82,6 +84,7 @@ TRUNCATED_NOTE = "… (gekürzt – vollständig im Dashboard)"
 GENERIC_ERROR = "Fehler beim Generieren – bitte nochmal versuchen."
 NOT_FOUND = "Inserat nicht gefunden."
 BUSY = "⏳ läuft schon …"
+EDITOR_LABEL = "✍️ Anschreiben"  # the login_url button to the editor (and the "gen" callback where it can't be used)
 START_REPLY = "immobot läuft ✅ – unter Fredys Inseraten erscheinen meine Buttons."
 PAIR_OK = "✅ immobot ist jetzt mit diesem Chat verbunden."
 PAIR_FAILED = "❌ Code ungültig oder abgelaufen."
@@ -173,28 +176,21 @@ def header(listing: dict) -> str:
     return "\n".join(lines)
 
 
-def _links_row(listing: dict) -> list[InlineKeyboardButton]:
-    """"🖼 Bilder" (if the listing has a gallery) and "🔗 Dashboard" (if the public address is known)."""
-    row = []
-    if media.has_gallery(listing):
-        row.append(_button("🖼 Bilder", "img", listing["id"]))
+def _dashboard_button(listing: dict) -> list[InlineKeyboardButton]:
+    """["🔗 Dashboard"] (the listing's dashboard page) if the public address is known, else []."""
     url = dashboard_url(listing["id"])
-    if url:
-        row.append(InlineKeyboardButton("🔗 Dashboard", url=url))
-    return row
+    return [InlineKeyboardButton("🔗 Dashboard", url=url)] if url else []
 
 
 def followup_view(listing: dict, note: str | None = None, editor: bool = True) -> tuple[str, InlineKeyboardMarkup]:
-    """A listing without a draft: "✍️ Anschreiben" (draft right here) and, when the editor button can be used,
-    "📝 Bearbeiten" (the editor, which offers "Entwurf erzeugen"), then "❌ Uninteressant". editor=False: without it."""
+    """A listing without a draft: "✍️ Anschreiben" + "🔗 Dashboard", then "❌ Uninteressant". "✍️ Anschreiben" is the
+    editor button when it can be used (the editor starts the draft at once and shows a progress bar), else the
+    "gen" callback that writes the draft right here in Telegram. editor=False: the callback (the retry after
+    Telegram rejected the button)."""
     lid = listing["id"]
     edit = editor_button(lid) if editor and editor_button_error() is None else None
-    if edit:
-        rows = [[_button("✍️ Anschreiben", "gen", lid), edit], [_button("❌ Uninteressant", "skip", lid)]]
-    else:
-        rows = [[_button("✍️ Anschreiben", "gen", lid), _button("❌ Uninteressant", "skip", lid)]]
-    if _links_row(listing):
-        rows.append(_links_row(listing))
+    write = edit or _button("✍️ Anschreiben", "gen", lid)
+    rows = [[write] + _dashboard_button(listing), [_button("❌ Uninteressant", "skip", lid)]]
     return header(listing) + _note(note), InlineKeyboardMarkup(rows)
 
 
@@ -204,10 +200,10 @@ def generating_text(listing: dict) -> str:
 
 def draft_keyboard(listing: dict, editor: bool = True) -> InlineKeyboardMarkup:
     """The buttons under a draft, in one of two layouts (module docstring):
-    - editor first, when the "📝 Bearbeiten" button can be used (public address known, Telegram didn't reject it
-      last time): "📝 Bearbeiten" + "📨 Inserat öffnen" · sent/skip · pictures/dashboard;
-    - full otherwise: variants · "✏️ Anpassen" + "📨 Inserat öffnen" · sent/skip · pictures/dashboard. While Telegram
-      rejects the button it is still tried here ("📝 Bearbeiten" + "✏️ Anpassen", then "📨 Inserat öffnen" in its own
+    - editor first, when the editor button can be used (public address known, Telegram didn't reject it last time):
+      "✍️ Anschreiben" + "📨 Inserat öffnen" · sent/skip · dashboard;
+    - full otherwise: variants · "✏️ Anpassen" + "📨 Inserat öffnen" · sent/skip · dashboard. While Telegram
+      rejects the button it is still tried here ("✍️ Anschreiben" + "✏️ Anpassen", then "📨 Inserat öffnen" in its own
       row), so the layout comes back once the domain is linked.
     editor=False: the full layout without the button (the retry after Telegram rejected it)."""
     lid = listing["id"]
@@ -226,8 +222,8 @@ def draft_keyboard(listing: dict, editor: bool = True) -> InlineKeyboardMarkup:
         else:
             rows.append([_button("✏️ Anpassen", "edit", lid)] + open_listing)
         rows.append(status_row)
-    if _links_row(listing):
-        rows.append(_links_row(listing))
+    if _dashboard_button(listing):
+        rows.append(_dashboard_button(listing))
     return InlineKeyboardMarkup(rows)
 
 
@@ -288,7 +284,8 @@ def is_collapsed(listing: dict) -> bool:
 
 def collapsed_view(listing: dict, note: str | None = None, editor: bool = True) -> tuple[str, InlineKeyboardMarkup]:
     """One line for a sent or aussortiert listing. Sent: "↩️ Rückgängig" (back to Entwurf / Gesehen); uninteressant:
-    "↩️ Zurückholen"; offline / veraltet (final): only "📝 Bearbeiten" and "🔗 Dashboard", plus what its status was."""
+    "↩️ Zurückholen"; offline / veraltet (final): only "✍️ Anschreiben" (editor) and "🔗 Dashboard", plus what its
+    status was."""
     lid, reason = listing["id"], listing.get("discard_reason")
     extra = ""
     if reason in FINAL_DISCARDS:
@@ -296,8 +293,7 @@ def collapsed_view(listing: dict, note: str | None = None, editor: bool = True) 
         if listing.get("status") in ("drafted", "sent"):
             extra = f"\n<i>Status war: {_esc(settings.STATUSES[listing['status']])}</i>"
         edit = editor_button(lid) if editor and editor_button_error() is None else None
-        url = dashboard_url(lid)
-        row = ([edit] if edit else []) + ([InlineKeyboardButton("🔗 Dashboard", url=url)] if url else [])
+        row = ([edit] if edit else []) + _dashboard_button(listing)
         keyboard = InlineKeyboardMarkup([row] if row else [])
     elif reason:
         label = ("⏱ Automatisch uninteressant (angesehen, kein Entwurf)" if listing.get("discard_auto")
@@ -411,11 +407,12 @@ def editor_url(listing_id: int) -> str | None:
 
 
 def editor_button(listing_id: int) -> InlineKeyboardButton | None:
-    """"📝 Bearbeiten" as a login_url button to the draft editor: Telegram appends the user's signed login data when
-    it is tapped (editor_access.start_editor_browser_session checks them). None while the public address is unknown.
-    Needs the dashboard domain linked to the bot (@BotFather /setdomain), else Telegram rejects the message."""
+    """"✍️ Anschreiben" as a login_url button to the draft editor: Telegram appends the user's signed login data when
+    it is tapped (editor_access.start_editor_browser_session checks them); without a draft the editor starts one
+    right away (drafting.py). None while the public address is unknown. Needs the dashboard domain linked to the bot
+    (@BotFather /setdomain), else Telegram rejects the message."""
     url = editor_url(listing_id)
-    return InlineKeyboardButton("📝 Bearbeiten", login_url=LoginUrl(url=url)) if url else None
+    return InlineKeyboardButton(EDITOR_LABEL, login_url=LoginUrl(url=url)) if url else None
 
 
 # --- input checks (pure) -----------------------------------------------------
@@ -508,7 +505,7 @@ def _has_login_url(keyboard) -> bool:
 
 
 def without_login_url(keyboard: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
-    """The keyboard without login_url buttons ("📝 Bearbeiten"); rows left empty are dropped."""
+    """The keyboard without login_url buttons ("✍️ Anschreiben" to the editor); rows left empty are dropped."""
     rows = [[button for button in row if button.login_url is None] for row in keyboard.inline_keyboard]
     return InlineKeyboardMarkup([row for row in rows if row])
 
@@ -530,7 +527,7 @@ def _note_editor_button_error(exc: BadRequest) -> None:
 
 
 def editor_button_error() -> tuple[str, str] | None:
-    """(ISO time, German reason) of the last rejection of the "📝 Bearbeiten" button, or None while it works."""
+    """(ISO time, German reason) of the last rejection of the editor button, or None while it works."""
     value = db.get_meta(EDITOR_BUTTON_ERROR_META)
     if not value:
         return None
@@ -539,7 +536,7 @@ def editor_button_error() -> tuple[str, str] | None:
 
 
 async def _with_editor_fallback(call, keyboard, fallback=None):
-    """call(keyboard). If Telegram rejects a keyboard with the login_url "📝 Bearbeiten" button, note why and call once
+    """call(keyboard). If Telegram rejects a keyboard with the login_url editor button, note why and call once
     more with fallback() (a keyboard without the button), or else the same keyboard minus the button. A message
     accepted with the button clears the note."""
     if not _has_login_url(keyboard):
@@ -556,7 +553,9 @@ async def _with_editor_fallback(call, keyboard, fallback=None):
     return result
 
 
-async def _send(tg_bot, chat_id: int, text: str, keyboard) -> object:
+async def _send(tg_bot, chat_id: int, text: str, keyboard, listing: dict | None = None) -> object:
+    """Send a new message. Rejected with the editor button, it goes out with the listing's layout without it
+    (_keyboard_without_editor: "✍️ Anschreiben" as the "gen" callback), or else the same keyboard minus the button."""
     async def send(markup):
         kwargs = dict(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML, reply_markup=markup,
                       link_preview_options=NO_PREVIEW)
@@ -567,7 +566,8 @@ async def _send(tg_bot, chat_id: int, text: str, keyboard) -> object:
             await asyncio.sleep(wait.total_seconds() if isinstance(wait, timedelta) else wait)
             return await tg_bot.send_message(**kwargs)
 
-    return await _with_editor_fallback(send, keyboard)
+    return await _with_editor_fallback(send, keyboard,
+                                       (lambda: _keyboard_without_editor(listing)) if listing is not None else None)
 
 
 async def _edit(tg_bot, listing: dict, text: str, keyboard) -> None:
@@ -615,7 +615,8 @@ async def _delete_quietly(tg_bot, message_id: int) -> None:
         pass
 
 
-def _lock(listing_id: int) -> asyncio.Lock:
+def listing_lock(listing_id: int) -> asyncio.Lock:
+    """One per listing: a Telegram generation and the editor's background draft (drafting.py) never run at once."""
     return _locks.setdefault(listing_id, asyncio.Lock())
 
 
@@ -737,11 +738,11 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await _answer(query, NOT_FOUND)
         return
     db.mark_seen(listing_id)  # any button of the listing counts as seen (the dashboard card stops glowing)
-    if action == "img":  # not under the generation lock: pictures may be sent while a draft is being written
+    if action == "img":  # "🖼 Bilder" of older messages; not under the generation lock (pictures while a draft is written)
         await _send_pictures(context.bot, listing, query)
         return
 
-    lock = _lock(listing_id)
+    lock = listing_lock(listing_id)
     if lock.locked():
         await _answer(query, BUSY)
         return
@@ -822,7 +823,7 @@ async def _on_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return  # reply to some other message
     instruction = message.text.strip()[:INSTRUCTION_MAX]
     try:
-        async with _lock(listing_id):  # wait if a generation for this listing is running
+        async with listing_lock(listing_id):  # wait if a generation for this listing is running
             listing = db.get_listing(listing_id)
             if listing and listing.get("tg_message_id") and instruction:
                 await _generate(context.bot, listing, "custom", instruction)
@@ -855,7 +856,7 @@ async def announce(tg_bot, chat_id: int, listing_ids: list[int]) -> None:
             if index < media.NEW_DETAILS_MAX:  # warm rent; usually fetched meanwhile (web.fredy_webhook)
                 await media.ensure_details(listing_id)
                 listing = db.get_listing(listing_id) or listing
-            message = await _send(tg_bot, chat_id, *followup_view(listing))
+            message = await _send(tg_bot, chat_id, *followup_view(listing), listing=listing)
             db.set_listing_tg_message(listing_id, message.message_id)
         except TelegramError as exc:
             _record_error(exc)
@@ -900,12 +901,13 @@ async def post_manual(tg_bot, chat_id: int, listing_id: int) -> None:
                 db.set_album_sent(listing_id, album.message_id)
             except TelegramError as exc:  # the message with the buttons still matters more
                 _record_error(exc)
-        view = current_view(db.get_listing(listing_id) or listing)
+        listing = db.get_listing(listing_id) or listing
+        view = current_view(listing)
         try:
-            message = await _send(tg_bot, chat_id, *view)
+            message = await _send(tg_bot, chat_id, *view, listing=listing)
         except (TimedOut, NetworkError):  # seen right after a big album upload: once more after a pause
             await asyncio.sleep(MANUAL_RETRY_S)
-            message = await _send(tg_bot, chat_id, *view)
+            message = await _send(tg_bot, chat_id, *view, listing=listing)
         db.set_listing_tg_message(listing_id, message.message_id)
     except TelegramError as exc:
         _record_error(exc)
@@ -948,7 +950,7 @@ def schedule_announce(listing_ids: list[int]) -> None:
 
 
 async def _refresh(tg_bot, listing_id: int) -> None:
-    async with _lock(listing_id):  # after a generation that is running right now
+    async with listing_lock(listing_id):  # after a generation that is running right now
         listing = db.get_listing(listing_id)
         if listing is not None and listing.get("tg_message_id") and configured_chat_id() is not None:
             await _show(tg_bot, listing)

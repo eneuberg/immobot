@@ -3,13 +3,14 @@ import dataclasses
 import hmac
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import bot, db, editor_access, llm, main, settings, vault, web
+from app import bot, db, drafting, editor_access, llm, main, settings, vault, web
 
 from .conftest import TEST_SECRETS
 
@@ -41,10 +42,22 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(web, "_recent_failures", web.deque(maxlen=web.LOGIN_GLOBAL_ALERT_AT))
     monkeypatch.setattr(web, "_one_time", {})
     monkeypatch.setattr(bot, "schedule_announce", lambda ids: None)
+    monkeypatch.setattr(drafting, "_jobs", {})
+    monkeypatch.setattr(bot, "_locks", {})
     web._login_failures.clear()
     with TestClient(main.app, follow_redirects=False) as c:
         yield c
     web._login_failures.clear()
+
+
+def wait_for_draft(client, listing_id, timeout=5.0) -> dict:
+    """The listing page's "✍️ Anschreiben" starts the draft in the background: poll its status like editor.js."""
+    end = time.monotonic() + timeout
+    while True:
+        status = client.get(f"/editor/{listing_id}/draft/status").json()
+        if status["state"] != "running" or time.monotonic() > end:
+            return status
+        time.sleep(0.02)
 
 
 def login(client):
@@ -87,7 +100,7 @@ def fake_llm(monkeypatch):
     calls = []
 
     async def create(listing_id, kind, instruction=None, source=None, record_feedback=True):
-        assert source == "dashboard"
+        assert source in ("dashboard", "editor")  # "✍️ Anschreiben" writes in the background for the editor
         calls.append((listing_id, kind))
         db.add_draft(listing_id, kind, f"Guten Tag, Entwurf {len(calls)}", "claude-haiku-5-5", hint="Codewort Linde",
                      input_tokens=1200, output_tokens=300, cost_usd=0.0123)
@@ -620,20 +633,25 @@ def test_actions_and_drafts_from_the_dashboard_count_as_seen(client, fake_llm):
     assert db.get_listing(lid)["seen_at"]
     second = add_listing(fredy_id="x2")
     client.post(f"/listing/{second}/draft")
-    assert fake_llm == [(second, "initial")] and db.get_listing(second)["seen_at"]
+    assert db.get_listing(second)["seen_at"]
+    assert wait_for_draft(client, second)["state"] == "done" and fake_llm == [(second, "initial")]
     third = add_listing(fredy_id="x3")
     client.post(f"/listing/{third}/dismiss")
     assert db.get_listing(third)["seen_at"] and db.get_listing(third)["status"] == "seen"
     assert db.get_listing(add_listing(fredy_id="x4"))["seen_at"] is None
 
-def test_create_draft_initial_then_regenerate(client, fake_llm):
+def test_create_draft_in_the_background_and_never_twice(client, fake_llm):
+    """"✍️ Anschreiben" opens the editor at once; a second press only opens it again (rewriting is the editor's
+    "Ganz neu schreiben" now, the listing page has no "Neues Anschreiben erzeugen" any more)."""
     login(client)
     lid = add_listing()
     r = client.post(f"/listing/{lid}/draft")
-    assert r.status_code == 303 and r.headers["location"].startswith(f"/listing/{lid}#d")
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}#text"
+    assert wait_for_draft(client, lid)["state"] == "done"
     client.post(f"/listing/{lid}/draft")
-    assert fake_llm == [(lid, "initial"), (lid, "regenerate")]
-    assert "Entwurf 2" in client.get(f"/listing/{lid}").text
+    assert fake_llm == [(lid, "initial")]
+    page = client.get(f"/listing/{lid}").text
+    assert "Entwurf 1" in page and "Neues Anschreiben erzeugen" not in page
 
 
 def test_create_draft_shows_llm_error(client, monkeypatch):
@@ -646,7 +664,10 @@ def test_create_draft_shows_llm_error(client, monkeypatch):
     login(client)
     lid = add_listing()
     r = client.post(f"/listing/{lid}/draft")
-    assert r.status_code == 200 and "Monatsbudget erreicht" in r.text
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}#text"
+    status = wait_for_draft(client, lid)
+    assert status["state"] == "error" and status["error"] == "Monatsbudget erreicht"
+    assert "Monatsbudget erreicht" in client.get(f"/editor/{lid}").text
     assert refreshed == []  # nothing new to show in Telegram
 
 
@@ -657,6 +678,7 @@ def test_create_draft_refreshes_the_telegram_message(client, fake_llm, monkeypat
     login(client)
     lid = add_listing()
     assert client.post(f"/listing/{lid}/draft").status_code == 303
+    assert wait_for_draft(client, lid)["state"] == "done"
     assert refreshed == [lid]
 
 
@@ -946,6 +968,7 @@ def test_no_secret_in_any_response(client, fake_llm, monkeypatch):
     responses.append(client.post("/login", data={"password": PASSWORD}))
     lid = db.list_listings()[0]["id"]
     responses += [client.post(f"/listing/{lid}/draft"), client.post("/settings/test")]
+    wait_for_draft(client, lid)
     for path in ["/", "/?status=new", f"/listing/{lid}", "/settings", "/settings?saved=1", "/settings/verhalten",
                  "/settings/zugaenge", "/settings/version/1", "/login"]:
         responses.append(client.get(path))
@@ -958,9 +981,12 @@ def test_no_secret_in_any_response(client, fake_llm, monkeypatch):
         raise llm.LLMError(f"Fehler mit Key {TEST_SECRETS['ANTHROPIC_API_KEY']}")
 
     monkeypatch.setattr(llm, "create_and_store_draft", leaky)
-    failed = client.post(f"/listing/{lid}/draft")
-    assert "Fehler mit Key ***" in failed.text  # LLM error shown, key redacted
-    responses += [failed, client.post("/settings/test")]
+    leaky_lid = add_listing(fredy_id="leaky")
+    responses.append(client.post(f"/listing/{leaky_lid}/draft"))
+    assert wait_for_draft(client, leaky_lid)["error"] == "Fehler mit Key ***"  # LLM error shown, key redacted
+    failed = client.get(f"/editor/{leaky_lid}")
+    assert "Fehler mit Key ***" in failed.text
+    responses += [failed, client.get(f"/editor/{leaky_lid}/draft/status"), client.post("/settings/test")]
 
     # Credentials entered in the dashboard are never shown again - not on any page, not on error paths.
     for name, value in DASHBOARD_SECRETS.items():
@@ -977,7 +1003,10 @@ def test_no_secret_in_any_response(client, fake_llm, monkeypatch):
     secrets.append(rejected_value)
     responses.append(save_credential(client, "telegram_bot_token", rejected_value))  # validation error
     responses.append(save_credential(client, "anthropic_api_key", "sk-ant-NEW", password="wrong"))  # step-up error
-    responses.append(client.post(f"/listing/{lid}/draft"))  # LLM error path again, now with dashboard key
+    drafting._jobs.clear()
+    responses.append(client.post(f"/listing/{leaky_lid}/draft"))  # LLM error path again, now with dashboard key
+    wait_for_draft(client, leaky_lid)
+    responses += [client.get(f"/editor/{leaky_lid}"), client.get(f"/editor/{leaky_lid}/draft/status")]
 
     async def leaky_telegram():
         raise bot.CheckFailed(f"kaputt {DASHBOARD_SECRETS['telegram_bot_token']} {TEST_SECRETS['TELEGRAM_BOT_TOKEN']}")
@@ -1053,8 +1082,9 @@ def test_unexpected_draft_error_shows_generic_message(client, monkeypatch):
         raise RuntimeError("internal detail that must not be shown")
 
     monkeypatch.setattr(llm, "create_and_store_draft", explode)
-    r = client.post(f"/listing/{lid}/draft")
-    assert r.status_code == 200
+    assert client.post(f"/listing/{lid}/draft").status_code == 303
+    assert wait_for_draft(client, lid)["state"] == "error"
+    r = client.get(f"/editor/{lid}")
     assert "Unerwarteter Fehler" in r.text and "internal detail" not in r.text
 
 
@@ -2250,16 +2280,17 @@ def test_archive_list_says_when_it_is_cut(client, monkeypatch):
 
 def test_listing_page_one_main_action(client, fake_llm):
     """Pictures → rent → hints → one main action; "Als gesendet markieren" and Fredy under "Mehr"; description and
-    letters collapsed. The main button writes the first letter and goes on to the editor."""
+    letters collapsed. The main button "✍️ Anschreiben" opens the editor at once, which writes the first letter."""
     login(client)
     lid = add_listing(fredy_url="https://fredy.example/l/1")
     page = client.get(f"/listing/{lid}").text
-    assert "Anschreiben schreiben lassen" in page and 'name="then" value="editor"' in page
+    assert f'action="/listing/{lid}/draft"' in page and "Anschreiben</button>" in page and 'name="then"' not in page
     more = page.split('<details class="lh-more">')[1].split("</details>")[0]
     assert f'action="/listing/{lid}/sent"' in more and 'href="https://fredy.example/l/1"' in more
     assert '<details class="disclosure lh-section" id="beschreibung">' in page
     assert '<details class="disclosure lh-section" id="entwuerfe">' in page
-    r = client.post(f"/listing/{lid}/draft", data={"then": "editor"})
-    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}#text" and fake_llm == [(lid, "initial")]
+    r = client.post(f"/listing/{lid}/draft")
+    assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}#text"
+    assert wait_for_draft(client, lid)["state"] == "done" and fake_llm == [(lid, "initial")]
     page = client.get(f"/listing/{lid}").text
-    assert "Anschreiben bearbeiten" in page and "Codewort Linde" in page.split('class="lh-actions"')[0]  # hint above
+    assert "Anschreiben öffnen" in page and "Codewort Linde" in page.split('class="lh-actions"')[0]  # hint above

@@ -33,8 +33,8 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import (bot, cards, db, editor_access, housekeeping, is24, learning, llm, media, portals, rent, search, settings,
-               textdiff, textfmt, triage, vault)
+from . import (bot, cards, db, drafting, editor_access, housekeeping, is24, learning, llm, media, portals, rent, search,
+               settings, textdiff, textfmt, triage, vault)
 
 log = logging.getLogger(__name__)
 
@@ -589,6 +589,7 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
         "drafts": drafts,
         "final_session": db.latest_session(listing["id"], "done"),  # the editor's finished text
         "session": db.latest_session(listing["id"]),  # open or done: what the one main button says
+        "writing": not drafts and (drafting.job(listing["id"]) or {}).get("state") == "running",
         # the top of the page: rent that matters, rooms, district and Claude's hint of the newest draft
         "card": cards.facts(listing, hint),
         "hint": hint,
@@ -842,29 +843,17 @@ async def listing_restore(request: Request, listing_id: int, next: str = Form(""
 
 
 @router.post("/listing/{listing_id}/draft", dependencies=ACTION)
-async def listing_create_draft(request: Request, listing_id: int, then: str = Form(""), personal: str = Form(""),
-                               own_words: str = Form(""), dream: str = Form("")):
-    """"Anschreiben schreiben lassen" (then=editor: the main button, on to the editor with the new text) or
-    "Neues Anschreiben erzeugen" under "Alle Anschreiben" (back to the listing page). personal=1: the form had the
-    optional ❤️ and "Was weißt/magst du?" fields; they are stored first, so Claude gets them (llm.personal_block)."""
+async def listing_create_draft(request: Request, listing_id: int, personal: str = Form(""), own_words: str = Form(""),
+                               dream: str = Form("")):
+    """"✍️ Anschreiben" without a draft: Claude starts writing in the background (drafting.start) and the editor
+    opens at once with a progress bar. personal=1: the form had the optional ❤️ and "Was weißt/magst du?" fields;
+    they are stored first, so Claude gets them (llm.personal_block). With a draft already there it only opens it."""
     _listing_or_404(listing_id)
     if personal == "1":
         db.set_personal(listing_id, own_words, dream == "1")
     db.mark_seen(listing_id)
-    kind = "regenerate" if db.latest_draft(listing_id) else "initial"
-    try:
-        draft = await llm.create_and_store_draft(listing_id, kind, source="dashboard")
-    except Exception as exc:
-        message = str(exc) if isinstance(exc, llm.LLMError) else GENERIC_DRAFT_ERROR
-        if not isinstance(exc, llm.LLMError):
-            log.exception("Draft generation failed for listing %s", listing_id)
-        context = _listing_context(_listing_or_404(listing_id), error=redact(request, message))
-        return render(request, "listing.html", context)
-    bot.schedule_refresh(listing_id)  # the Telegram message shows the draft instead of "✍️ Anschreiben"
-    if then == "editor":
-        return RedirectResponse(f"/editor/{listing_id}#text", status_code=303)
-    anchor = f"d{draft['id']}" if isinstance(draft, dict) and draft.get("id") else "entwuerfe"
-    return RedirectResponse(f"/listing/{listing_id}#{anchor}", status_code=303)
+    drafting.start(listing_id)
+    return RedirectResponse(f"/editor/{listing_id}#text", status_code=303)
 
 
 # --- settings -------------------------------------------------------------------

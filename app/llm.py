@@ -17,6 +17,7 @@ import base64
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
@@ -688,9 +689,11 @@ async def prepare_listing(listing_id: int, listing: dict, settings: dict) -> tup
 
 
 def store_draft(listing_id: int, kind: str, result: DraftResult, instruction: str | None = None,
-                source: str | None = None) -> int:
+                source: str | None = None, started: float | None = None) -> int:
     """Store a generated draft (drafts row; source telegram | dashboard | editor for the cost breakdown) and log it.
-    Returns the draft id."""
+    started: time.monotonic() before the pictures were prepared - the wait is stored as duration_ms (the editor's
+    progress bar expects the mean). Returns the draft id."""
+    duration_ms = round((time.monotonic() - started) * 1000) if started is not None else None
     draft_id = db.add_draft(
         listing_id,
         kind,
@@ -707,10 +710,12 @@ def store_draft(listing_id: int, kind: str, result: DraftResult, instruction: st
         currency=result.currency,
         cost_native=result.cost_native,
         source=source,
+        duration_ms=duration_ms,
     )
-    log.info("draft listing=%s kind=%s provider=%s model=%s tokens=%s/%s cost=%s",
+    log.info("draft listing=%s kind=%s provider=%s model=%s tokens=%s/%s cost=%s ms=%s",
              listing_id, kind, result.provider, result.model, result.input_tokens, result.output_tokens,
-             fmt_money(result.cost_usd if result.cost_native is None else result.cost_native, result.currency))
+             fmt_money(result.cost_usd if result.cost_native is None else result.cost_native, result.currency),
+             duration_ms)
     return draft_id
 
 
@@ -744,11 +749,12 @@ async def create_and_store_draft(listing_id: int, kind: str, instruction: str | 
         previous = db.latest_draft(listing_id)
         previous_text = previous["text"] if previous else None
 
+    started = time.monotonic()
     listing, pictures = await prepare_listing(listing_id, listing, settings)
     rules, examples = learned_context(settings)
     result = await generate_draft(listing, settings, kind, previous_text, instruction, pictures,
                                   rules=rules, examples=examples)
-    draft_id = store_draft(listing_id, kind, result, instruction, source=source)
+    draft_id = store_draft(listing_id, kind, result, instruction, source=source, started=started)
     if record_feedback and kind in QUICK_FEEDBACK_KINDS:
         db.add_feedback(listing_id, source, "quick", kind)
     elif record_feedback and kind == "custom":

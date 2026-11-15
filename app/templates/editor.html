@@ -8,6 +8,7 @@
 {# Without JS: reload every 5 s while Claude looks for rules (only the "Gelernt" view polls). An explicit URL without
    "#…": a refresh to the same URL with a fragment is only a jump within the page in browsers, not a reload. #}
 {% if learn_view and job and job.state == "running" %}<noscript><meta http-equiv="refresh" content="5; url=/editor/{{ listing.id }}/lernen"></noscript>{% endif %}
+{% if draft_job and draft_job.state == "running" %}<noscript><meta http-equiv="refresh" content="5; url=/editor/{{ listing.id }}"></noscript>{% endif %}
 {% endblock %}
 
 {# Every form posts the form token and the session it was made for (editor.py checks both). #}
@@ -108,17 +109,36 @@
   {% endif %}
 
   {% if not session %}
-  {# No draft yet: the first one is written here (llm.create_and_store_draft, source "editor"). #}
-  <div class="empty ed-empty">
-    <strong>Noch kein Anschreiben</strong>
-    <p>Claude schreibt ein Anschreiben zu diesem Inserat – mit deinem Profil und Schreibstil. Dauert 10–60 Sekunden.
-      Ein Satz von dir dazu macht es persönlicher.</p>
-    <form method="post" action="/editor/{{ listing.id }}/draft" class="ed-write">
+  {# No draft yet: Claude writes the first one in the background (drafting.py) and this is its progress bar.
+     editor.js posts the start form by itself when nothing runs yet ("idle"), polls /draft/status every second, runs
+     the bar towards the expected time (data-expected-ms: the mean of the last drafts) and replaces the page with
+     the letter when it is there. Without JS: the start button, then a static bar and a reload every 5 s. #}
+  {% set dj = draft_job %}
+  {% set expected_s = ((dj.expected_ms or 40000) / 1000)|round|int %}
+  <section class="ed-card ed-writing" id="text" data-draft-job="{{ dj.state }}"
+    data-status-url="/editor/{{ listing.id }}/draft/status" data-done-url="/editor/{{ listing.id }}?m=draft#text"
+    data-expected-ms="{{ dj.expected_ms }}" data-elapsed-ms="{{ dj.elapsed_ms }}" data-slow-ms="{{ dj.slow_after_ms }}">
+    <h2 class="ed-writing-title" data-draft-title>
+      {%- if dj.state == "error" %}Claude konnte nicht schreiben
+      {%- elif dj.state == "running" %}Claude schreibt dein Anschreiben …
+      {%- else %}<span class="nojs-only">Noch kein Anschreiben</span><span class="js-only">Claude schreibt dein Anschreiben …</span>{% endif -%}
+    </h2>
+    <div class="draftbar{% if dj.state == 'error' %} is-error{% endif %}" data-draft-bar role="progressbar"
+      aria-label="Claude schreibt dein Anschreiben" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <span class="draftbar-fill"></span></div>
+    <p class="draftbar-meta"><span data-draft-note>Dauert meist etwa {{ expected_s }} s.</span>
+      <span class="draftbar-clock" data-draft-clock></span></p>
+    <p class="draftbar-slow" data-draft-slow aria-live="polite"></p>
+    <div class="flash err" role="alert" data-draft-error{% if not dj.error %} hidden{% endif %}>{{ dj.error or "" }}</div>
+    <p class="help draftbar-away" data-draft-away>Du kannst die Seite solange verlassen – Claude schreibt weiter.</p>
+    <form method="post" action="/editor/{{ listing.id }}/draft" class="ed-write" data-draft-start>
       {{ hidden() }}
+      {% if dj.state == "idle" %}<p class="help">Claude schreibt ein Anschreiben zu diesem Inserat – mit deinem Profil
+        und Schreibstil. Ein Satz von dir dazu macht es persönlicher.</p>{% endif %}
       {{ personal_fields(listing, "en") }}
-      <button type="submit" data-busy-label="Claude schreibt …">Anschreiben schreiben lassen</button>
+      <button type="submit">{{ "Nochmal versuchen" if dj.state == "error" else "Anschreiben schreiben lassen" }}</button>
     </form>
-  </div>
+  </section>
 
   {% elif learn_view %}
   {# /editor/{id}/lernen: what Claude learns from this text - out of the way of copying and sending. #}

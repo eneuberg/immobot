@@ -3,8 +3,8 @@ Claude revise it after a critique, finish it (the final version becomes a style 
 and mark the listing as sent.
 
 Two ways in, one page:
-- dashboard login: /editor/{id} (button on the listing page);
-- Telegram: the "📝 Bearbeiten" login_url button opens /e/{id}/{exp}/{sig}?<login data>. editor_access.py checks link
+- dashboard login: /editor/{id} ("✍️ Anschreiben" on the listing page);
+- Telegram: the "✍️ Anschreiben" login_url button opens /e/{id}/{exp}/{sig}?<login data>. editor_access.py checks link
   and login; on success the browser gets an editor session (cookie EDITOR_COOKIE, this listing only, until the
   link's first use + 24 h) and is redirected to the clean /editor/{id}.
 An editor session only reaches this page for its own listing: no navigation, settings, other listings, rule list or
@@ -12,6 +12,10 @@ versions (those stay behind web.require_login). Every POST re-checks access for 
 web.same_origin and carries a form token: editor pages are sent with "Referrer-Policy: no-referrer", so browsers
 post their forms with "Origin: null", which same_origin lets through. editor_headers() adds no-referrer, noindex and
 no-store to every response under /e/ and /editor/.
+
+Without a draft the page is a progress bar: the first draft is written in the background (drafting.py), started by
+the listing page's POST or by editor.js posting /editor/{id}/draft once the page is open (never by the GET itself;
+without JS a button does it), and polled at /editor/{id}/draft/status until the letter is there.
 
 One action finishes a text: "Kopieren & Inserat öffnen" (editor.js copies the text and opens the ad, then posts
 /finish; without JS only /finish). Claude's rule proposals after that run as a background task and are shown on
@@ -31,7 +35,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
-from . import bot, cards, db, editor_access, learning, llm, media, portals, rent, settings, textdiff, web
+from . import bot, cards, db, drafting, editor_access, learning, llm, media, portals, rent, settings, textdiff, web
 
 log = logging.getLogger(__name__)
 
@@ -80,26 +84,26 @@ MESSAGES = {
 }
 
 LOGIN_AGAIN = "Im Dashboard anmelden"
-TAP_AGAIN = "Bitte in Telegram noch einmal auf „📝\u00a0Bearbeiten“ tippen oder im Dashboard anmelden."
+TAP_AGAIN = "Bitte in Telegram noch einmal auf „✍️\u00a0Anschreiben“ tippen oder im Dashboard anmelden."
 # /e/ errors (editor_access.ERROR_CODES): status code, title, text. Never contains anything from the request.
 LINK_ERRORS = {
     "bad_link": (400, "Link ungültig", "Dieser Editor-Link ist ungültig oder unvollständig. " + TAP_AGAIN),
     "link_expired": (410, "Link abgelaufen", "Editor-Links aus Telegram gelten 7 Tage. Im Dashboard anmelden oder in "
                                              "Telegram einen neuen Entwurf anfordern."),
     "login_missing": (400, "Keine Anmeldung von Telegram",
-                      "Telegram hat beim Öffnen keine Anmeldedaten mitgeschickt. Beim Tippen auf „📝\u00a0Bearbeiten“ "
+                      "Telegram hat beim Öffnen keine Anmeldedaten mitgeschickt. Beim Tippen auf „✍️\u00a0Anschreiben“ "
                       "fragt Telegram, ob du dich bei dieser Seite anmelden willst – dort „Anmelden“ wählen bzw. den "
                       "Haken drin lassen. Kommt diese Frage gar nicht, ist beim Bot (@BotFather → Bot Settings → "
                       "Domain) eine andere Domain eingetragen als die dieser Seite. " + TAP_AGAIN),
     "bad_login": (400, "Anmeldung ungültig", "Die Anmeldedaten von Telegram ließen sich nicht prüfen. " + TAP_AGAIN),
     "login_stale": (410, "Link abgelaufen", "Die Anmeldung aus Telegram gilt nur 10 Minuten. " + TAP_AGAIN),
-    "login_reused": (410, "Link schon benutzt", "Jeder Tipp auf „📝\u00a0Bearbeiten“ öffnet den Editor genau einmal – "
+    "login_reused": (410, "Link schon benutzt", "Jeder Tipp auf „✍️\u00a0Anschreiben“ öffnet den Editor genau einmal – "
                                                 "kopierte oder weitergeleitete Links gehen nicht. " + TAP_AGAIN),
     "not_allowed": (403, "Kein Zugriff", "Dieses Telegram-Konto darf den Editor nicht öffnen."),
     "allowlist_missing": (403, "Erst erlaubte User-IDs eintragen",
                           "Der Editor aus Telegram ist nur für eingetragene Telegram-Konten. Im Dashboard unter "
                           "Einstellungen → Zugänge bei „Erlaubte Telegram-User-IDs“ deine User-ID eintragen (oder den "
-                          "Chat per Code neu verbinden, das trägt sie ein). Danach in Telegram erneut auf „📝\u00a0Bearbeiten“ "
+                          "Chat per Code neu verbinden, das trägt sie ein). Danach in Telegram erneut auf „✍️\u00a0Anschreiben“ "
                           "tippen."),
     "window_over": (410, "Link abgelaufen", "Über einen Editor-Button lässt sich der Editor 24 Stunden lang öffnen, "
                                             "gerechnet ab dem ersten Tipp. Im Dashboard anmelden oder in Telegram "
@@ -108,7 +112,7 @@ LINK_ERRORS = {
 REENTRY_ERRORS = ("login_missing", "login_stale", "login_reused")  # checked after the link signature
 EXPIRED = (401, "Sitzung abgelaufen – bitte anmelden",
            "Der Editor aus Telegram gilt einen Tag. Danach geht es mit dem Dashboard-Login weiter – oder in Telegram "
-           "unter einem neuen Entwurf noch einmal auf „📝\u00a0Bearbeiten“ tippen.")
+           "unter einem neuen Entwurf noch einmal auf „✍️\u00a0Anschreiben“ tippen.")
 NOT_FOUND = (404, "Inserat nicht gefunden", "Dieses Inserat gibt es nicht (mehr).")
 
 RULE_ACTION_LABELS = {"add": "Neue Vorliebe", "update": "Regel ändern", "remove": "Regel streichen",
@@ -202,7 +206,7 @@ def _gate(request: Request, raw_id: str, form_token: str | None = None):
 
 @router.get("/e/{listing_id}/{exp}/{sig}")
 def editor_link(request: Request, listing_id: str, exp: str, sig: str):
-    """The "📝 Bearbeiten" button: check link and Telegram login (editor_access), start the editor browser session."""
+    """The "✍️ Anschreiben" button: check link and Telegram login (editor_access), start the editor browser session."""
     cookie, error = editor_access.start_editor_browser_session(listing_id, exp, sig, dict(request.query_params))
     lid = _listing_id(listing_id)
     if error in REENTRY_ERRORS and lid is not None and _access(request, lid) in ("dashboard", "editor"):
@@ -274,7 +278,11 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
         "details": web.details_sections(listing.get("details")),
         "learn_view": learn_view or manual_rule is not None,
     }
-    if session is not None:
+    if session is None:  # no draft yet: the progress bar while Claude writes the first one (drafting.py)
+        job = drafting.status(listing_id)
+        context["draft_job"] = {**job, "error": web.redact(request, job["error"]) if job["error"] else None}
+    else:
+        drafting.forget(listing_id)
         text = session["final_text"] if session["status"] == "done" else session["current_text"]
         feedback = list(reversed(db.list_feedback(session_id=session["id"])))  # oldest first
         history = [{**f, "quick_label": learning.QUICK_LABELS.get(f["text"]) if f["kind"] == "quick" else None}
@@ -318,7 +326,8 @@ async def editor_page(request: Request, listing_id: str, m: str | None = None, k
     listing, mode, denied = _gate(request, listing_id)
     if denied is not None:
         return denied
-    if media.pictures_missing(listing) and not listing.get("media_error"):
+    # Without a draft the page has to show its progress bar at once; the draft job fetches the pictures itself.
+    if media.pictures_missing(listing) and not listing.get("media_error") and db.latest_draft(listing["id"]):
         await media.ensure_media(listing["id"])
         listing = db.get_listing(listing["id"]) or listing
     return _render(request, listing, mode, message=MESSAGES.get(m or ""), critique=web._take_once(k) if k else None,
@@ -346,6 +355,17 @@ def editor_media(request: Request, listing_id: str, position: int):
         return _message_page(request, (404, "Bild nicht gefunden", "Dieses Bild gibt es nicht (mehr)."),
                              login_link=False)
     return FileResponse(path, media_type="image/jpeg")
+
+
+@router.get("/editor/{listing_id}/draft/status")
+def editor_draft_status(request: Request, listing_id: str):
+    """For the progress bar while Claude writes the first draft (drafting.status): state "running" | "done" |
+    "error" | "idle", the error text, elapsed and expected milliseconds."""
+    lid = _listing_id(listing_id)
+    if lid is None or _access(request, lid) not in ("dashboard", "editor"):
+        return JSONResponse({"state": "denied"}, status_code=403)
+    job = drafting.status(lid)
+    return {**job, "error": web.redact(request, job["error"]) if job["error"] else None}
 
 
 @router.get("/editor/{listing_id}/rules/status")
@@ -442,7 +462,7 @@ async def editor_load_media(request: Request, listing_id: str, token: str = Form
         message = "media_loaded"
     if message != "media_soon" and (db.get_listing(listing["id"]) or {}).get("media_error"):
         message = "media_failed"  # no flash: the opened gallery shows the reason
-    bot.schedule_refresh(listing["id"])  # "🖼 Bilder" / rent in the Telegram message
+    bot.schedule_refresh(listing["id"])  # rent in the Telegram message
     return _back(listing["id"], message, "bilder")
 
 
@@ -739,16 +759,20 @@ async def editor_restore(request: Request, listing_id: str, token: str = Form(""
 @router.post("/editor/{listing_id}/draft", dependencies=ACTION)
 async def editor_create_draft(request: Request, listing_id: str, token: str = Form(""), personal: str = Form(""),
                               own_words: str = Form(""), dream: str = Form("")):
-    """"Anschreiben schreiben lassen" while the listing has no draft yet (afterwards the page edits that one). The
-    optional ❤️ and "Was weißt/magst du?" are stored first, so this first draft already uses them."""
+    """Start the first draft in the background (drafting.start: nothing if there is one or it is being written).
+    editor.js posts it as soon as the page shows "no draft yet" (and for "Nochmal versuchen") and gets the job's
+    status as JSON; without JS the button "Anschreiben schreiben lassen" posts it and comes back to the progress
+    bar. The optional ❤️ and "Was weißt/magst du?" are stored first, so this first draft already uses them."""
+    wants_json = _wants_json(request)
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
-        return denied
+        if not wants_json:
+            return denied
+        status = 401 if isinstance(denied, RedirectResponse) else denied.status_code
+        return JSONResponse({"state": "denied", "error": AUTOSAVE_DENIED.get(status, AUTOSAVE_DENIED[403])},
+                            status_code=status)
     _store_personal(listing["id"], personal, own_words, dream)
-    if db.latest_draft(listing["id"]) is None:
-        try:
-            await llm.create_and_store_draft(listing["id"], "initial", source="editor", record_feedback=False)
-        except Exception as exc:
-            return _failed(request, listing, mode, exc)
-        bot.schedule_refresh(listing["id"])  # the Telegram message shows the draft too
-    return _back(listing["id"], "draft", "text")
+    drafting.start(listing["id"])
+    if wants_json:
+        return editor_draft_status(request, str(listing["id"]))
+    return RedirectResponse(f"/editor/{listing['id']}#text", status_code=303)

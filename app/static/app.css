@@ -766,6 +766,7 @@ details.notes-box .notes { margin: 0; font-size: .9rem; }
 .savebar small { color: var(--pico-muted-color); }
 @media (min-width: 768px) { .savebar { margin-left: 0; margin-right: 0; border: 1px solid var(--pico-muted-border-color); border-radius: var(--radius); bottom: .75rem; } }
 .js .nojs-only { display: none !important; }  /* fallback buttons for what app.js does by itself */
+html:not(.js) .js-only { display: none !important; }
 #anbieter > .actions { margin: .5rem 0 .75rem; }
 .empty-line { color: var(--pico-muted-color); font-size: .92rem; margin: 0 0 1rem; }
 
@@ -1083,8 +1084,6 @@ details.rule-add button { width: auto; margin: 0; }
 .ed-newer { align-items: center; }
 .ed-newer form { margin: .5rem 0 0; }
 .ed-newer button { width: auto; margin: 0; }
-.ed-empty form { margin: 1rem 0 0; }
-.ed-empty button { width: auto; margin: 0; }
 .ed-lost { margin: 0 0 1rem; }
 .ed-lost pre.draft { margin-bottom: .6rem; }
 .ed-message { max-width: 34rem; margin: 1.5rem auto 0; }
@@ -1297,8 +1296,6 @@ details.lh-more > summary { min-height: 2.75rem; color: var(--pico-muted-color);
 details.lh-section { margin: 0 0 .75rem; }
 details.lh-section > summary { min-height: 3rem; font-size: 1rem; font-weight: 600; }
 details.lh-section > summary .chip { font-weight: 500; }
-.lh-regen { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .8rem; margin: .5rem 0 0; }
-.lh-regen button { width: auto; margin: 0; }
 .map-toggle > summary, .lh-map .map-open { min-height: 2.75rem; display: inline-flex; align-items: center; }
 
 /* ======================================================================================================
@@ -1355,6 +1352,42 @@ details.rule-why > summary { min-height: 2.75rem; color: var(--pico-muted-color)
 .lh-body details.ed-hints > summary > span:nth-child(2) { white-space: normal; }
 .ed-write { display: grid; gap: .5rem; max-width: 34rem; margin: 0 auto; }
 .ed-write .personal { margin: 0; }
+/* ---- editor: progress bar while Claude writes the first draft (begin) -- editor.html .ed-writing, editor.js ----
+   data-draft-job: idle (with JS the same as running: editor.js starts at once) | running | error. The fill is
+   scaled by editor.js (transform, towards ~93 % at the expected time, then creeping); "is-done" runs it to the end. */
+.ed-writing { max-width: 40rem; margin: 0 auto 1rem; }
+.ed-writing-title { margin: 0 0 1rem; font-size: 1.15rem; }
+.draftbar {
+  position: relative; height: .6rem; overflow: hidden; border-radius: 999px;
+  background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--pico-muted-border-color);
+}
+.draftbar-fill {
+  position: absolute; inset: 0; border-radius: inherit; background: var(--accent);
+  transform: scaleX(0); transform-origin: left center; will-change: transform;
+}
+.draftbar.is-done .draftbar-fill { transition: transform .45s cubic-bezier(.2, .7, .2, 1); }
+.draftbar.is-error .draftbar-fill { background: var(--err); }
+html:not(.js) .ed-writing[data-draft-job=running] .draftbar-fill {  /* no JS: no clock, an endless sweep */
+  right: auto; width: 35%; animation: draftbar-sweep 1.6s ease-in-out infinite;
+}
+@keyframes draftbar-sweep { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+.draftbar-meta {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: .25rem .75rem; margin: .55rem 0 0;
+  font-size: .85rem; color: var(--pico-muted-color);
+}
+.draftbar-clock { font-variant-numeric: tabular-nums; }
+.draftbar-slow { margin: .75rem 0 0; padding: .55rem .8rem; border-radius: var(--radius-sm); font-size: .92rem; font-weight: 600;
+  background: var(--warn-soft); color: var(--warn); }
+.draftbar-slow:empty { display: none; }
+.draftbar-away { margin: .85rem 0 0; font-size: .82rem; }
+.ed-writing [data-draft-error] { margin: .9rem 0 0; }
+.ed-writing [data-draft-error][hidden] { display: none; }
+.ed-writing .ed-write { max-width: none; margin: 1rem 0 0; }
+.ed-writing .ed-write button { width: auto; margin: 0; }
+.ed-writing:is([data-draft-job=running], .js [data-draft-job=idle]) [data-draft-start] { display: none; }
+.ed-writing:not([data-draft-job=running]):not(.js [data-draft-job=idle]) :is(.draftbar-meta, .draftbar-away) { display: none; }
+html:not(.js) .ed-writing[data-draft-job=idle] .draftbar { display: none; }
+/* ---- editor: progress bar (end) ---- */
 #kritik .personal { margin-top: .2rem; }
 
 /* Bewerbungen (bewerbungen.html, listing page): rows like the cards, the next step folded */
