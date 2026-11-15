@@ -41,7 +41,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-from .settings import DEFAULT_SETTINGS, MANUAL_DISCARD, PROFILE_FIELDS, STATUSES, eur_usd_rate
+from .settings import DEFAULT_SETTINGS, MANUAL_DISCARD, PROFILE_FIELDS, SENT_VISIBLE_HOURS, STATUSES, eur_usd_rate
 
 _db_path: str | None = None
 
@@ -242,6 +242,9 @@ ADDED_COLUMNS = {
         # Telegram, all through the signed /go link): from then on the listing and editor pages ask "Interessant?" /
         # "Abgeschickt?" every time the person comes back to them (app.js, data-ask-return). NULL = never.
         ("opened_at", "TEXT"),
+        # when it was marked "Gesendet" (NULL otherwise); "Alle" on the main page leaves it out SENT_VISIBLE_HOURS
+        # later (list_listings recent_sent_only, stats shown_total)
+        ("sent_at", "TEXT"),
         # Aussortiert (settings.DISCARD_REASONS), beside the status, which stays as it was underneath: NULL = not;
         # since when; 1 = by a job (housekeeping.py), 0 = by hand. discard_prev: the "uninteressant" an "offline"
         # replaced (JSON {"reason", "auto", "at"}), restored when Fredy reports the ad online again (mark_online).
@@ -317,6 +320,8 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
         # Listings from before "seen" existed: the ones the person touched (a status other than "neu", or brought
         # back to "neu") count as seen; plain "neu" ones stay unseen.
         conn.execute("UPDATE listings SET seen_at = updated_at WHERE status != 'new' OR auto_status = 'kept'")
+    if ("listings", "sent_at") in added:  # until now the last change was the best date of sending
+        conn.execute("UPDATE listings SET sent_at = updated_at WHERE status = 'sent'")
     if ("listings", "discard_reason") in added:
         # "uninteressant" was a status until now: it becomes aussortiert (automatically if auto_status said so), and the
         # status underneath is the best guess of where the listing was: "Entwurf" with drafts, else "Gesehen" if it
@@ -393,12 +398,22 @@ def latest_listing() -> dict | None:
         return _row(conn.execute("SELECT * FROM listings ORDER BY id DESC LIMIT 1").fetchone())
 
 
+def _old_sent_sql(alias: str = "") -> str:
+    """SQL condition with one parameter (sent_cutoff()): sent longer ago than SENT_VISIBLE_HOURS."""
+    return f"({alias}status = 'sent' AND COALESCE({alias}sent_at, {alias}updated_at) < ?)"
+
+
+def sent_cutoff() -> str:
+    return (datetime.now(timezone.utc) - timedelta(hours=SENT_VISIBLE_HOURS)).isoformat(timespec="seconds")
+
+
 def list_listings(status: str | None = None, limit: int = 300, auto: bool = False,
-                  listing_id: int | None = None, discard: str | None = None) -> list[dict]:
+                  listing_id: int | None = None, discard: str | None = None,
+                  recent_sent_only: bool = False) -> list[dict]:
     """Listings newest first, each with draft_count and cost_eur (its drafts plus its learning calls in llm_usage,
     in euros). status: one track status. discard: None = aussortiert or not, "none" = not aussortiert, "any" =
     aussortiert, or one settings.DISCARD_REASONS key. auto: only those aussortiert by a job. listing_id: just that one
-    (a single card)."""
+    (a single card). recent_sent_only: without those sent more than SENT_VISIBLE_HOURS ago ("Alle")."""
     sql = """
         SELECT l.*, COUNT(d.id) AS draft_count,
                COALESCE(SUM({cost}), 0)
@@ -422,6 +437,9 @@ def list_listings(status: str | None = None, limit: int = 300, auto: bool = Fals
         params.append(discard)
     if auto:
         where.append("l.discard_reason IS NOT NULL AND l.discard_auto = 1")
+    if recent_sent_only:
+        where.append(f"NOT {_old_sent_sql('l.')}")
+        params.append(sent_cutoff())
     if listing_id is not None:
         where.append("l.id = ?")
         params.append(listing_id)
@@ -463,10 +481,12 @@ def set_listing_status(listing_id: int, status: str) -> bool:
     """Low level: set the status as it is (also backwards); any status but "new" counts as seen. Refused while the
     listing is aussortiert (False). The person's actions go through mark_sent / unmark_sent."""
     with connect() as conn:
-        cur = conn.execute("UPDATE listings SET status = ?, updated_at = ?, "
-                           "seen_at = CASE WHEN ? = 'new' THEN seen_at ELSE COALESCE(seen_at, ?) END "
-                           "WHERE id = ? AND discard_reason IS NULL",
-                           (status, now_iso(), status, now_iso(), listing_id))
+        now = now_iso()
+        cur = conn.execute("UPDATE listings SET updated_at = ?, "
+                           "seen_at = CASE WHEN ? = 'new' THEN seen_at ELSE COALESCE(seen_at, ?) END, "
+                           "sent_at = CASE WHEN ? != 'sent' THEN NULL WHEN status = 'sent' THEN COALESCE(sent_at, ?) "
+                           "ELSE ? END, status = ? WHERE id = ? AND discard_reason IS NULL",
+                           (now, status, now, status, now, now, status, listing_id))
         return cur.rowcount > 0
 
 
@@ -480,7 +500,7 @@ def unmark_sent(listing_id: int) -> bool:
     Only a sent listing that isn't aussortiert. Returns whether it changed."""
     with connect() as conn:
         cur = conn.execute(
-            "UPDATE listings SET updated_at = ?, status = CASE WHEN EXISTS (SELECT 1 FROM drafts d "
+            "UPDATE listings SET updated_at = ?, sent_at = NULL, status = CASE WHEN EXISTS (SELECT 1 FROM drafts d "
             "WHERE d.listing_id = listings.id AND d.kind != 'test') THEN 'drafted' ELSE 'seen' END "
             "WHERE id = ? AND status = 'sent' AND discard_reason IS NULL", (now_iso(), listing_id))
         return cur.rowcount > 0
@@ -843,11 +863,14 @@ def stats() -> dict:
             "SELECT status, COUNT(*) AS n FROM listings WHERE discard_reason IS NULL GROUP BY status")}
         by_discard = {r["discard_reason"]: r["n"] for r in conn.execute(
             "SELECT discard_reason, COUNT(*) AS n FROM listings WHERE discard_reason IS NOT NULL GROUP BY discard_reason")}
+        old_sent = conn.execute(f"SELECT COUNT(*) FROM listings WHERE discard_reason IS NULL AND {_old_sent_sql()}",
+                                (sent_cutoff(),)).fetchone()[0]
         auto_dismissed = conn.execute("SELECT COUNT(*) FROM listings WHERE discard_reason = ? "
                                       "AND discard_auto = 1", (MANUAL_DISCARD,)).fetchone()[0]
     return {
         "listings_total": listings_total,
-        "active_total": sum(by_status.values()),  # not aussortiert ("Alle" on the main page)
+        "active_total": sum(by_status.values()),  # not aussortiert
+        "shown_total": sum(by_status.values()) - old_sent,  # "Alle": without those sent > SENT_VISIBLE_HOURS ago
         "discarded_total": sum(by_discard.values()),
         "drafts_total": drafts_total,
         "cost_total": float(cost_total),

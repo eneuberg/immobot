@@ -66,7 +66,7 @@
    aussortiert chip, since it is no status - "Aussortiert" with its reasons. Reasons without listings are left out
    (unless chosen). #}
 <nav class="filters" aria-label="Nach Status filtern">
-  <a href="/" {% if not status_filter and not discard_filter %}aria-current="page"{% endif %}>Alle <span class="n" data-count="all">{{ counts.all }}</span></a>
+  <a href="/" {% if not status_filter and not discard_filter %}aria-current="page"{% endif %} title="Ohne Aussortierte; Gesendete nur {{ SENT_VISIBLE_HOURS }} h nach dem Senden (alle unter „Gesendet“)">Alle <span class="n" data-count="all">{{ counts.all }}</span></a>
   {% for key, label in STATUSES.items() %}
   <a href="/?status={{ key }}" {% if status_filter == key %}aria-current="page"{% endif %}><span class="dot st-{{ key }}" aria-hidden="true"></span>{{ label }} <span class="n" data-count="{{ key }}">{{ counts[key] }}</span></a>
   {% endfor %}

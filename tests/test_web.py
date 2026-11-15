@@ -2173,3 +2173,23 @@ def test_add_listing_needs_login_and_same_origin(client, manual_add):
     client.post("/logout")
     assert client.post("/listings/add", data={"url": "https://www.immobilienscout24.de/expose/7"}).status_code == 303
     assert db.list_listings() == []
+
+
+def test_alle_shows_sent_listings_only_48h_after_sending(client):
+    """"Alle" leaves out what was sent more than SENT_VISIBLE_HOURS ago (count too); "Gesendet" keeps all of them.
+    "Gesendet zurücknehmen" clears the date, sending again sets a new one."""
+    login(client)
+    old, fresh, open_ = add_listing(fredy_id="a"), add_listing(fredy_id="b"), add_listing(fredy_id="c")
+    db.mark_sent(old)
+    db.mark_sent(fresh)
+    with db.connect() as conn:
+        conn.execute("UPDATE listings SET sent_at = '2026-01-01T00:00:00+00:00' WHERE id = ?", (old,))
+    page = client.get("/").text
+    assert f'href="/listing/{fresh}"' in page and f'href="/listing/{open_}"' in page
+    assert f'href="/listing/{old}"' not in page
+    assert '<span class="n" data-count="all">2</span>' in page
+    assert f'href="/listing/{old}"' in client.get("/?status=sent").text
+    db.unmark_sent(old)
+    assert db.get_listing(old)["sent_at"] is None and f'href="/listing/{old}"' in client.get("/").text
+    db.mark_sent(old)
+    assert db.get_listing(old)["sent_at"] > "2026-01-02"

@@ -92,6 +92,8 @@ DISCARD_REASONS = {
 }
 MANUAL_DISCARD = "uninteressant"
 STALE_DAYS = 90
+# "Gesendet" stays in "Alle" on the main page for this long after it was sent, then only under "Gesendet".
+SENT_VISIBLE_HOURS = 48
 
 DEFAULT_SYSTEM_PROMPT = """\
 Du schreibst die erste Kontaktanfrage auf ein Mietwohnungs-Inserat, im Namen der suchenden Person, deren Profil unten steht. \

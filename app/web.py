@@ -139,6 +139,7 @@ templates.env.globals["STATUSES"] = settings.STATUSES
 templates.env.globals["DISCARD_REASONS"] = settings.DISCARD_REASONS
 templates.env.globals["MANUAL_DISCARD"] = settings.MANUAL_DISCARD
 templates.env.globals["STALE_DAYS"] = settings.STALE_DAYS
+templates.env.globals["SENT_VISIBLE_HOURS"] = settings.SENT_VISIBLE_HOURS
 templates.env.globals["open_path"] = editor_access.make_open_path  # "Inserat öffnen" via /go (records it)
 # Content hash in the /static URLs: browsers may cache the files for a day, a deploy still takes effect at once.
 templates.env.globals["STATIC_VERSION"] = hashlib.sha256(
@@ -598,7 +599,7 @@ def card_counts(stats: dict | None = None) -> dict[str, int]:
     by the data-count names in listings.html: "all" (not aussortiert), the statuses (not aussortiert), "discarded"
     (aussortiert), the reasons and "auto" (uninteressant by the job)."""
     stats = stats or db.stats()
-    return {"all": stats["active_total"], **{key: stats["by_status"].get(key, 0) for key in settings.STATUSES},
+    return {"all": stats["shown_total"], **{key: stats["by_status"].get(key, 0) for key in settings.STATUSES},
             "discarded": stats["discarded_total"],
             **{key: stats["by_discard"].get(key, 0) for key in settings.DISCARD_REASONS},
             "auto": stats["auto_dismissed"]}
@@ -635,7 +636,8 @@ def _render_listings(request: Request, listings: list[dict], *, status: str | No
 @router.get("/", dependencies=PAGE)
 def listings_page(request: Request, status: str | None = None, add: str | None = None, q: str | None = None,
                   auto: str | None = None, discarded: str | None = None):
-    """The main page. Without a filter: every listing that isn't aussortiert ("Alle"); status=…: one status of those;
+    """The main page. Without a filter: every listing that isn't aussortiert ("Alle"), sent ones only for
+    SENT_VISIBLE_HOURS after sending; status=…: one status of those (all sent ones under "Gesendet");
     discarded=all|<reason> (&auto=1: "davon automatisch"): the aussortiert ones. A search (q) looks at all of them."""
     if status == "dismissed":  # links and bookmarks from before "aussortiert"
         status, discarded = None, settings.MANUAL_DISCARD
@@ -656,7 +658,8 @@ def listings_page(request: Request, status: str | None = None, add: str | None =
         return _render_listings(request, _listing_cards(rows), status=status, add_failed=add_failed,
                                 search_info={"query": query, "no_terms": not search.query_terms(query)})
     discard = ("any" if discarded == "all" else discarded) if discarded else "none"
-    return _render_listings(request, _listing_cards(db.list_listings(status, auto=only_auto, discard=discard)),
+    rows = db.list_listings(status, auto=only_auto, discard=discard, recent_sent_only=not status and not discarded)
+    return _render_listings(request, _listing_cards(rows),
                             status=status, add_failed=add_failed, discarded=discarded, auto=only_auto)
 
 
