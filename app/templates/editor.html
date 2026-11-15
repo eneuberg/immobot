@@ -331,9 +331,8 @@
   {% if contact_url and listing.status != "sent" and not listing.discard_reason %}
   {# Before finishing: once the ad was opened (on the dashboard, here or in Telegram), every time the person comes
      back to this page (app.js, data-ask-return). #}
-  {% call ask_sheet("editor-" ~ listing.id, "Weiter anschreiben?", opened=listing.opened_at) %}
-    <button type="button" data-sheet-close>✍️ Ja, interessant</button>
-    <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit" class="secondary outline">❌ Uninteressant</button></form>
+  {% call ask_sheet("editor-" ~ listing.id, "Uninteressant?", opened=listing.opened_at) %}
+    <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit">❌ Ja, aussortieren</button></form>
   {% endcall %}
   {% endif %}
 
@@ -358,6 +357,10 @@
         {% elif listing.status == "sent" %}
         <form method="post" action="/editor/{{ listing.id }}/unsent" class="ed-unsent">{{ hidden() }}<span class="badge ok">✓ Gesendet</span>
           <button type="submit" class="linkish">Versehentlich? Zurücknehmen</button></form>
+        {% else %}
+        {# Not sent after all: the sheet below only asks "Abgeschickt?", sorting out stays possible here. #}
+        <form method="post" action="/editor/{{ listing.id }}/dismiss" class="ed-unsent">{{ hidden() }}
+          <button type="submit" class="linkish">❌ Doch uninteressant</button></form>
         {% endif %}
       </article>
       {% if use_rules %}
@@ -382,9 +385,8 @@
     </div>
   </div>
   {% if listing.status != "sent" and not listing.discard_reason %}
-  {% call ask_sheet("editor-" ~ listing.id, "Hast du die Nachricht abgeschickt?", shown=True) %}
+  {% call ask_sheet("editor-" ~ listing.id, "Abgeschickt?", no="Noch nicht", shown=True) %}
     <form method="post" action="/editor/{{ listing.id }}/sent">{{ hidden() }}<button type="submit">✅ Ja, abgeschickt</button></form>
-    <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit" class="secondary outline">Doch uninteressant</button></form>
   {% endcall %}
   {% endif %}
   {% endif %}

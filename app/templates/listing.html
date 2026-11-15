@@ -114,10 +114,15 @@
         <a href="/editor/{{ listing.id }}" role="button" class="lh-main">{{ icon("pen") }}
           {%- if listing.status == "sent" %} Anschreiben ansehen{% elif done %} Fertiges Anschreiben öffnen{% else %} Anschreiben öffnen{% endif %}</a>
         {% endif %}
-        {% if contact_url %}<a href="{{ open_path(listing.id) }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline" data-opens-listing>Inserat öffnen ↗</a>{% endif %}
-        {% if not listing.discard_reason and listing.status != "sent" %}
-        <form method="post" action="/listing/{{ listing.id }}/dismiss"><input type="hidden" name="next" value="/listing/{{ listing.id }}">
-          <button type="submit" class="secondary outline">❌ Uninteressant</button></form>
+        {% set can_dismiss = not listing.discard_reason and listing.status != "sent" %}
+        {% if contact_url or can_dismiss %}
+        <div class="lh-actions-row">
+          {% if contact_url %}<a href="{{ open_path(listing.id) }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline" data-opens-listing>Inserat öffnen ↗</a>{% endif %}
+          {% if can_dismiss %}
+          <form method="post" action="/listing/{{ listing.id }}/dismiss"><input type="hidden" name="next" value="/listing/{{ listing.id }}">
+            <button type="submit" class="secondary outline">❌ Uninteressant</button></form>
+          {% endif %}
+        </div>
         {% endif %}
       </div>
       {% if not drafts %}<p class="help lh-main-help">Der Editor öffnet sich sofort – Claude schreibt dort mit deinem Profil, ein Balken zeigt, wie weit.</p>{% endif %}
@@ -183,16 +188,13 @@
       {# ---- map (end) ---- #}
       {% endif %}
 
-      {# Rarely needed: marking sent by hand (the editor asks after copying), Fredy's own page. #}
-      {% if (not listing.discard_reason and listing.status != "sent") or fredy_url %}
+      {# Rarely needed: marking sent by hand (the editor asks after copying). #}
+      {% if not listing.discard_reason and listing.status != "sent" %}
       <details class="lh-more">
         <summary>Mehr</summary>
         <div class="lh-more-body">
-          {% if not listing.discard_reason and listing.status != "sent" %}
           <form method="post" action="/listing/{{ listing.id }}/sent"><input type="hidden" name="next" value="/listing/{{ listing.id }}">
             <button type="submit" class="secondary outline">✅ Als gesendet markieren</button></form>
-          {% endif %}
-          {% if fredy_url %}<a href="{{ fredy_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline">In Fredy öffnen ↗</a>{% endif %}
         </div>
       </details>
       {% endif %}
@@ -203,19 +205,19 @@
 {% if asks_after_open %}
 {# Once the ad was opened ("Inserat öffnen" here, in the editor or in Telegram: listing.opened_at, or a click on this
    page), app.js shows this sheet every time the person comes back to the page (other tab or app, back button, from
-   Telegram). What it asks follows the status: a draft exists → "Abgeschickt?", aussortiert → "Doch interessant?",
-   else "Interessant?". "Später" hides it. Not once sent, not for offline / veraltet. #}
+   Telegram). It asks only what the person would not do by themselves: without a draft "Uninteressant?" (whoever is
+   interested just goes on writing), with a draft "Abgeschickt?", aussortiert "Doch interessant?". "Nein" /
+   "Noch nicht" just hides it. Not once sent, not for offline / veraltet. #}
 {% set dismissed = listing.discard_reason == MANUAL_DISCARD %}
 {% set ask_sent = not dismissed and listing.status == "drafted" %}
-{% call ask_sheet("listing-" ~ listing.id, "Doch interessant?" if dismissed else ("Hast du die Nachricht abgeschickt?" if ask_sent else "Interessant?"), opened=listing.opened_at, later="Später") %}
+{% call ask_sheet("listing-" ~ listing.id, "Doch interessant?" if dismissed else ("Abgeschickt?" if ask_sent else "Uninteressant?"),
+                  no="Noch nicht" if ask_sent else "Nein", opened=listing.opened_at) %}
   {% if dismissed %}
   <form method="post" action="/listing/{{ listing.id }}/restore"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit">↩️ Zurückholen</button></form>
   {% elif ask_sent %}
   <form method="post" action="/listing/{{ listing.id }}/sent"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit">✅ Ja, abgeschickt</button></form>
-  <form method="post" action="/listing/{{ listing.id }}/dismiss"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit" class="secondary outline">Doch uninteressant</button></form>
   {% else %}
-  <a href="/editor/{{ listing.id }}" role="button">✍️ Ja, anschreiben</a>
-  <form method="post" action="/listing/{{ listing.id }}/dismiss"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit" class="secondary outline">❌ Uninteressant</button></form>
+  <form method="post" action="/listing/{{ listing.id }}/dismiss"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit">❌ Ja, aussortieren</button></form>
   {% endif %}
 {% endcall %}
 {% endif %}

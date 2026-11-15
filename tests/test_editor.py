@@ -564,45 +564,48 @@ def test_mark_sent(client, lid):
     _, fields = open_editor(client, lid)
     post(client, lid, "finish", fields, text="Ende")
     page = client.get(f"/editor/{lid}").text
-    assert "Hast du die Nachricht abgeschickt?" in page and "✅ Ja, abgeschickt" in page
+    assert "<strong>Abgeschickt?</strong>" in page and "✅ Ja, abgeschickt" in page
     assert f'<aside class="ask-sheet" data-ask-return="editor-{lid}" data-opened\n' in page  # the sheet, shown
-    assert "data-sheet-close>Noch nicht</button>" in page and "<dialog" not in page  # not modal
+    sheet = page.split('class="ask-sheet"')[1].split("</aside>")[0]
+    assert 'class="secondary outline js-only" data-sheet-close>Noch nicht</button>' in sheet and "<dialog" not in page
+    assert "ask-later" not in sheet and "uninteressant" not in sheet  # two buttons, only what she'd not do anyway
     assert page.count(f'action="/editor/{lid}/sent"') == 1  # asked once
     r = post(client, lid, "sent", {"token": fields["token"]})
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=sent#ende"
     assert db.get_listing(lid)["status"] == "sent" and client.refreshed == [lid, lid]  # Telegram: Endversion, then "gesendet"
     page = client.get(f"/editor/{lid}").text
-    assert "✓ Gesendet" in page and "Hast du die Nachricht abgeschickt?" not in page
+    assert "✓ Gesendet" in page and "<strong>Abgeschickt?</strong>" not in page
     # pressed by mistake: "zurücknehmen" -> back to "Entwurf"
     assert f'action="/editor/{lid}/unsent"' in page
     r = post(client, lid, "unsent", {"token": fields["token"]})
     assert r.headers["location"] == f"/editor/{lid}?m=unsent#ende" and db.get_listing(lid)["status"] == "drafted"
-    assert "Hast du die Nachricht abgeschickt?" in client.get(f"/editor/{lid}").text
+    assert "<strong>Abgeschickt?</strong>" in client.get(f"/editor/{lid}").text
 
 
 def test_mark_dismissed_after_finish(client, lid):
-    """Not sent after all: "Doch uninteressant" in the card and the overlay sorts the listing out (by hand); the
-    banner then offers "↩️ Zurückholen"."""
+    """Not sent after all: "Doch uninteressant" in the card sorts the listing out (by hand; the sheet only asks
+    "Abgeschickt?"); the banner then offers "↩️ Zurückholen"."""
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     editor_cookie(client, lid)
     _, fields = open_editor(client, lid)
     post(client, lid, "finish", fields, text="Ende")
     page = client.get(f"/editor/{lid}").text
-    assert page.count(f'action="/editor/{lid}/dismiss"') == 1 and "Doch uninteressant" in page
+    assert page.count(f'action="/editor/{lid}/dismiss"') == 1 and "❌ Doch uninteressant" in page
+    assert "Doch uninteressant" not in page.split('class="ask-sheet"')[1]
     r = post(client, lid, "dismiss", {"token": fields["token"]})
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=dismissed#ende"
     listing = db.get_listing(lid)
     assert listing["discard_reason"] == "uninteressant" and listing["discard_auto"] == 0
     assert client.refreshed[-1] == lid
     page = client.get(f"/editor/{lid}").text
-    assert "Hast du die Nachricht abgeschickt?" not in page and "Von dir als uninteressant aussortiert" in page
+    assert "<strong>Abgeschickt?</strong>" not in page and "Von dir als uninteressant aussortiert" in page
     assert '<span class="dc-kind">Aussortiert</span><span class="dc-reason">Uninteressant</span>' in page
     assert f'action="/editor/{lid}/restore"' in page
     assert post(client, lid, "sent", {"token": fields["token"]}).headers["location"] == f"/editor/{lid}?m=locked"
     assert db.get_listing(lid)["status"] != "sent"  # locked while aussortiert
     r = post(client, lid, "restore", {"token": fields["token"]})
     assert r.headers["location"] == f"/editor/{lid}?m=restored" and db.get_listing(lid)["discard_reason"] is None
-    assert "Hast du die Nachricht abgeschickt?" in client.get(f"/editor/{lid}").text
+    assert "<strong>Abgeschickt?</strong>" in client.get(f"/editor/{lid}").text
 
 
 def test_editor_banner_for_offline_listings(client, lid):
@@ -639,14 +642,17 @@ def test_editor_counts_as_seen(client, lid):
 
 
 def test_asks_after_opening_the_listing_while_writing(client, lid):
-    """Before "Fertig", "Weiter anschreiben?" waits on the page; once the ad was opened (here, on the dashboard or in
+    """Before "Fertig", "Uninteressant?" waits on the page; once the ad was opened (here, on the dashboard or in
     Telegram - the /go link) it is armed for every return. "Uninteressant" there dismisses."""
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     editor_cookie(client, lid)
     r, fields = open_editor(client, lid)
     page = r.text
     assert f'data-go="{editor_access.make_open_path(lid)}"' in page  # "Kopieren & Inserat öffnen"
-    assert f'data-ask-return="editor-{lid}" hidden' in page and "Weiter anschreiben?" in page  # not armed
+    assert f'data-ask-return="editor-{lid}" hidden' in page and "<strong>Uninteressant?</strong>" in page  # not armed
+    sheet = page.split('class="ask-sheet"')[1].split("</aside>")[0]
+    assert "❌ Ja, aussortieren</button>" in sheet and "data-sheet-close>Nein</button>" in sheet
+    assert "interessant</button>" not in sheet and "ask-later" not in sheet
     db.mark_opened(lid)
     _, fields = open_editor(client, lid)
     assert f'data-ask-return="editor-{lid}" data-opened hidden' in client.get(f"/editor/{lid}").text
@@ -661,7 +667,7 @@ def test_no_after_open_question_once_finished(client, lid):
     _, fields = open_editor(client, lid)
     post(client, lid, "finish", fields, text="Ende")
     page = client.get(f"/editor/{lid}").text
-    assert "Weiter anschreiben?" not in page and page.count("data-ask-return") == 1  # "Abgeschickt?" instead
+    assert "Uninteressant?" not in page and page.count("data-ask-return") == 1  # "Abgeschickt?" instead
 
 
 def test_new_round_from_a_newer_draft(client, lid):

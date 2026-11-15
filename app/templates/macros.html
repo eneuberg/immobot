@@ -153,15 +153,15 @@ Von dir als uninteressant aussortiert am {{ l.discarded_at|local_time }}.
 
 {# The return question (listing page, editor) as a non-modal sheet at the bottom of the screen (app.js, data-ask-return): it covers nothing
    and takes no focus. Hidden until the person comes back to the page once the ad was opened; with `shown` (the
-   finished text, not sent yet) it is there from the start, also without JS. "Noch nicht" (JS only) hides it until
-   the next return. #}
-{% macro ask_sheet(key, title, shown=False, opened=False, later="Noch nicht") %}
+   finished text, not sent yet) it is there from the start, also without JS. It asks only what the person would not
+   do by themselves, with two equal buttons: the action (caller) and `no` ("Nein" / "Noch nicht", JS only), which
+   just hides it until the next return. No title of the listing, no help text. #}
+{% macro ask_sheet(key, title, no="Nein", shown=False, opened=False) %}
 <aside class="ask-sheet" data-ask-return="{{ key }}"{% if opened or shown %} data-opened{% endif %}{% if not shown %} hidden{% endif %}
   role="region" aria-labelledby="{{ key }}-title" aria-live="polite">
   <div class="ask-sheet-in">
     <p class="ask-sheet-title" id="{{ key }}-title"><strong>{{ title }}</strong></p>
-    <div class="ask-sheet-actions">{{ caller() }}</div>
-    <button type="button" class="linkish ask-later js-only" data-sheet-close>{{ later }}</button>
+    <div class="ask-sheet-actions">{{ caller() }}<button type="button" class="secondary outline js-only" data-sheet-close>{{ no }}</button></div>
   </div>
 </aside>
 {% endmacro %}

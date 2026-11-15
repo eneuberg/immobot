@@ -168,7 +168,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "paused": "0",
     "kleinanzeigen_enabled": "1",  # Fredy's Kleinanzeigen listings: posted by immobot (pictures + message); 0 = ignored
     "auto_dismiss_hours": "48",  # housekeeping.py: seen this long ago without a draft -> "uninteressant"; 0 = off
-    "fredy_base_url": "",  # portals.fredy_url: own "In Fredy öffnen" links; empty = the fredyUrl Fredy sent
+    "fredy_base_url": "",  # Fredy's address: fredy_alive (MCP sync); empty = no sync
     "use_examples": "1",  # learning.py: the newest finished editor texts go into the system prompt as examples
     "use_rules": "1",  # learning.py: active learned rules go into the system prompt; rules are proposed on "Fertig"
     "use_voice_guide": "1",  # llm.VOICE_GUIDE in the system prompt: how to sound like the person, not like an AI

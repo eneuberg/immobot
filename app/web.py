@@ -587,7 +587,6 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
         # Only http(s) URLs become links/images; contact_url's output is checked as well.
         "image_url": portals.safe_url(listing["image_url"]),
         "contact_url": portals.safe_url(portals.contact_url(listing["provider"], listing["url"])),
-        "fredy_url": portals.fredy_url(listing, db.get_settings()["fredy_base_url"]),
         "drafts": drafts,
         "final_session": db.latest_session(listing["id"], "done"),  # the editor's finished text
         "session": db.latest_session(listing["id"]),  # open or done: what the one main button says
