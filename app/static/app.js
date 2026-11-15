@@ -325,30 +325,71 @@
   });
 
   // The question when the person comes back (<aside class="ask-sheet" data-ask-return="key">, listing and editor
-  // page): "Uninteressant?" / "Abgeschickt?" / "Doch interessant?". A non-modal sheet at the bottom: it appears
-  // (hidden = false) and takes neither the page nor the focus; "Nein" / "Noch nicht" ([data-sheet-close]) hides it
-  // until the next return.
-  // Shown from the start where the server says so (the finished text: not hidden). A <dialog> still works as before. It opens every time the person comes back to the page, once data-opened is set - by the server
-  // (the ad was opened before: dashboard, editor or Telegram; the finished editor always) or by a click on
-  // "Inserat öffnen" (<a data-opens-listing>) here. "Coming back" =
+  // page): "Uninteressant?" / "Doch interessant?" as a slim bar (.ask-bar: action + ✕), "Abgeschickt?" as the sheet
+  // ("Noch nicht"). Neither is modal: it slides up (data-anim=in) and takes neither the page nor the focus; ✕ /
+  // "Noch nicht" ([data-sheet-close]) or Escape (not while typing) slide it down until the next return.
+  // For its first moment it ignores taps (data-cooling, see immobotShowModal): it comes up exactly where the thumb
+  // rests, while the browser is still showing the page again - a tap meant for the page must not sort it out.
+  // Shown from the start where the server says so (the finished text: not hidden). It comes up every time the person
+  // comes back to the page, once data-opened is set - by the server (the ad was opened before: dashboard, editor or
+  // Telegram; the finished editor always) or by a click on "Inserat öffnen" (<a data-opens-listing>) here.
+  // "Coming back" =
   //   - the page was hidden (other tab or app) or the window lost focus (other window) for LEAVE_MS or more;
   //   - the browser shows it again from its cache (back button) or reloads it after being away (the time of leaving
   //     sits in sessionStorage; a tab the phone threw out of memory);
   //   - it was opened from outside immobot (a Telegram button, a bookmark: no referrer from this site).
   // Not: going on within immobot, or a form on the page sending the person back to it (same address as referrer).
+  var reducedMotion = function () {
+    return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  };
+  function slideIn(el) {
+    clearTimeout(el._animTimer);
+    el.hidden = false;
+    if (reducedMotion()) { el.removeAttribute("data-anim"); return; }
+    el.removeAttribute("data-anim");
+    void el.offsetWidth;  // restart the animation
+    el.setAttribute("data-anim", "in");
+  }
+  function slideOut(el) {
+    if (el.hidden) return;
+    clearTimeout(el._animTimer);
+    if (reducedMotion()) { el.hidden = true; el.removeAttribute("data-anim"); return; }
+    el.setAttribute("data-anim", "out");
+    el._animTimer = setTimeout(function () { el.hidden = true; el.removeAttribute("data-anim"); }, 220);
+  }
+
+  // "Aussortiert · Rückgängig" after "Aussortieren" (macros.html undo_toast): at the bottom for TOAST_MS, longer
+  // while the pointer or the focus is on it. Without JS it is a flash at the top of the page.
+  var TOAST_MS = 6000;
+  document.addEventListener("DOMContentLoaded", function () {
+    var toast = document.querySelector("[data-toast]");
+    if (!toast) return;
+    var timer;
+    var later = function () { clearTimeout(timer); timer = setTimeout(function () { slideOut(toast); }, TOAST_MS); };
+    var held = function () { return toast.matches(":hover") || toast.contains(document.activeElement); };
+    slideIn(toast);
+    later();
+    toast.addEventListener("mouseleave", function () { if (!held()) later(); });
+    toast.addEventListener("focusout", function () { setTimeout(function () { if (!held()) later(); }, 0); });
+    toast.addEventListener("mouseenter", function () { clearTimeout(timer); });
+    toast.addEventListener("focusin", function () { clearTimeout(timer); });
+  });
+
   document.addEventListener("DOMContentLoaded", function () {
     var dlg = document.querySelector("[data-ask-return]");
     var isDialog = dlg && dlg.tagName === "DIALOG";
     if (!dlg || (isDialog && typeof dlg.showModal !== "function")) return;
     var show = function () {
       if (isDialog) { window.immobotShowModal(dlg); return; }
-      if (!dlg.hidden) return;
-      dlg.hidden = false;
+      if (!dlg.hidden && dlg.getAttribute("data-anim") !== "out") return;
+      var toast = document.querySelector("[data-toast]");
+      if (toast) { toast.hidden = true; toast.removeAttribute("data-anim"); }  // same place: the question wins
+      slideIn(dlg);
       dlg.setAttribute("data-cooling", "");  // a tap meant for the page underneath must not hit a button
       clearTimeout(dlg._coolTimer);
       dlg._coolTimer = setTimeout(function () { dlg.removeAttribute("data-cooling"); }, MODAL_COOLDOWN_MS);
     };
-    var hide = function () { if (isDialog) dlg.close(); else dlg.hidden = true; };
+    var hide = function () { if (isDialog) dlg.close(); else slideOut(dlg); };
     var LEAVE_MS = 1500;
     var key = "immobot-left-" + dlg.dataset.askReturn;
     var unloading = false;
@@ -390,7 +431,17 @@
     dlg.querySelectorAll("[data-dialog-close], [data-sheet-close]").forEach(function (btn) {
       btn.addEventListener("click", hide);
     });
-    if (isDialog) dlg.addEventListener("click", function (e) { if (e.target === dlg) dlg.close(); });
+    if (isDialog) {
+      dlg.addEventListener("click", function (e) { if (e.target === dlg) dlg.close(); });
+    } else {
+      // Escape slides it away - not while typing (a text field keeps its own Escape) or with an overlay open.
+      document.addEventListener("keydown", function (e) {
+        if (e.key !== "Escape" || dlg.hidden || e.defaultPrevented || document.querySelector("dialog[open]")) return;
+        var t = e.target;
+        if (t && t.closest && t.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return;
+        hide();
+      });
+    }
     // This load: after being away (reloaded meanwhile), or arriving from outside immobot.
     var ref = "";
     try { ref = document.referrer ? new URL(document.referrer) : ""; } catch (err) { ref = ""; }

@@ -454,40 +454,83 @@ def test_listing_page_locked_while_aussortiert(client):
     assert "Älter als 90 Tage (eingegangen am" in client.get(f"/listing/{stale}").text
 
 
+def _return_question(page: str, lid: int) -> str:
+    """The markup of the listing page's return question (ask_bar or ask_sheet), from its attributes on."""
+    return page.split(f'data-ask-return="listing-{lid}"')[1].split("</aside>")[0]
+
+
 def test_listing_page_asks_after_opening_the_listing(client):
     """"Inserat öffnen" goes through the signed /go link; the question is armed (data-opened) once the ad was opened.
-    It asks only what the person wouldn't do by themselves: "Uninteressant?" (Ja, aussortieren / Nein), with a draft
-    "Abgeschickt?" (Ja / Noch nicht), uninteressant "Doch interessant?" (Zurückholen / Nein); nothing once sent or
-    offline. Two equal buttons, no title of the listing, no help text, no small "Später"."""
+    It asks only what the person wouldn't do by themselves: "Uninteressant?" and "Doch interessant?" as a slim bar
+    (one muted action + ✕, hidden until app.js brings it up), with a draft "Abgeschickt?" as the sheet (Ja / Noch
+    nicht); nothing once sent or offline. No title of the listing, no help text, no "Später" / "Nein"."""
     login(client)
     lid = add_listing()
     page = client.get(f"/listing/{lid}").text
     assert f'href="{editor_access.make_open_path(lid)}"' in page and "data-opens-listing" in page
-    overlay = page.split(f'data-ask-return="listing-{lid}"')[1].split("</aside>")[0]
-    assert not overlay.startswith(" data-opened")  # never opened: only a click here arms it
-    assert "<strong>Uninteressant?</strong>" in overlay and "❌ Ja, aussortieren</button>" in overlay
-    assert f'action="/listing/{lid}/dismiss"' in overlay
-    assert 'class="secondary outline js-only" data-sheet-close>Nein</button>' in overlay
-    assert "Später" not in overlay and "anschreiben" not in overlay and "ask-later" not in overlay
-    assert overlay.count("<button") == 2
+    bar = _return_question(page, lid)
+    assert not bar.startswith(" data-opened")  # never opened: only a click here arms it
+    assert bar.startswith(" hidden\n")  # only app.js shows it: nothing without JS
+    assert f'<aside class="ask-sheet ask-bar" data-ask-return="listing-{lid}" hidden' in page
+    assert "<strong>Uninteressant?</strong>" in bar
+    assert f'action="/listing/{lid}/dismiss"' in bar
+    assert '<button type="submit" class="ask-bar-act is-dismiss">Aussortieren</button>' in bar  # not the green primary
+    assert 'data-sheet-close aria-label="Schließen"' in bar and "✕" in bar
+    assert "Ja, aussortieren" not in bar and ">Nein<" not in bar and "Später" not in bar and "anschreiben" not in bar
+    assert bar.count("<button") == 2
+    assert "<dialog" not in page
     db.mark_opened(lid)
-    overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</aside>")[0]
-    assert overlay.startswith(" data-opened")
+    bar = _return_question(client.get(f"/listing/{lid}").text, lid)
+    assert bar.startswith(" data-opened hidden")
     db.add_draft(lid, "initial", "Hallo", "claude-opus-5-5")
     db.advance_status(lid, "drafted")
-    overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</aside>")[0]
-    assert "<strong>Abgeschickt?</strong>" in overlay and f'action="/listing/{lid}/sent"' in overlay
-    assert "aussortieren" not in overlay and "data-sheet-close>Noch nicht</button>" in overlay
+    page = client.get(f"/listing/{lid}").text
+    sheet = _return_question(page, lid)
+    assert f'<aside class="ask-sheet" data-ask-return="listing-{lid}" data-opened hidden' in page  # the sheet
+    assert "<strong>Abgeschickt?</strong>" in sheet and f'action="/listing/{lid}/sent"' in sheet
+    assert "✅ Ja, abgeschickt</button>" in sheet and "data-sheet-close>Noch nicht</button>" in sheet
+    assert "ussortieren" not in sheet and "ask-bar" not in sheet
     db.discard(lid)
-    overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</aside>")[0]
-    assert "Doch interessant?" in overlay and "aussortieren" not in overlay
-    assert f'action="/listing/{lid}/restore"' in overlay and "data-sheet-close>Nein</button>" in overlay
+    page = client.get(f"/listing/{lid}").text
+    bar = _return_question(page, lid)
+    assert f'<aside class="ask-sheet ask-bar" data-ask-return="listing-{lid}" data-opened hidden' in page
+    assert "<strong>Doch interessant?</strong>" in bar and "ussortieren" not in bar
+    assert f'action="/listing/{lid}/restore"' in bar and '<button type="submit" class="ask-bar-act">↩️ Zurückholen</button>' in bar
+    assert 'aria-label="Schließen"' in bar and bar.count("<button") == 2
     db.restore(lid)
     db.mark_sent(lid)
     assert "data-ask-return" not in client.get(f"/listing/{lid}").text
     other = add_listing(fredy_id="x2")
     db.mark_offline(["x2"])
     assert "data-ask-return" not in client.get(f"/listing/{other}").text
+
+
+def test_listing_dismiss_offers_undo(client):
+    """"Aussortieren" in the bar posts the plain form; back on the page "Aussortiert · Rückgängig" (a toast with JS,
+    a flash without), whose "Rückgängig" posts the restore form and brings the listing back."""
+    login(client)
+    lid = add_listing()
+    db.mark_opened(lid)
+    r = client.post(f"/listing/{lid}/dismiss", data={"next": f"/listing/{lid}"})
+    assert r.status_code == 303 and r.headers["location"] == f"/listing/{lid}?m=dismissed#status"
+    page = client.get(r.headers["location"]).text
+    toast = page.split('class="flash ok undo-toast"')[1].split("</div>")[0]
+    assert ' role="status" data-toast>' in toast and '<span class="undo-toast-text">Aussortiert</span>' in toast
+    assert f'<form method="post" action="/listing/{lid}/restore" class="flash-dismiss">' in toast
+    assert f'<input type="hidden" name="next" value="/listing/{lid}">' in toast
+    assert '<button type="submit" class="linkish">Rückgängig</button>' in toast
+    assert "Mit „Zurückholen“ kommt es wieder in die Liste." not in page  # the toast instead of the message
+    assert "Doch interessant?" in page  # the next return asks this
+    assert "data-toast" not in client.get(f"/listing/{lid}").text  # only right after dismissing
+    r = client.post(f"/listing/{lid}/restore", data={"next": f"/listing/{lid}"})
+    assert r.headers["location"] == f"/listing/{lid}?m=restored#status"
+    assert db.get_listing(lid)["discard_reason"] is None
+    page = client.get(r.headers["location"]).text
+    assert "Zurückgeholt – das Inserat ist wieder in der Liste." in page and "data-toast" not in page
+    assert "<strong>Uninteressant?</strong>" in page
+    # not aussortiert by hand (offline): no "Rückgängig" - it couldn't undo anything
+    db.mark_offline(["x1"])
+    assert "data-toast" not in client.get(f"/listing/{lid}?m=dismissed").text
 
 
 def test_open_link_records_and_redirects(client):

@@ -642,23 +642,49 @@ def test_editor_counts_as_seen(client, lid):
 
 
 def test_asks_after_opening_the_listing_while_writing(client, lid):
-    """Before "Fertig", "Uninteressant?" waits on the page; once the ad was opened (here, on the dashboard or in
-    Telegram - the /go link) it is armed for every return. "Uninteressant" there dismisses."""
+    """Before "Fertig", "Uninteressant?" waits on the page as a slim bar (no dialog, hidden until app.js brings it
+    up); once the ad was opened (here, on the dashboard or in Telegram - the /go link) it is armed for every return.
+    Its "Aussortieren" (muted, not the green primary) dismisses; ✕ keeps the listing."""
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     editor_cookie(client, lid)
     r, fields = open_editor(client, lid)
     page = r.text
     assert f'data-go="{editor_access.make_open_path(lid)}"' in page  # "Kopieren & Inserat öffnen"
-    assert f'data-ask-return="editor-{lid}" hidden' in page and "<strong>Uninteressant?</strong>" in page  # not armed
-    sheet = page.split('class="ask-sheet"')[1].split("</aside>")[0]
-    assert "❌ Ja, aussortieren</button>" in sheet and "data-sheet-close>Nein</button>" in sheet
-    assert "interessant</button>" not in sheet and "ask-later" not in sheet
+    assert f'<aside class="ask-sheet ask-bar" data-ask-return="editor-{lid}" hidden' in page  # not armed
+    bar = page.split('class="ask-sheet ask-bar"')[1].split("</aside>")[0]
+    assert "<strong>Uninteressant?</strong>" in bar and f'action="/editor/{lid}/dismiss"' in bar
+    assert '<button type="submit" class="ask-bar-act is-dismiss">Aussortieren</button>' in bar
+    assert 'data-sheet-close aria-label="Schließen"' in bar and bar.count("<button") == 2
+    assert f'name="token" value="{fields["token"]}"' in bar
+    assert "Ja, aussortieren" not in bar and ">Nein<" not in bar and "ask-later" not in bar and "<dialog" not in page
     db.mark_opened(lid)
     _, fields = open_editor(client, lid)
     assert f'data-ask-return="editor-{lid}" data-opened hidden' in client.get(f"/editor/{lid}").text
     r = post(client, lid, "dismiss", {"token": fields["token"]})
     assert r.status_code == 303 and db.get_listing(lid)["discard_reason"] == "uninteressant"
     assert "data-ask-return" not in client.get(f"/editor/{lid}").text  # nothing left to decide
+
+
+def test_editor_dismiss_offers_undo(client, lid):
+    """After "Aussortieren": "Aussortiert · Rückgängig" (a toast with JS, a flash without); "Rückgängig" posts the
+    restore form with the form token and brings the listing back."""
+    db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
+    editor_cookie(client, lid)
+    _, fields = open_editor(client, lid)
+    r = post(client, lid, "dismiss", {"token": fields["token"]})
+    page = client.get(r.headers["location"]).text
+    toast = page.split('class="flash ok undo-toast"')[1].split("</div>")[0]
+    assert ' role="status" data-toast>' in toast and '<span class="undo-toast-text">Aussortiert</span>' in toast
+    assert f'<form method="post" action="/editor/{lid}/restore" class="flash-dismiss">' in toast
+    assert f'name="token" value="{fields["token"]}"' in toast
+    assert '<button type="submit" class="linkish">Rückgängig</button>' in toast
+    assert "Aussortiert: uninteressant." not in page  # the toast instead of the message
+    assert "data-toast" not in client.get(f"/editor/{lid}").text  # only right after dismissing
+    restore = form_fields(toast)
+    r = client.post(f"/editor/{lid}/restore", data=restore)
+    assert r.headers["location"] == f"/editor/{lid}?m=restored" and db.get_listing(lid)["discard_reason"] is None
+    page = client.get(r.headers["location"]).text
+    assert "Zurückgeholt – das Inserat ist wieder in der Liste." in page and "<strong>Uninteressant?</strong>" in page
 
 
 def test_no_after_open_question_once_finished(client, lid):

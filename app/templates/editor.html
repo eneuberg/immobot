@@ -1,5 +1,5 @@
 {% extends "editor_base.html" %}
-{% from "macros.html" import flashes, state_badge, discard_note, icon, text_diff, ask_sheet, hints_box, personal_fields %}
+{% from "macros.html" import flashes, state_badge, discard_note, icon, text_diff, ask_sheet, ask_bar, undo_toast, hints_box, personal_fields %}
 {% from "rule_macros.html" import manual_rule_form %}
 {% from "listing_macros.html" import media_label, details_article %}
 {% block title %}Editor · {{ listing.title or "Inserat" }}{% endblock %}
@@ -100,6 +100,7 @@
   </header>
 
   {{ flashes(message, error) }}
+  {% if undo_dismiss %}{% call undo_toast("Aussortiert", "/editor/" ~ listing.id ~ "/restore") %}{{ hidden() }}{% endcall %}{% endif %}
   {% if lost_text %}
   <details class="disclosure ed-lost" open>
     <summary>Dein nicht gespeicherter Text</summary>
@@ -331,8 +332,8 @@
   {% if contact_url and listing.status != "sent" and not listing.discard_reason %}
   {# Before finishing: once the ad was opened (on the dashboard, here or in Telegram), every time the person comes
      back to this page (app.js, data-ask-return). #}
-  {% call ask_sheet("editor-" ~ listing.id, "Uninteressant?", opened=listing.opened_at) %}
-    <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit">❌ Ja, aussortieren</button></form>
+  {% call ask_bar("editor-" ~ listing.id, "Uninteressant?", opened=listing.opened_at) %}
+    <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit" class="ask-bar-act is-dismiss">Aussortieren</button></form>
   {% endcall %}
   {% endif %}
 

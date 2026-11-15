@@ -248,7 +248,7 @@ def _proposals(session: dict) -> tuple[list[dict], list[dict]]:
 
 def _render(request: Request, listing: dict, mode: str, *, message: str | None = None, error: str | None = None,
             critique: str | None = None, lost_text: str | None = None, manual_rule: str | None = None,
-            open_media: bool = False, learn_view: bool = False, status_code: int = 200):
+            open_media: bool = False, learn_view: bool = False, undo_dismiss: bool = False, status_code: int = 200):
     """The editor page; learn_view: its "Was Claude daraus lernt" view (/editor/{id}/lernen, a finished text)."""
     listing_id = listing["id"]
     session = learning.open_or_create_session(listing_id)
@@ -264,6 +264,7 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
         "token": _form_token(request, listing_id, mode),
         "session": session,
         "message": message,
+        "undo_dismiss": undo_dismiss,  # "Aussortiert · Rückgängig" after "Aussortieren"
         "error": web.redact(request, error) if error else None,
         "critique": critique,
         "lost_text": lost_text,
@@ -330,7 +331,10 @@ async def editor_page(request: Request, listing_id: str, m: str | None = None, k
     if media.pictures_missing(listing) and not listing.get("media_error") and db.latest_draft(listing["id"]):
         await media.ensure_media(listing["id"])
         listing = db.get_listing(listing["id"]) or listing
-    return _render(request, listing, mode, message=MESSAGES.get(m or ""), critique=web._take_once(k) if k else None,
+    # Just aussortiert by hand: "Aussortiert · Rückgängig" (a toast with JS) instead of the plain message.
+    undo_dismiss = m == "dismissed" and listing.get("discard_reason") == settings.MANUAL_DISCARD
+    return _render(request, listing, mode, message=None if undo_dismiss else MESSAGES.get(m or ""),
+                   critique=web._take_once(k) if k else None, undo_dismiss=undo_dismiss,
                    open_media=m in ("media", "media_loaded", "media_failed", "media_soon"))
 
 

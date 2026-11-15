@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros.html" import state_badge, discard_note, draft_meta, icon, ask_sheet, hints_box, personal_fields %}
+{% from "macros.html" import state_badge, discard_note, draft_meta, icon, ask_sheet, ask_bar, undo_toast, hints_box, personal_fields %}
 {% from "outcome_macros.html" import outcome_steps, outcome_form %}
 {% from "listing_macros.html" import media_label, details_article %}
 {% block title %}{{ listing.title or "Inserat" }}{% endblock %}
@@ -13,6 +13,7 @@
 <p class="backlink"><a href="/">← Inserate</a></p>
 {% if error %}<div class="flash err" role="alert">{{ error }}</div>{% endif %}
 {% if added %}<div class="flash ok" role="status">{{ added }}</div>{% endif %}
+{% if undo_dismiss %}{% call undo_toast("Aussortiert", "/listing/" ~ listing.id ~ "/restore") %}<input type="hidden" name="next" value="/listing/{{ listing.id }}">{% endcall %}{% endif %}
 
 <article class="listing-head">
   <div class="lh-grid{% if slides or image_url or gallery %} has-image{% endif %}">
@@ -204,22 +205,25 @@
 
 {% if asks_after_open %}
 {# Once the ad was opened ("Inserat öffnen" here, in the editor or in Telegram: listing.opened_at, or a click on this
-   page), app.js shows this sheet every time the person comes back to the page (other tab or app, back button, from
+   page), app.js brings this up every time the person comes back to the page (other tab or app, back button, from
    Telegram). It asks only what the person would not do by themselves: without a draft "Uninteressant?" (whoever is
-   interested just goes on writing), with a draft "Abgeschickt?", aussortiert "Doch interessant?". "Nein" /
-   "Noch nicht" just hides it. Not once sent, not for offline / veraltet. #}
+   interested just goes on writing), aussortiert "Doch interessant?" - both a slim bar with ✕, easy to ignore; with
+   a draft "Abgeschickt?" as the sheet with "Noch nicht". Not once sent, not for offline / veraltet. #}
 {% set dismissed = listing.discard_reason == MANUAL_DISCARD %}
-{% set ask_sent = not dismissed and listing.status == "drafted" %}
-{% call ask_sheet("listing-" ~ listing.id, "Doch interessant?" if dismissed else ("Abgeschickt?" if ask_sent else "Uninteressant?"),
-                  no="Noch nicht" if ask_sent else "Nein", opened=listing.opened_at) %}
-  {% if dismissed %}
-  <form method="post" action="/listing/{{ listing.id }}/restore"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit">↩️ Zurückholen</button></form>
-  {% elif ask_sent %}
-  <form method="post" action="/listing/{{ listing.id }}/sent"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit">✅ Ja, abgeschickt</button></form>
-  {% else %}
-  <form method="post" action="/listing/{{ listing.id }}/dismiss"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit">❌ Ja, aussortieren</button></form>
-  {% endif %}
+{% set back_here %}<input type="hidden" name="next" value="/listing/{{ listing.id }}">{% endset %}
+{% if dismissed %}
+{% call ask_bar("listing-" ~ listing.id, "Doch interessant?", opened=listing.opened_at) %}
+  <form method="post" action="/listing/{{ listing.id }}/restore">{{ back_here }}<button type="submit" class="ask-bar-act">↩️ Zurückholen</button></form>
 {% endcall %}
+{% elif listing.status == "drafted" %}
+{% call ask_sheet("listing-" ~ listing.id, "Abgeschickt?", no="Noch nicht", opened=listing.opened_at) %}
+  <form method="post" action="/listing/{{ listing.id }}/sent">{{ back_here }}<button type="submit">✅ Ja, abgeschickt</button></form>
+{% endcall %}
+{% else %}
+{% call ask_bar("listing-" ~ listing.id, "Uninteressant?", opened=listing.opened_at) %}
+  <form method="post" action="/listing/{{ listing.id }}/dismiss">{{ back_here }}<button type="submit" class="ask-bar-act is-dismiss">Aussortieren</button></form>
+{% endcall %}
+{% endif %}
 {% endif %}
 
 {# Description and all letters: collapsed - the decision is made above. #}

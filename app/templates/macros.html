@@ -151,11 +151,16 @@ Von dir als uninteressant aussortiert am {{ l.discarded_at|local_time }}.
 <div class="diff{% if extra_class %} {{ extra_class }}{% endif %}">{% for op, text in segments %}{% if op == "insert" %}<ins>{{ text }}</ins>{% elif op == "delete" %}<del>{{ text }}</del>{% else %}{{ text }}{% endif %}{% endfor %}</div>
 {%- endmacro %}
 
-{# The return question (listing page, editor) as a non-modal sheet at the bottom of the screen (app.js, data-ask-return): it covers nothing
-   and takes no focus. Hidden until the person comes back to the page once the ad was opened; with `shown` (the
-   finished text, not sent yet) it is there from the start, also without JS. It asks only what the person would not
-   do by themselves, with two equal buttons: the action (caller) and `no` ("Nein" / "Noch nicht", JS only), which
-   just hides it until the next return. No title of the listing, no help text. #}
+{# The return question (listing page, editor) at the bottom of the screen, not modal (app.js, data-ask-return): it
+   covers nothing, takes no focus, slides up every time the person comes back to the page once the ad was opened.
+   Two forms, one mechanism:
+   - ask_sheet: "Abgeschickt?" with two equal buttons, the action (caller) and `no` ("Noch nicht", JS only), which
+     just hides it until the next return. With `shown` (the finished text, not sent yet) it is there from the start,
+     also without JS.
+   - ask_bar: one slim line for a question that is easy to ignore ("Uninteressant?", "Doch interessant?"): the
+     question, one muted action (caller) and ✕ (keep it as it is). Only app.js shows it, so without JS it renders
+     nothing.
+   No title of the listing, no help text in either. #}
 {% macro ask_sheet(key, title, no="Nein", shown=False, opened=False) %}
 <aside class="ask-sheet" data-ask-return="{{ key }}"{% if opened or shown %} data-opened{% endif %}{% if not shown %} hidden{% endif %}
   role="region" aria-labelledby="{{ key }}-title" aria-live="polite">
@@ -164,6 +169,25 @@ Von dir als uninteressant aussortiert am {{ l.discarded_at|local_time }}.
     <div class="ask-sheet-actions">{{ caller() }}<button type="button" class="secondary outline js-only" data-sheet-close>{{ no }}</button></div>
   </div>
 </aside>
+{% endmacro %}
+
+{% macro ask_bar(key, title, opened=False) %}
+<aside class="ask-sheet ask-bar" data-ask-return="{{ key }}"{% if opened %} data-opened{% endif %} hidden
+  role="region" aria-labelledby="{{ key }}-title" aria-live="polite">
+  <p class="ask-bar-title" id="{{ key }}-title"><strong>{{ title }}</strong></p>
+  {{ caller() }}
+  <button type="button" class="ask-bar-close" data-sheet-close aria-label="Schließen" title="Schließen"><span aria-hidden="true">✕</span></button>
+</aside>
+{% endmacro %}
+
+{# After "Aussortieren": a short message with "Rückgängig" (caller: the form's hidden fields, posting `action`).
+   With JS a toast at the bottom that slides away after a few seconds (app.js, data-toast); without JS a flash at the
+   top of the page. #}
+{% macro undo_toast(text, action) %}
+<div class="flash ok undo-toast" role="status" data-toast>
+  <span class="undo-toast-text">{{ text }}</span>
+  <form method="post" action="{{ action }}" class="flash-dismiss">{{ caller() }}<button type="submit" class="linkish">Rückgängig</button></form>
+</div>
 {% endmacro %}
 
 {# The optional personal input for a letter (db.set_personal, llm.personal_block): ❤️ Traumwohnung and one line in

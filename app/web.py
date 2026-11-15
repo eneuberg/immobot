@@ -735,8 +735,11 @@ STATE_MESSAGES = {  # /listing/{id}?m=… after the buttons beside the status
 @router.get("/listing/{listing_id}", dependencies=PAGE)
 def listing_page(request: Request, listing_id: int, neu: str | None = None, m: str | None = None):
     db.mark_seen(listing_id)  # "Neu" -> "Gesehen": the card on the main page stops glowing
-    context = _listing_context(_listing_or_404(listing_id))
-    context["added"] = ADDED_MESSAGES.get(neu or "") or STATE_MESSAGES.get(m or "")
+    listing = _listing_or_404(listing_id)
+    context = _listing_context(listing)
+    # Just aussortiert by hand: "Aussortiert · Rückgängig" (a toast with JS) instead of the plain message.
+    context["undo_dismiss"] = m == "dismissed" and listing["discard_reason"] == settings.MANUAL_DISCARD
+    context["added"] = ADDED_MESSAGES.get(neu or "") or (None if context["undo_dismiss"] else STATE_MESSAGES.get(m or ""))
     return render(request, "listing.html", context)
 
 

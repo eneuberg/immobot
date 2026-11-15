@@ -1240,9 +1240,13 @@ details.ed-hints.is-alarm > summary { color: var(--err); }
 .ed-rule-more > summary { color: var(--pico-muted-color); min-height: 2.75rem; }
 .ed-done .ed-actions [role=button], .ed-done .ed-actions button { min-height: 2.75rem; }
 
-/* The return question ("Uninteressant?", "Abgeschickt?"): a sheet fixed at the bottom, not modal - the page stays
-   usable and scrollable; main gets room below so the sheet covers nothing at the end. One surface: the buttons sit
-   on the sheet's own background, no footer colour of their own (unlike Pico's article > footer). */
+/* The return question at the bottom, not modal - the page stays usable and scrollable; main gets room below so it
+   covers nothing at the end. Two forms (macros.html ask_sheet / ask_bar):
+   - .ask-sheet alone: "Abgeschickt?", a sheet with two equal buttons on its own background (no footer colour);
+   - .ask-sheet.ask-bar: "Uninteressant?" / "Doch interessant?", one slim floating line - question, one muted
+     action (never the green primary: green means "go on"), and ✕.
+   app.js slides them up (data-anim=in) and down (data-anim=out); the toast after "Aussortieren" (.undo-toast) uses
+   the same place and motion. In the editor they sit above its sticky action bar (--ask-lift). */
 .ask-sheet {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
   padding: .75rem 1rem calc(.75rem + env(safe-area-inset-bottom));
@@ -1257,9 +1261,59 @@ details.ed-hints.is-alarm > summary { color: var(--err); }
 .ask-sheet-actions > *, .ask-sheet-actions button { white-space: nowrap; }
 .ask-sheet[data-cooling] .ask-sheet-actions { opacity: .45; transition: opacity .2s; }
 html:not(.js) .js-only { display: none !important; }
-body:has(.ask-sheet:not([hidden])) main.container { padding-bottom: 12rem; }
+body:has(.ask-sheet:not([hidden], .ask-bar)) main.container { padding-bottom: 12rem; }
+body:has(.ask-bar:not([hidden])) main.container, .js body:has(.undo-toast:not([hidden])) main.container { padding-bottom: 6rem; }
+.ask-bar[hidden], .undo-toast[hidden] { display: none !important; }
+/* the editor's sticky "Kopieren & Inserat öffnen" - from 1024 px on it is in the left column, away from the bar */
+body:has(.ed-card > .ed-bar) { --ask-lift: calc(4.2rem + 1px); }
+@media (min-width: 1024px) { body:has(.ed-card > .ed-bar) { --ask-lift: 0px; } }
+
+.ask-bar, .js .undo-toast {
+  position: fixed; z-index: 30; left: .5rem; right: .5rem; top: auto;
+  bottom: calc(.5rem + var(--ask-lift, 0px) + env(safe-area-inset-bottom));
+  display: flex; align-items: center; gap: .5rem; margin: 0; padding: .3rem .3rem .3rem 1rem;
+  background: var(--pico-card-background-color); color: var(--text);
+  border: 1px solid var(--pico-card-border-color); border-radius: var(--radius);
+  box-shadow: var(--shadow-lift), 0 1px 3px rgba(16, 24, 40, .08);
+}
+.ask-bar-title { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ask-bar form { display: contents; }
+.ask-bar .ask-bar-act {
+  flex: none; width: auto; margin: 0; min-height: 2.75rem; padding: .4rem .9rem; white-space: nowrap;
+  font-size: .95rem; font-weight: 600; background: transparent; color: var(--pico-secondary);
+  border: 1px solid var(--pico-form-element-border-color); box-shadow: none;
+}
+.ask-bar .ask-bar-act.is-dismiss { color: var(--err); border-color: var(--err-line); }
+.ask-bar .ask-bar-act:hover, .ask-bar .ask-bar-act:focus-visible { background: var(--surface-2); }
+.ask-bar .ask-bar-act.is-dismiss:hover, .ask-bar .ask-bar-act.is-dismiss:focus-visible { background: var(--err-soft); border-color: var(--err); }
+.ask-bar .ask-bar-close {
+  flex: none; display: inline-grid; place-items: center; width: 2.75rem; height: 2.75rem; margin: 0; padding: 0;
+  background: transparent; border: 0; border-radius: var(--radius-sm); color: var(--pico-muted-color); font-size: 1.05rem; line-height: 1;
+  box-shadow: none;
+}
+.ask-bar .ask-bar-close:hover, .ask-bar .ask-bar-close:focus-visible { background: var(--surface-2); color: var(--text); }
+
+/* The toast after "Aussortieren": "✓ Aussortiert · Rückgängig". Without JS a flash at the top (.flash.ok). */
+.undo-toast { align-items: center; }
+.undo-toast .undo-toast-text { font-weight: 600; }
+.undo-toast .linkish { font-size: .95rem; }
+.js .undo-toast { min-height: 3.45rem; font-size: 1rem; }
+.js .undo-toast .flash-dismiss { margin: 0; display: flex; align-items: center; gap: .5rem; }
+.js .undo-toast .flash-dismiss::before { content: "·"; color: var(--pico-muted-color); }
+.js .undo-toast .linkish { min-height: 2.75rem; padding: 0 .5rem; color: var(--pico-primary); font-weight: 600; }
+
 @media (min-width: 768px) {
-  .ask-sheet { left: auto; right: 1.25rem; bottom: 1.25rem; width: 26rem; border: 1px solid var(--pico-card-border-color); border-radius: var(--radius); }
+  .ask-sheet:not(.ask-bar) { left: auto; right: 1.25rem; bottom: 1.25rem; width: 26rem; border: 1px solid var(--pico-card-border-color); border-radius: var(--radius); }
+  .ask-bar, .js .undo-toast { left: auto; right: 1.25rem; bottom: calc(1.25rem + var(--ask-lift, 0px)); width: auto; min-width: 20rem; max-width: 28rem; }
+}
+
+/* Slide up / down (app.js sets data-anim); with reduced motion they just appear and go. */
+@keyframes ask-in { from { transform: translateY(calc(100% + 1.5rem)); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes ask-out { from { transform: none; opacity: 1; } to { transform: translateY(calc(100% + 1.5rem)); opacity: 0; } }
+.ask-sheet[data-anim=in], .undo-toast[data-anim=in] { animation: ask-in .25s ease-out; }
+.ask-sheet[data-anim=out], .undo-toast[data-anim=out] { animation: ask-out .2s ease-in forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .ask-sheet[data-anim], .undo-toast[data-anim] { animation: none; }
 }
 
 /* ======================================================================================================
