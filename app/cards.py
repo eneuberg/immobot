@@ -1,14 +1,18 @@
 """What a main-page card says about a listing beyond its title: the rent that matters (warm if known), rooms,
-district and one flag from Claude's hint. Pure functions on a listing row (and the hint of its newest draft), so the
-card stays one line of facts and the tests need no database.
+district, one flag from Claude's hint, and up to triage.SHOWN word flags from the ad itself (Tausch, WBS, Balkon,
+"2× gemeldet", …: also for listings without a draft). Pure functions on a listing row (and the hint of its newest
+draft, the duplicate count), so the card stays one line of facts and the tests need no database.
 
-facts(listing, hint) -> {"rent": "810 € warm" | "750 €" | None, "rooms": "2 Zimmer" | None,
-                         "district": "Mülheim" | None, "flag": {"label", "count", "alarm"} | None}
+facts(listing, hint, duplicate_count) -> {"rent": "810 € warm" | "750 €" | None, "rooms": "2 Zimmer" | None,
+    "district": "Mülheim" | None, "flag": {"label", "count", "alarm"} | None, "tags": [{"label", "kind"}],
+    "dream": bool}
 """
 
 import re
+from datetime import datetime, timezone
 
-from . import rent
+from . import rent, triage
+from .settings import OUTCOME_WAITING, OUTCOMES, QUIET_DAYS
 
 _ROOMS_LINE = re.compile(r"^Zimmer:\s*([0-9]+(?:[.,][0-9]+)?)\s*$", re.MULTILINE)
 _ROOMS_TITLE = re.compile(r"(?<![0-9.,])([1-9](?:[.,]5)?)\s*-?\s*(?:Zimmer|Zi\b|Zi\.|Raum)", re.IGNORECASE)
@@ -78,5 +82,56 @@ def flag(hint: str | None) -> dict | None:
     return {"label": _short(label), "count": len(bullets), "alarm": alarm}
 
 
-def facts(listing: dict, hint: str | None = None) -> dict:
-    return {"rent": rent_text(listing), "rooms": rooms(listing), "district": district(listing), "flag": flag(hint)}
+def facts(listing: dict, hint: str | None = None, duplicate_count: int = 0) -> dict:
+    return {"rent": rent_text(listing), "rooms": rooms(listing), "district": district(listing), "flag": flag(hint),
+            "tags": triage.flags(listing, duplicate_count)[:triage.SHOWN], "dream": bool(listing.get("dream"))}
+
+
+# --- "Bewerbungen": one sent listing and what happened since (db.listing_outcomes) --------------------------------
+
+_WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+
+
+def when_label(value: str | None) -> str | None:
+    """'2026-11-18T17:30' -> 'Mi 18.11., 17:30 Uhr'; a date alone -> 'Mi 18.11.'; anything else as it is."""
+    if not value:
+        return None
+    try:
+        when = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    label = f"{_WEEKDAYS[when.weekday()]} {when:%d.%m.}"
+    return label + f", {when:%H:%M} Uhr" if "T" in value else label
+
+
+def _days_since(iso: str | None, now: datetime) -> int | None:
+    if not iso:
+        return None
+    try:
+        then = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    return max(0, (now - then).days)
+
+
+def application(listing: dict, events: list[dict] | None, now: datetime | None = None) -> dict:
+    """{"stage": "wartet" | an OUTCOMES key, "stage_label", "viewing" (the newest viewing's ISO date or None),
+    "viewing_label", "sent_days", "quiet" (waiting for QUIET_DAYS or more), "events": [{…, "label", "when"}]}."""
+    now = now or datetime.now(timezone.utc)
+    events = events or []
+    stage = events[-1]["kind"] if events else "wartet"
+    viewing = next((e["happened_on"] for e in reversed(events) if e["kind"] == "besichtigung" and e["happened_on"]),
+                   None)
+    sent_days = _days_since(listing.get("sent_at") or listing.get("updated_at"), now)
+    return {
+        "stage": stage,
+        "stage_label": OUTCOMES.get(stage, OUTCOME_WAITING),
+        "viewing": viewing,
+        "viewing_label": when_label(viewing),
+        "sent_days": sent_days,
+        "quiet": stage == "wartet" and (sent_days or 0) >= QUIET_DAYS,
+        "events": [{**e, "label": OUTCOMES.get(e["kind"], e["kind"]), "when": when_label(e["happened_on"])}
+                   for e in events],
+    }

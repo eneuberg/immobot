@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% from "macros.html" import state_badge, discard_note, draft_meta, icon, ask_sheet, hints_box %}
+{% from "macros.html" import state_badge, discard_note, draft_meta, icon, ask_sheet, hints_box, personal_fields %}
+{% from "outcome_macros.html" import outcome_steps, outcome_form %}
 {% from "listing_macros.html" import media_label, details_article %}
 {% block title %}{{ listing.title or "Inserat" }}{% endblock %}
 
@@ -93,7 +94,8 @@
       {# The rent first: cold · warm · total as far as known (rent.parts), so a "Preis 700 €" never hides a total
          rent of 900 € written in the text. #}
       <p class="lh-price">{% for part in listing|rent_parts %}<span>{{ part }}</span>{% else %}<span>{{ listing.price or "Miete unbekannt" }}</span>{% endfor %}</p>
-      {% if hint %}{{ hints_box(hint, hint_flag, open=True) }}{% endif %}
+      {# Open only for a warning (fake pattern, "Vorsicht"): otherwise the one line is enough and the action stays up. #}
+      {% if hint %}{{ hints_box(hint, hint_flag, open=hint_flag and hint_flag.alarm) }}{% endif %}
 
       {# ---- one main action (begin) ----
          What comes next for this listing: write (Claude drafts, then the editor opens), go on writing, or look at the
@@ -102,8 +104,9 @@
       {% set done = session and session.status == "done" %}
       <div class="lh-actions">
         {% if not drafts %}
-        <form method="post" action="/listing/{{ listing.id }}/draft" data-once class="lh-main">
+        <form method="post" action="/listing/{{ listing.id }}/draft" data-once class="lh-main lh-write">
           <input type="hidden" name="then" value="editor">
+          {{ personal_fields(listing, "lp") }}
           <button type="submit" data-busy-label="Claude schreibt …">{{ icon("pen") }} Anschreiben schreiben lassen</button>
         </form>
         {% else %}
@@ -136,6 +139,17 @@
         {% elif listing.status == "sent" %}
         <form method="post" action="/listing/{{ listing.id }}/unsent" class="status-undo"><input type="hidden" name="next" value="/listing/{{ listing.id }}">
           <span class="badge ok">✓ Gesendet{% if listing.sent_at %} am {{ listing.sent_at|local_time }}{% endif %}</span> <button type="submit" class="linkish">Zurücknehmen</button></form>
+        {% endif %}
+        {% if application %}
+        {# Sent: what happened since, and the next step (also on /bewerbungen). #}
+        <div class="lh-application" id="bewerbung">
+          <h2 class="lh-app-title">Bewerbung · <span class="badge ap-pill ap-pill-{{ application.stage }}">{{ application.stage_label }}</span></h2>
+          {% if application.events %}{{ outcome_steps(listing, application) }}{% endif %}
+          <details class="ap-next"{% if not application.events %} open{% endif %}>
+            <summary>Wie geht's weiter?</summary>
+            <div class="ap-next-body">{{ outcome_form(listing, application, "/listing/" ~ listing.id) }}</div>
+          </details>
+        </div>
         {% endif %}
       </section>
       {# ---- status (end) ---- #}

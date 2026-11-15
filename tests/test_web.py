@@ -284,7 +284,7 @@ def test_listing_hint_renders_markdown_but_the_draft_stays_raw(client):
     page = client.get(f"/listing/{lid}").text
     assert ('<div class="md ed-hints-body"><p>Vorher:</p><ul><li><strong>Objekt-ID senden:'
             '</strong> bitte &lt;b&gt;nicht&lt;/b&gt;</li><li>Vermieter*innen anschreiben</li></ul></div>') in page
-    assert '<details class="ed-hints" id="hinweise" open>' in page  # above the actions, open
+    assert '<details class="ed-hints" id="hinweise">' in page  # above the actions, one line (open only for a warning)
     assert ">Guten Tag, **nicht fett**\n- kein Punkt</pre>" in page  # sent and copied as it is
 
 
@@ -686,7 +686,8 @@ def test_settings_pages_render_all_fields(client):
         assert r.status_code == 200
         assert f'<input type="hidden" name="section" value="{section}">' in r.text
         assert f'<a href="{web.SETTINGS_SECTIONS[section]["path"]}" aria-current="page">' in r.text  # sub-navigation
-        assert '<a href="/settings" aria-current="page">Einstellungen</a>' in r.text  # main navigation
+        assert '<a href="/settings" class="tab-gear" aria-current="page"' in r.text  # main navigation (the gear)
+        assert '<span class="tab-label">Einstellungen</span>' in r.text
         assert 'href="/credentials"' not in r.text  # no separate main tab anymore
         assert ">Ich &amp; meine Suche" in r.text and ">Gelernt" in r.text and ">Technik" in r.text
     assert '<input type="hidden" name="section" value="betrieb">' in pages["zugaenge"].text  # second form on Technik

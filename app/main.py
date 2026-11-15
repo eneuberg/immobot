@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import bot, db, editor, fredy_alive, housekeeping, media, vault, web
+from . import bot, db, editor, flow, fredy_alive, housekeeping, media, vault, web
 from .config import load_config
 from .web import router, security_headers
 
@@ -69,4 +69,5 @@ class StaticAssets(StaticFiles):
 
 app.include_router(router)
 app.include_router(editor.router)
+app.include_router(flow.router)  # Bewerbungen, Stil
 app.mount("/static", StaticAssets(directory=web.STATIC_DIR), name="static")

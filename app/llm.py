@@ -346,6 +346,29 @@ def today_line(now: datetime | None = None) -> str:
     return f"Heute ist {WEEKDAYS[now.weekday()]}, der {now:%d.%m.%Y}."
 
 
+_ANGLE = re.compile(r"[<>]")
+
+
+def personal_block(listing: dict) -> str | None:
+    """What only the person knows about this flat (listings.own_words, one line) and whether it is her ❤️
+    Traumwohnung (listings.dream), as a <persoenlich> block - or None when she gave neither. The AI evaluation
+    (ai-judge: own one-line context + love level won 6/10 openings, 9/10 sendable) showed this is the input that
+    makes a first paragraph sound like her; the rule against inventing keeps it from turning into a biography."""
+    words = _ANGLE.sub("", " ".join(str(listing.get("own_words") or "").split()))
+    dream = bool(listing.get("dream"))
+    if not words and not dream:
+        return None
+    lines = ["Das sagt die suchende Person selbst zu genau diesem Inserat:"]
+    if dream:
+        lines.append("- Das ist ihre Traumwohnung. Der Einstieg darf spürbar begeistert und persönlich sein, "
+                     "ohne zu übertreiben.")
+    if words:
+        lines.append("- In ihren Worten: „" + words + "“")
+    lines.append("Greif das im ersten Absatz in deinen eigenen Worten auf (nicht wörtlich abschreiben). Nutze nur diese "
+                 "Fakten – erfinde nichts dazu und dichte keine Erlebnisse, Gefühle oder Details an.")
+    return "<persoenlich>\n" + "\n".join(lines) + "\n</persoenlich>"
+
+
 def build_user_text(listing: dict, kind: str, previous_text: str | None = None, instruction: str | None = None) -> str:
     fields = [
         ("Titel", listing.get("title")),
@@ -363,6 +386,9 @@ def build_user_text(listing: dict, kind: str, previous_text: str | None = None, 
     lines.append("Beschreibung:\n" + (description or "(keine Beschreibung)"))
     parts = [today_line() + " Termine aus dem Inserat, die davor liegen, sind vorbei (dann z. B. „ab sofort“).",
              "<inserat>\n" + "\n".join(lines) + "\n</inserat>"]
+    personal = personal_block(listing)
+    if personal:
+        parts.append(personal)
 
     previous_text = (previous_text or "").strip() or None
     if kind in VARIANT_KINDS and previous_text:

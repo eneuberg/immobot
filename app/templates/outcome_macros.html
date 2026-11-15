@@ -1,0 +1,44 @@
+{# "Bewerbungen": the steps after sending (db.listing_outcomes, flow.py), on /bewerbungen and on a sent listing's page.
+   a: cards.application(listing, steps). Plain forms, no JS. #}
+
+{# The steps so far, oldest first: "Gesendet 14.11." → "Antwort" → "Besichtigung Mi 18.11., 17:30 Uhr". #}
+{% macro outcome_steps(l, a) -%}
+<ol class="oc-steps" aria-label="Bisher">
+  <li><span class="oc-dot st-sent" aria-hidden="true"></span>Gesendet{% if l.sent_at %} <span class="muted">{{ l.sent_at|local_time }}</span>{% endif %}</li>
+  {% for e in a.events %}
+  <li><span class="oc-dot oc-{{ e.kind }}" aria-hidden="true"></span>{{ e.label }}{% if e.when %} <strong>{{ e.when }}</strong>{% endif %}
+    {%- if e.note %} <span class="oc-note">„{{ e.note }}“</span>{% endif %}</li>
+  {% endfor %}
+</ol>
+{%- endmacro %}
+
+{# What happened next: one tap for Antwort / Zusage / Absage, the viewing with its date (optional), a short note.
+   "Rückgängig" takes the newest step back. #}
+{% macro outcome_form(l, a, next) -%}
+<form method="post" action="/bewerbung/{{ l.id }}" class="oc-form">
+  <input type="hidden" name="next" value="{{ next }}">
+  <div class="oc-buttons">
+    {% if a.stage != "antwort" %}<button type="submit" name="kind" value="antwort" class="secondary outline">💬 Antwort</button>{% endif %}
+    <button type="submit" name="kind" value="zusage" class="secondary outline oc-good">🎉 Zusage</button>
+    <button type="submit" name="kind" value="absage" class="secondary outline oc-bad">👎 Absage</button>
+  </div>
+  <fieldset class="oc-viewing">
+    <legend>🏠 Besichtigung</legend>
+    <div class="oc-viewing-row">
+      <label class="sr-only" for="v-{{ l.id }}">Datum</label>
+      <input type="date" id="v-{{ l.id }}" name="when" value="{{ (a.viewing or '')[:10] }}">
+      <label class="sr-only" for="t-{{ l.id }}">Uhrzeit</label>
+      <input type="time" id="t-{{ l.id }}" name="time" value="{{ (a.viewing or '')[11:16] }}">
+      <button type="submit" name="kind" value="besichtigung">Eintragen</button>
+    </div>
+  </fieldset>
+  <label class="sr-only" for="n-{{ l.id }}">Notiz (optional)</label>
+  <input type="text" id="n-{{ l.id }}" name="note" maxlength="300" placeholder="Notiz (optional), z. B. Unterlagen mitbringen" autocomplete="off">
+</form>
+{% if a.events %}
+<form method="post" action="/bewerbung/{{ l.id }}/zurueck" class="oc-undo">
+  <input type="hidden" name="next" value="{{ next }}">
+  <button type="submit" class="linkish">„{{ a.events[-1].label }}“ zurücknehmen</button>
+</form>
+{% endif %}
+{%- endmacro %}

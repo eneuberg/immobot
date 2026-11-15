@@ -70,6 +70,9 @@ Von dir als uninteressant aussortiert am {{ l.discarded_at|local_time }}.
 {%- elif name == "inbox" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5l1.5 2.5h5L16 13h5"/><path d="M5.5 5h13L21 13v6H3v-6z"/></svg>
 {%- elif name == "archive" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4.5" rx="1"/><path d="M5 8.5V19a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8.5"/><path d="M10 12.5h4"/></svg>
 {%- elif name == "pen" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg>
+{%- elif name == "gear" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M4.2 7.5l2.1 1.2M17.7 15.3l2.1 1.2M4.2 16.5l2.1-1.2M17.7 8.7l2.1-1.2"/><circle cx="12" cy="12" r="6.6"/></svg>
+{%- elif name == "send" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 3.5 10 14"/><path d="M20.5 3.5 14 20.5l-4-6.5-6.5-4z"/></svg>
+{%- elif name == "cal" %}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>
 {%- endif %}
 {%- endmacro %}
 
@@ -162,6 +165,21 @@ Von dir als uninteressant aussortiert am {{ l.discarded_at|local_time }}.
   </div>
 </aside>
 {% endmacro %}
+
+{# The optional personal input for a letter (db.set_personal, llm.personal_block): ❤️ Traumwohnung and one line in
+   the person's own words. Inside a form that posts personal=1 with it (listing page, editor). Never required. #}
+{% macro personal_fields(listing, id_prefix="p") -%}
+<div class="personal">
+  <input type="hidden" name="personal" value="1">
+  <label class="heart-toggle" for="{{ id_prefix }}-dream">
+    <input type="checkbox" id="{{ id_prefix }}-dream" name="dream" value="1"{% if listing.dream %} checked{% endif %}>
+    <span>❤️ Traumwohnung</span></label>
+  <label class="sr-only" for="{{ id_prefix }}-words">Was weißt oder magst du an der Wohnung? (optional)</label>
+  <input type="text" id="{{ id_prefix }}-words" name="own_words" maxlength="{{ OWN_WORDS_MAX }}" value="{{ listing.own_words or '' }}"
+    placeholder="Was weißt/magst du? (optional)" autocomplete="off" enterkeyhint="done"
+    title="z. B. „kenne die Ecke“, „Garten ist super“, „Anzeige schon offline?“ – Claude greift das auf und erfindet nichts dazu">
+</div>
+{%- endmacro %}
 
 {# Claude's notes on the listing (rent contradictions, fake patterns, what the ad asks for): one line with the most
    important point, open for all of them. Red when one of them is a warning (cards.flag). #}

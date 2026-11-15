@@ -211,6 +211,19 @@ CREATE TABLE IF NOT EXISTS editor_links (
     listing_id INTEGER NOT NULL,
     first_used_at TEXT NOT NULL
 );
+-- "Bewerbungen": what happened after sending, one row per event (append-only, newest last). The current stage of an
+-- application is its newest event; none = sent, waiting. kind: settings.OUTCOMES; happened_on: the viewing's
+-- local date and time ("YYYY-MM-DDTHH:MM") for "besichtigung", else optional; source: dashboard | telegram | import.
+CREATE TABLE IF NOT EXISTS listing_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    kind TEXT NOT NULL,
+    happened_on TEXT,
+    recorded_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'dashboard',
+    note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_listing_outcomes_listing ON listing_outcomes(listing_id);
 CREATE TABLE IF NOT EXISTS editor_access_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     token_hash TEXT NOT NULL UNIQUE,
@@ -252,6 +265,10 @@ ADDED_COLUMNS = {
         ("discarded_at", "TEXT"),
         ("discard_auto", "INTEGER NOT NULL DEFAULT 0"),
         ("discard_prev", "TEXT"),
+        # What only the person knows, for this one letter (listing page, editor; llm.build_user_text <persoenlich>):
+        # one line in her own words ("kenne die Ecke, Garten ist super") and ❤️ Traumwohnung (1) or not (0).
+        ("own_words", "TEXT"),
+        ("dream", "INTEGER NOT NULL DEFAULT 0"),
     ],
     "listing_media": [("floor_plan", "INTEGER NOT NULL DEFAULT 0")],
     "drafts": [
@@ -573,6 +590,65 @@ def restore(listing_id: int) -> bool:
                            "discard_prev = NULL, auto_status = 'kept', updated_at = ? "
                            "WHERE id = ? AND discard_reason = ?", (now_iso(), listing_id, MANUAL_DISCARD))
         return cur.rowcount > 0
+
+
+# --- personal input and "Bewerbungen" ----------------------------------------------------------------------
+
+OWN_WORDS_MAX = 300
+
+
+def set_personal(listing_id: int, own_words: str | None, dream: bool) -> bool:
+    """The listing's ❤️ and "Was weißt/magst du?" line (one line, at most OWN_WORDS_MAX characters; "" = none).
+    Returns whether anything changed."""
+    words = " ".join((own_words or "").split())[:OWN_WORDS_MAX] or None
+    with connect() as conn:
+        cur = conn.execute("UPDATE listings SET own_words = ?, dream = ? WHERE id = ? "
+                           "AND (COALESCE(own_words, '') != COALESCE(?, '') OR dream != ?)",
+                           (words, 1 if dream else 0, listing_id, words, 1 if dream else 0))
+        return cur.rowcount > 0
+
+
+def applications() -> list[dict]:
+    """Every sent listing (also when the ad went offline since), newest sending first."""
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM listings WHERE status = 'sent' ORDER BY COALESCE(sent_at, updated_at) DESC, id DESC")]
+
+
+def add_outcome(listing_id: int, kind: str, happened_on: str | None = None, note: str | None = None,
+                source: str = "dashboard") -> int | None:
+    """One step after sending ("Antwort", "Besichtigung" with date, "Zusage", "Absage"). Only for sent listings;
+    returns the new row's id or None."""
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM listings WHERE id = ? AND status = 'sent'", (listing_id,)).fetchone() is None:
+            return None
+        cur = conn.execute("INSERT INTO listing_outcomes (listing_id, kind, happened_on, recorded_at, source, note) "
+                           "VALUES (?, ?, ?, ?, ?, ?)", (listing_id, kind, happened_on, now_iso(), source, note))
+        return cur.lastrowid
+
+
+def undo_outcome(listing_id: int) -> bool:
+    """"Rückgängig": the newest step of this application goes away."""
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM listing_outcomes WHERE id = (SELECT MAX(id) FROM listing_outcomes "
+                           "WHERE listing_id = ?)", (listing_id,))
+        return cur.rowcount > 0
+
+
+def outcomes(listing_ids: list[int] | None = None) -> dict[int, list[dict]]:
+    """listing id -> its steps, oldest first (all listings with steps when listing_ids is None)."""
+    sql, params = "SELECT * FROM listing_outcomes", []
+    if listing_ids is not None:
+        ids = [int(i) for i in listing_ids][:2000]
+        if not ids:
+            return {}
+        sql += " WHERE listing_id IN (%s)" % ",".join("?" * len(ids))
+        params = ids
+    result: dict[int, list[dict]] = {}
+    with connect() as conn:
+        for row in conn.execute(sql + " ORDER BY id", params):
+            result.setdefault(row["listing_id"], []).append(dict(row))
+    return result
 
 
 def _discard_many(conn: sqlite3.Connection, ids: list[int], reason: str) -> None:

@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% from "macros.html" import flashes %}
+{% block title %}So schreibe ich{% endblock %}
+{# The weekly look at learning (flow.style_page): numbers of the week, the newest PROPOSALS_SHOWN proposals with one
+   tap each (details behind "Anpassen"), older ones expire in one go, the rules in use as a readable list. Profile,
+   examples and versions stay under Einstellungen → Gelernt. #}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>So schreibe ich</h1>
+    <p>Was immobot über deinen Stil gelernt hat. Einmal pro Woche durchsehen reicht – zum Abschicken ist nichts davon nötig.</p>
+  </div>
+</div>
+{{ flashes(message, error) }}
+
+<section class="st-week" aria-label="Die letzten 7 Tage">
+  <div><strong>{{ week.sent }}</strong><span>abgeschickt</span></div>
+  <div><strong>{{ week.changed }}<small>/{{ week.finished }}</small></strong><span>selbst geändert</span></div>
+  <div><strong>{{ week.avg_share }} %</strong><span>Ø umgeschrieben</span></div>
+</section>
+<p class="st-week-line help">{% if week.finished == 0 %}In den letzten 7 Tagen kein Anschreiben fertig – nichts Neues zu lernen.
+  {%- elif week.avg_share < 10 %}Claudes Entwürfe passen fast so, wie sie sind.
+  {%- elif week.avg_share < 30 %}Du feilst noch an Details – daraus kommen die Vorschläge unten.
+  {%- else %}Du schreibst noch viel um. Je mehr Vorschläge du unten entscheidest, desto weniger wird das.{% endif %}</p>
+
+{% if not use_rules %}
+<div class="callout info"><span>Gelernte Regeln sind gerade ausgeschaltet (<a href="/settings/verhalten#lernen">Einstellungen → Gelernt</a>) – sie bleiben gespeichert.</span></div>
+{% endif %}
+
+<section class="st-section" id="neu" aria-labelledby="neu-titel">
+  <h2 id="neu-titel">Neu gelernt? {% if proposal_count %}<span class="count">{{ proposal_count }}</span>{% endif %}</h2>
+  {% if shown %}
+  <p class="help">Claude hat beim Vergleich von Entwurf und abgeschicktem Text das hier bemerkt. Stimmt's?</p>
+  <ul class="st-proposals">
+    {% for p in shown %}
+    <li class="st-proposal" id="vorschlag-{{ p.id }}">
+      <form method="post" action="/stil/vorschlag/{{ p.id }}">
+        <p class="st-kind"><span class="badge {{ 'err' if p.action == 'remove' else 'accent' }}">{{ p.action_label }}</span>
+          {%- if p.created_at %} <span class="muted">{{ p.created_at|local_time }}</span>{% endif %}</p>
+        {% if p.action == "remove" %}
+        <p class="st-text"><del>{{ p.target_text or p.text }}</del></p>
+        {% elif p.action == "fact" %}
+        <p class="st-text">{{ p.text }}</p>
+        {% if p.fact_new %}<p class="st-old">→ in „Über mich“: „{{ p.fact_new }}“</p>{% endif %}
+        {% else %}
+        {% if p.target_text %}<p class="st-old"><span class="muted">statt:</span> {{ p.target_text }}</p>{% endif %}
+        <p class="st-text">{{ p.text }}</p>
+        {% endif %}
+        {% if p.reason %}<details class="st-why"><summary>Warum?</summary><div class="md">{{ p.reason|md }}</div></details>{% endif %}
+        {% if p.action in ("add", "update") %}
+        <details class="st-adjust">
+          <summary>Anpassen</summary>
+          <div class="st-adjust-body">
+            <label for="st-text-{{ p.id }}">Text</label>
+            <textarea id="st-text-{{ p.id }}" name="text" rows="2" maxlength="{{ rule_max_chars }}" data-autosize>{{ p.text }}</textarea>
+            <label for="st-scope-{{ p.id }}">Gilt, wenn <small class="muted">(leer = immer)</small></label>
+            <input id="st-scope-{{ p.id }}" name="scope" maxlength="150" value="{{ p.scope or '' }}" placeholder="z. B. privater Vermieter">
+            <label class="check"><input type="checkbox" name="strength" value="hard" {% if p.strength == "hard" %}checked{% endif %}> ausnahmslos <small class="muted">(sonst eine Tendenz)</small></label>
+            <button type="submit" name="decision" value="angepasst" class="secondary">Angepasst übernehmen</button>
+          </div>
+        </details>
+        {% endif %}
+        <div class="st-actions">
+          <button type="submit" name="decision" value="ja">✓ {% if p.action == "remove" %}Ja, streichen{% elif p.action == "fact" %}Ja, stimmt{% else %}Ja, so schreibe ich{% endif %}</button>
+          <button type="submit" name="decision" value="nein" class="secondary outline">Nein</button>
+        </div>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% if proposal_count > shown|length %}
+  <p class="help">Noch {{ proposal_count - shown|length }} weitere – sie rücken nach, sobald du diese entschieden hast.</p>
+  {% endif %}
+  {% if stale_count %}
+  <form method="post" action="/stil/aufraeumen" class="st-expire">
+    <p><strong>{{ stale_count }}</strong> {{ "Vorschlag ist" if stale_count == 1 else "Vorschläge sind" }} älter als {{ stale_days }} Tage.
+      Was so lange liegt, war wohl nicht wichtig – Claude schlägt sie nicht wieder vor.</p>
+    <button type="submit" class="secondary outline">Ältere verfallen lassen</button>
+  </form>
+  {% endif %}
+  {% else %}
+  <p class="muted">Gerade nichts zu entscheiden. Neue Vorschläge entstehen, wenn du ein Anschreiben änderst und abschickst.</p>
+  {% endif %}
+</section>
+
+{% if rewrite %}
+<p class="st-rewrite callout info"><span><strong>Claude schlägt vor, dein Profil zu überarbeiten.</strong>
+  <a href="/settings/vorschlag/{{ rewrite.id }}">Ansehen und einzeln übernehmen →</a></span></p>
+{% endif %}
+
+<section class="st-section" id="regeln" aria-labelledby="regeln-titel">
+  <h2 id="regeln-titel">Das gilt beim Schreiben <span class="count">{{ active_rules|length }}/{{ rule_max }}</span></h2>
+  {% macro rule_row(r, on=True) %}
+  <li class="st-rule{% if not on %} is-off{% endif %}">
+    <span class="st-rule-text">{{ r.text }}{% if r.scope %} <small class="muted">– wenn {{ r.scope }}</small>{% endif %}{% if r.strength == "hard" %} <small class="badge">immer</small>{% endif %}</span>
+    <form method="post" action="/stil/regel/{{ r.id }}"><input type="hidden" name="active" value="{{ '0' if on else '1' }}">
+      {% if on %}<button type="submit" class="st-off secondary outline" aria-label="Abschalten: {{ r.text }}" title="Abschalten">✕</button>
+      {% else %}<button type="submit" class="secondary outline st-on">Wieder an</button>{% endif %}</form>
+  </li>
+  {% endmacro %}
+  {% if active_rules %}
+  <ul class="st-rules">{% for r in active_rules[:rules_shown] %}{{ rule_row(r) }}{% endfor %}</ul>
+  {% if active_rules|length > rules_shown %}
+  <details class="disclosure st-more">
+    <summary>Alle {{ active_rules|length }} anzeigen</summary>
+    <ul class="st-rules disclosure-body">{% for r in active_rules[rules_shown:] %}{{ rule_row(r) }}{% endfor %}</ul>
+  </details>
+  {% endif %}
+  {% else %}
+  <p class="muted">Noch keine Regeln – Claude schreibt nur nach deinem Profil.</p>
+  {% endif %}
+  {% if inactive_rules %}
+  <details class="disclosure st-more">
+    <summary>Abgeschaltet <span class="count">{{ inactive_rules|length }}</span></summary>
+    <ul class="st-rules disclosure-body">{% for r in inactive_rules %}{{ rule_row(r, False) }}{% endfor %}</ul>
+  </details>
+  {% endif %}
+</section>
+
+<p class="st-foot"><a href="/settings">Profil bearbeiten</a> · <a href="/settings/verhalten#regeln">Regeln bearbeiten, Beispiele, Verlauf</a></p>
+{% endblock %}

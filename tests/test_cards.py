@@ -58,4 +58,4 @@ def test_facts_bundle():
     facts = cards.facts({"price": "750 €", "title": "1-Zimmer-Wohnung", "address": "50735 Köln, Niehl"},
                         "- **Kontaktdaten:** gewünscht")
     assert facts == {"rent": "750 €", "rooms": "1 Zimmer", "district": "Niehl",
-                     "flag": {"label": "Kontaktdaten", "count": 1, "alarm": False}}
+                     "flag": {"label": "Kontaktdaten", "count": 1, "alarm": False}, "tags": [], "dream": False}

@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% from "macros.html" import flashes, icon %}
+{% from "outcome_macros.html" import outcome_steps, outcome_form %}
+{% block title %}Bewerbungen{% endblock %}
+{# Every sent listing and what happened since (flow.applications_page): the next viewing on top, then the groups by
+   stage. Each row opens "Wie geht's weiter?" for the next step; the listing page has the same steps and form. #}
+
+{% macro app_row(r) -%}
+{% set a = r.app %}
+<li class="ap-row ap-{{ a.stage }}" id="b{{ r.id }}">
+  <a class="ap-main" href="/listing/{{ r.id }}">
+    <span class="thumb">{% if r.thumb %}<img src="{{ r.thumb }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-fallback>{% else %}<span class="thumb-ph" aria-hidden="true">{{ icon("home") }}</span>{% endif %}</span>
+    <span class="ap-body">
+      <span class="ap-title">{{ r.title or "(ohne Titel)" }}</span>
+      <span class="ap-sub">{{ r.card.rent or r.price or "–" }}{% if r.card.district %} · {{ r.card.district }}{% endif %}</span>
+      <span class="ap-when">
+        {%- if a.stage == "besichtigung" and a.viewing_label %}<strong class="ap-viewing">{{ icon("cal") }}{{ a.viewing_label }}</strong>
+        {%- elif a.sent_days is not none %}gesendet {% if a.sent_days == 0 %}heute{% elif a.sent_days == 1 %}gestern{% else %}vor {{ a.sent_days }} Tagen{% endif %}{% endif %}
+        {%- if a.quiet %} · <span class="ap-quiet">still – nachfassen?</span>{% endif %}
+        {%- if r.discard_reason == "offline" %} · <span class="muted">Inserat offline</span>{% endif %}</span>
+    </span>
+    <span class="badge ap-pill ap-pill-{{ a.stage }}">{{ a.stage_label }}</span>
+  </a>
+  <details class="ap-next">
+    <summary>Wie geht's weiter?</summary>
+    <div class="ap-next-body">
+      {% if a.events %}{{ outcome_steps(r, a) }}{% endif %}
+      {{ outcome_form(r, a, "/bewerbungen") }}
+    </div>
+  </details>
+</li>
+{%- endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Bewerbungen</h1>
+    {% if total %}
+    <p class="ap-funnel"><strong>{{ total }}</strong> abgeschickt · {{ answered }} mit Antwort ·
+      {{ plural(reached.besichtigung, "Besichtigung", "Besichtigungen") }} · {{ plural(reached.zusage, "Zusage", "Zusagen") }}
+      {%- if quiet_count %} · <span class="ap-quiet">{{ quiet_count }} seit über {{ quiet_days }} Tagen still</span>{% endif %}</p>
+    {% endif %}
+  </div>
+</div>
+{{ flashes(message) }}
+
+{% if upcoming %}
+<a class="ap-next-viewing" href="#b{{ upcoming.id }}">
+  <span class="ap-cal" aria-hidden="true">{{ icon("cal") }}</span>
+  <span><small>Nächste Besichtigung</small><strong>{{ upcoming.app.viewing_label }}</strong><span class="ap-nv-title">{{ upcoming.title }}</span></span>
+</a>
+{% endif %}
+
+{% if total %}
+{% if not answered %}
+<p class="help ap-howto">Kommt eine Antwort oder Einladung, tipp bei der Bewerbung auf „Wie geht's weiter?“ und trag sie
+  ein – dann siehst du hier, was wirkt.</p>
+{% endif %}
+<div class="ap-board">
+  {% for g in groups if g["items"] or g.key == "wartet" %}
+  <section class="list-group ap-group" aria-labelledby="ap-{{ g.key }}">
+    <h2 class="list-group-title" id="ap-{{ g.key }}">{{ g.title }} <span class="count">{{ g["items"]|length }}</span></h2>
+    {% if g["items"] %}
+    <ul class="ap-list">{% for r in g["items"] %}{{ app_row(r) }}{% endfor %}</ul>
+    {% else %}
+    <p class="help">Alle haben geantwortet.</p>
+    {% endif %}
+  </section>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">
+  {{ icon("send") }}
+  <strong>Noch nichts abgeschickt</strong>
+  <p>Sobald du ein Anschreiben abschickst, steht es hier – mit Antwort, Besichtigung und Zu- oder Absage.</p>
+  <p><a href="/">Zu den Inseraten</a></p>
+</div>
+{% endif %}
+{% endblock %}

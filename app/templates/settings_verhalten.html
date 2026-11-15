@@ -101,7 +101,7 @@
       <span>Hinweise gegen KI-Ton <small>Feste Schreibhinweise im Prompt: ein Gesamturteil statt Lob für jedes Merkmal, keine Werbewörter aus dem Inserat, nichts aufbauschen oder erfinden, schlichte Sätze.</small></span>
     </label>
     <p class="learn-links"><a href="#regeln">{{ plural(rules_active, "aktive Regel", "aktive Regeln") }}</a>
-      {%- if rules_proposed %} · <a href="#regeln">{{ rules_proposed|length }} {{ "wartet" if rules_proposed|length == 1 else "warten" }} auf dich</a>{% endif %}
+      {%- if rules_proposed %} · <a href="/stil#neu">{{ rules_proposed|length }} {{ "wartet" if rules_proposed|length == 1 else "warten" }} auf dich</a>{% endif %}
       · <a href="#beispiele">{{ plural(examples|length, "Beispiel", "Beispiele") }}</a></p>
   </article>
 
@@ -130,37 +130,9 @@
   {% endif %}
 
   {% if rules_proposed %}
-  <section class="rule-group" aria-labelledby="h-proposed">
-    <h3 id="h-proposed">Warten auf deine Entscheidung <span class="count">{{ rules_proposed|length }}</span></h3>
-    <p class="help">Vorschläge von Claude aus deinen fertigen Anschreiben, über die du noch nicht entschieden hast.</p>
-    <ul class="rule-list">
-      {% for r in rules_proposed %}
-      <li class="rule is-proposed" id="regel-{{ r.id }}">
-        <form method="post" action="/settings/rules/{{ r.id }}/decide">
-          {% if r.action == "remove" %}
-          <p class="rule-kind">Diese Regel streichen:</p>
-          <p class="rule-text">{{ r.text }}</p>
-          {% elif r.action == "fact" %}
-          <p class="rule-kind">„Über mich“ ergänzen: <strong>{{ r.text }}</strong>{% if r.fact_old %} – bisher: <span class="old">„{{ r.fact_old }}“</span>{% endif %}</p>
-          <label class="sr-only" for="rule-text-{{ r.id }}">Neue Fassung</label>
-          <textarea id="rule-text-{{ r.id }}" name="text" rows="2" maxlength="2000">{{ r.fact_new }}</textarea>
-          {% else %}
-          <p class="rule-kind">{% if r.action == "update" %}Regel ändern{% if r.target %} – bisher: <span class="old">„{{ r.target.text }}“</span>{% endif %}{% else %}Neue Regel{% endif %}
-            {%- if r.scope %} · gilt, wenn: {{ r.scope }}{% endif %}{% if r.strength == "hard" %} · immer{% endif %}</p>
-          <label class="sr-only" for="rule-text-{{ r.id }}">Text der Regel</label>
-          <textarea id="rule-text-{{ r.id }}" name="text" rows="3" maxlength="300">{{ r.text }}</textarea>
-          {% endif %}
-          {% if r.reason %}<details class="rule-why"><summary>Warum?</summary><div class="rule-reason md"><span class="md-label">Warum:</span> {{ r.reason|md }}</div></details>{% endif %}
-          <p class="rule-meta">{{ origin(r) }}</p>
-          <div class="actions">
-            <button type="submit" name="accept" value="1" class="btn-sm">✅ Übernehmen</button>
-            <button type="submit" name="accept" value="0" class="secondary outline btn-sm">❌ Verwerfen</button>
-          </div>
-        </form>
-      </li>
-      {% endfor %}
-    </ul>
-  </section>
+  {# The proposals are decided on "So schreibe ich" (/stil, flow.py): the newest few with one tap, older ones expire. #}
+  <div class="callout info rule-proposed-link"><span><strong>{{ rules_proposed|length }} {{ "Vorschlag wartet" if rules_proposed|length == 1 else "Vorschläge warten" }} auf dich.</strong>
+    <a href="/stil#neu">Unter „So schreibe ich“ entscheiden →</a></span></div>
   {% endif %}
 
   {% if rules_in_use %}

@@ -17,6 +17,8 @@
   <a href="{{ s.path }}" {% if key == section %}aria-current="page"{% endif %}>{{ s.label }}
     {%- if alerts[key] %}<span class="alert-dot" aria-hidden="true"></span><span class="sr-only"> (fehlt noch etwas)</span>{% endif %}</a>
   {% endfor %}
+  <a href="/status">Status</a>
+
 </nav>
 
 {{ flashes(message, error) }}

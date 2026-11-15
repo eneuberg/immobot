@@ -1,5 +1,5 @@
 {% extends "editor_base.html" %}
-{% from "macros.html" import flashes, state_badge, discard_note, icon, text_diff, ask_sheet, hints_box %}
+{% from "macros.html" import flashes, state_badge, discard_note, icon, text_diff, ask_sheet, hints_box, personal_fields %}
 {% from "rule_macros.html" import manual_rule_form %}
 {% from "listing_macros.html" import media_label, details_article %}
 {% block title %}Editor · {{ listing.title or "Inserat" }}{% endblock %}
@@ -111,9 +111,11 @@
   {# No draft yet: the first one is written here (llm.create_and_store_draft, source "editor"). #}
   <div class="empty ed-empty">
     <strong>Noch kein Anschreiben</strong>
-    <p>Claude schreibt ein Anschreiben zu diesem Inserat – mit deinem Profil und Schreibstil. Dauert 10–60 Sekunden.</p>
-    <form method="post" action="/editor/{{ listing.id }}/draft">
+    <p>Claude schreibt ein Anschreiben zu diesem Inserat – mit deinem Profil und Schreibstil. Dauert 10–60 Sekunden.
+      Ein Satz von dir dazu macht es persönlicher.</p>
+    <form method="post" action="/editor/{{ listing.id }}/draft" class="ed-write">
       {{ hidden() }}
+      {{ personal_fields(listing, "en") }}
       <button type="submit" data-busy-label="Claude schreibt …">Anschreiben schreiben lassen</button>
     </form>
   </div>
@@ -275,6 +277,9 @@
     <div class="ed-side">
       <article class="ed-card" id="kritik">
         <h2><label for="ed-critique">Was soll Claude ändern?</label></h2>
+        {# ❤️ and one line of her own: go into every revision (llm.personal_block); changed alone, "Überarbeiten
+           lassen" works them into the first paragraph (editor.PERSONAL_REVISION). #}
+        {{ personal_fields(listing, "ed") }}
         <textarea id="ed-critique" name="critique" rows="2" maxlength="500" placeholder="z. B. Homeoffice erwähnen, Balkon weglassen, persönlicher">{{ critique or "" }}</textarea>
         {% if calls_today >= calls_shown_from %}<p class="help">Heute schon {{ calls_today }} von {{ calls_limit }} Claude-Aufrufen für dieses Inserat.</p>{% endif %}
         <button type="submit" formaction="/editor/{{ listing.id }}/revise" class="secondary outline ed-revise" data-busy-label="Claude schreibt …">Überarbeiten lassen <small>(10–60 s)</small></button>
@@ -341,7 +346,7 @@
         {%- elif job and job.state == "running" %}Claude lernt aus deinen Änderungen – ansehen
         {%- else %}Was Claude daraus lernt{% endif %} →</a></p>
       {% endif %}
-      {% if logged_in %}<p class="ed-learn-link"><a href="/">← Zur Liste</a></p>{% endif %}
+      {% if logged_in %}<p class="ed-learn-link">{% if listing.status == "sent" %}<a href="/bewerbungen#b{{ listing.id }}">Zu deinen Bewerbungen →</a> · {% endif %}<a href="/">← Zur Liste</a></p>{% endif %}
     </div>
     <div class="ed-side">
       <details class="disclosure ed-diff">

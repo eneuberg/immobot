@@ -33,7 +33,8 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import bot, cards, db, editor_access, housekeeping, is24, learning, llm, media, portals, rent, search, settings, textdiff, textfmt, vault
+from . import (bot, cards, db, editor_access, housekeeping, is24, learning, llm, media, portals, rent, search, settings,
+               textdiff, textfmt, triage, vault)
 
 log = logging.getLogger(__name__)
 
@@ -144,6 +145,8 @@ templates.env.globals["DISCARD_REASONS"] = settings.DISCARD_REASONS
 templates.env.globals["MANUAL_DISCARD"] = settings.MANUAL_DISCARD
 templates.env.globals["STALE_DAYS"] = settings.STALE_DAYS
 templates.env.globals["SENT_VISIBLE_HOURS"] = settings.SENT_VISIBLE_HOURS
+templates.env.globals["OUTCOMES"] = settings.OUTCOMES  # "Bewerbungen": Antwort, Besichtigung, Zusage, Absage
+templates.env.globals["OWN_WORDS_MAX"] = db.OWN_WORDS_MAX
 templates.env.globals["open_path"] = editor_access.make_open_path  # "Inserat öffnen" via /go (records it)
 # Content hash in the /static URLs: browsers may cache the files for a day, a deploy still takes effect at once.
 templates.env.globals["STATIC_VERSION"] = hashlib.sha256(
@@ -591,6 +594,9 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
         "hint": hint,
         "hint_flag": cards.flag(hint),
         "auto_dismiss_hours": housekeeping.auto_dismiss_hours(),  # explains an automatic "uninteressant"
+        # sent: the application's steps since (Antwort, Besichtigung, …) and the form for the next one
+        "application": cards.application(listing, db.outcomes([listing["id"]]).get(listing["id"]))
+                       if listing["status"] == "sent" else None,
         "error": error,
     }
 
@@ -598,13 +604,14 @@ def _listing_context(listing: dict, error: str | None = None) -> dict:
 def _listing_cards(rows: list[dict]) -> list[dict]:
     thumbs = db.thumb_positions()  # listings with stored ImmoScout24 pictures
     hints = db.latest_hints([row["id"] for row in rows])
+    dups = triage.duplicates([row["id"] for row in rows])  # "2× gemeldet"
     return [{
         **row,
         "portal": portals.provider_label(row["provider"]),
         # Server-built link to a stored picture; otherwise the template falls back to Fredy's image_url (safe_url).
         "thumb_url": f"/listing/{row['id']}/media/{thumbs[row['id']]}" if row["id"] in thumbs else None,
-        # warm rent, rooms, district and one flag from Claude's hint (cards.py)
-        "card": cards.facts(row, hints.get(row["id"])),
+        # warm rent, rooms, district, one flag from Claude's hint, word flags from the ad (cards.py, triage.py)
+        "card": cards.facts(row, hints.get(row["id"]), dups.get(row["id"], 0)),
     } for row in rows]
 
 
@@ -835,10 +842,14 @@ async def listing_restore(request: Request, listing_id: int, next: str = Form(""
 
 
 @router.post("/listing/{listing_id}/draft", dependencies=ACTION)
-async def listing_create_draft(request: Request, listing_id: int, then: str = Form("")):
+async def listing_create_draft(request: Request, listing_id: int, then: str = Form(""), personal: str = Form(""),
+                               own_words: str = Form(""), dream: str = Form("")):
     """"Anschreiben schreiben lassen" (then=editor: the main button, on to the editor with the new text) or
-    "Neues Anschreiben erzeugen" under "Alle Anschreiben" (back to the listing page)."""
+    "Neues Anschreiben erzeugen" under "Alle Anschreiben" (back to the listing page). personal=1: the form had the
+    optional ❤️ and "Was weißt/magst du?" fields; they are stored first, so Claude gets them (llm.personal_block)."""
     _listing_or_404(listing_id)
+    if personal == "1":
+        db.set_personal(listing_id, own_words, dream == "1")
     db.mark_seen(listing_id)
     kind = "regenerate" if db.latest_draft(listing_id) else "initial"
     try:

@@ -24,9 +24,13 @@
         <span>immobot</span>
       </a>
       <nav class="tabs" aria-label="Hauptmenü">
+        {# The jobs in their order: find and write (Inserate), follow up (Bewerbungen), teach once a week (Stil).
+           Settings and Status behind the gear (on phones only the icon; Status is linked from Technik). #}
         <a href="/" {% if active == "listings" %}aria-current="page"{% endif %}>Inserate</a>
-        <a href="/settings" {% if active == "settings" %}aria-current="page"{% endif %}>Einstellungen</a>
-        <a href="/status" {% if active == "status" %}aria-current="page"{% endif %}>Status</a>
+        <a href="/bewerbungen" {% if active == "bewerbungen" %}aria-current="page"{% endif %}>Bewerbungen</a>
+        <a href="/stil" {% if active == "stil" %}aria-current="page"{% endif %}>Stil</a>
+        <a href="/settings" class="tab-gear" {% if active in ("settings", "status") %}aria-current="page"{% endif %} title="Einstellungen und Status">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M4.2 7.5l2.1 1.2M17.7 15.3l2.1 1.2M4.2 16.5l2.1-1.2M17.7 8.7l2.1-1.2"/><circle cx="12" cy="12" r="6.6"/></svg><span class="tab-label">Einstellungen</span></a>
       </nav>
       <form class="logout" method="post" action="/logout"><button type="submit" title="Abmelden (beendet alle Sitzungen)">Abmelden</button></form>
     </div>

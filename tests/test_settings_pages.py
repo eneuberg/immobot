@@ -371,11 +371,14 @@ def test_rules_list_on_verhalten(client):
     page = client.get("/settings/verhalten").text
     card = page.split('<article id="regeln"')[1].split('<article id="beispiele"')[0]
     assert "1 von 25 aktiv" in card
-    proposed = card.split("Warten auf deine Entscheidung")[1].split('<ul class="rule-list">')[1].split("</ul>")[0]
-    assert f'action="/settings/rules/{ids["new"]}/decide"' in proposed and "Neue Regel" in proposed
-    assert "Regel ändern – bisher: <span class=\"old\">„Formuliere den Einzug als „ab sofort“.“</span>" in proposed
-    assert '<span class="md-label">Warum:</span> <p>Zahlen gestrichen.</p>' in proposed  # reason via the md filter
-    assert f'href="/listing/{ids["lid"]}">„Altbau“</a>' in proposed
+    # The open proposals are decided on "So schreibe ich" (/stil); Gelernt only points there (no wall of forms).
+    assert "2 Vorschläge warten auf dich." in card and 'href="/stil#neu"' in card
+    assert f'action="/settings/rules/{ids["new"]}/decide"' not in card
+    stil = client.get("/stil").text
+    proposed = stil.split('<ul class="st-proposals">')[1].split("</ul>")[0]
+    assert f'action="/stil/vorschlag/{ids["new"]}"' in proposed and ">Neu</span>" in proposed
+    assert '<span class="muted">statt:</span> Formuliere den Einzug als „ab sofort“.' in proposed
+    assert '<p>Zahlen gestrichen.</p>' in proposed  # reason via the md filter
     in_use = re.findall(r'action="/settings/rules/(\d+)/active">\s*<label><input type="checkbox" role="switch" name="active" '
                         r'value="1" data-autosubmit\s*(checked)?', card)
     assert in_use == [(str(ids["active"]), "checked"), (str(ids["off"]), "")]

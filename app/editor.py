@@ -65,7 +65,7 @@ MESSAGES = {
     "fact": "„Über mich“ geändert – gilt ab dem nächsten Entwurf.",
     "revision_kept": "Überarbeitung übernommen.",
     "revision_undone": "Zurück zu deinem Text von vor der Überarbeitung.",
-    "sent": "Als gesendet markiert.",
+    "sent": "Abgeschickt ✓ – steht jetzt unter „Bewerbungen“.",
     "unsent": "„Gesendet“ zurückgenommen.",
     "dismissed": "Aussortiert: uninteressant.",
     "restored": "Zurückgeholt – das Inserat ist wieder in der Liste.",
@@ -408,6 +408,16 @@ AUTOSAVE_DENIED = {
 AUTOSAVE_STALE = "Seite nicht mehr aktuell."
 
 
+# "Überarbeiten lassen" with only ❤️ / "Was weißt/magst du?" changed: the request Claude gets (and the Verlauf shows).
+PERSONAL_REVISION = ("Greif im ersten Absatz auf, was ich selbst zu dieser Wohnung sage (siehe <persoenlich>). "
+                     "Der Rest bleibt, wie er ist.")
+
+
+def _store_personal(listing_id: int, personal: str, own_words: str, dream: str) -> bool:
+    """The form had the ❤️ / "Was weißt/magst du?" fields (personal=1): store them. Returns whether they changed."""
+    return personal == "1" and db.set_personal(listing_id, own_words, dream == "1")
+
+
 def _wants_json(request: Request) -> bool:
     return "application/json" in request.headers.get("accept", "")
 
@@ -438,7 +448,7 @@ async def editor_load_media(request: Request, listing_id: str, token: str = Form
 
 @router.post("/editor/{listing_id}/save", dependencies=ACTION)
 def editor_save(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
-                text: str = Form("")):
+                text: str = Form(""), personal: str = Form(""), own_words: str = Form(""), dream: str = Form("")):
     """Autosave from editor.js (JSON in, see _autosave_answer), or "Zwischenspeichern" without JS (redirect)."""
     autosave = _wants_json(request)
     listing, mode, denied = _gate(request, listing_id, token)
@@ -447,6 +457,7 @@ def editor_save(request: Request, listing_id: str, token: str = Form(""), sessio
             return denied
         status = 401 if isinstance(denied, RedirectResponse) else denied.status_code  # redirect: not logged in
         return _autosave_answer(status, AUTOSAVE_DENIED.get(status, AUTOSAVE_DENIED[403]))
+    _store_personal(listing["id"], personal, own_words, dream)
     session = _current_session(listing, session_id)
     if session is None or session["status"] != "open":  # another tab started a new round or pressed "Fertig"
         return _autosave_answer(409, AUTOSAVE_STALE, stale=True) if autosave else _stale(request, listing, mode, text)
@@ -463,14 +474,19 @@ def editor_save(request: Request, listing_id: str, token: str = Form(""), sessio
 
 @router.post("/editor/{listing_id}/revise", dependencies=ACTION)
 async def editor_revise(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
-                        text: str = Form(""), critique: str = Form("")):
-    """"Überarbeiten lassen": synchronous, a draft takes 10-60 s. The hand edits are saved first in any case."""
+                        text: str = Form(""), critique: str = Form(""), personal: str = Form(""),
+                        own_words: str = Form(""), dream: str = Form("")):
+    """"Überarbeiten lassen": synchronous, a draft takes 10-60 s. The hand edits are saved first in any case.
+    A changed ❤️ / "Was weißt/magst du?" goes into the prompt (llm.personal_block); changed without a critique,
+    Claude is asked to work it into the first paragraph (PERSONAL_REVISION)."""
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
         return denied
     session = _current_session(listing, session_id)
     if session is None:
         return _stale(request, listing, mode, text)
+    if _store_personal(listing["id"], personal, own_words, dream) and not critique.strip():
+        critique = PERSONAL_REVISION
     try:
         learning.save_text(session["id"], text)
         await learning.revise_in_editor(session["id"], text, critique)
@@ -502,7 +518,8 @@ def editor_revision(request: Request, listing_id: str, token: str = Form(""), se
 
 @router.post("/editor/{listing_id}/quick", dependencies=ACTION)
 async def editor_quick(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
-                       text: str = Form(""), critique: str = Form(""), kind: str = Form("")):
+                       text: str = Form(""), critique: str = Form(""), kind: str = Form(""),
+                       personal: str = Form(""), own_words: str = Form(""), dream: str = Form("")):
     """A quick button (learning.quick_in_editor): Claude shortens or formalises the current text like Telegram's
     buttons, or writes a new draft that starts a new round. Hand edits are saved first; a critique typed into the
     field but not sent stays there afterwards."""
@@ -512,6 +529,7 @@ async def editor_quick(request: Request, listing_id: str, token: str = Form(""),
     session = _current_session(listing, session_id)
     if session is None:
         return _stale(request, listing, mode, text)
+    _store_personal(listing["id"], personal, own_words, dream)
     try:
         learning.save_text(session["id"], text)
         await learning.quick_in_editor(session["id"], text, kind)
@@ -545,7 +563,8 @@ async def _propose_rules(session_id: int) -> None:
 
 @router.post("/editor/{listing_id}/finish", dependencies=ACTION)
 async def editor_finish(request: Request, listing_id: str, token: str = Form(""), session_id: str = Form(""),
-                        text: str = Form(""), critique: str = Form(""), copied: str = Form("")):
+                        text: str = Form(""), critique: str = Form(""), copied: str = Form(""),
+                        personal: str = Form(""), own_words: str = Form(""), dream: str = Form("")):
     """"Kopieren & Inserat öffnen" (copied=1: editor.js copied the text and opened the ad first): store the final
     version; with "Gelernte Regeln nutzen" on, Claude looks for rules in the background. A critique still in its
     field (typed, but "Überarbeiten lassen" not pressed) is kept as a note for learning."""
@@ -555,6 +574,7 @@ async def editor_finish(request: Request, listing_id: str, token: str = Form("")
     session = _current_session(listing, session_id)
     if session is None:
         return _stale(request, listing, mode, text)
+    _store_personal(listing["id"], personal, own_words, dream)
     try:
         session = learning.finish(session["id"], text, note=critique)
     except Exception as exc:
@@ -717,11 +737,14 @@ async def editor_restore(request: Request, listing_id: str, token: str = Form(""
 
 
 @router.post("/editor/{listing_id}/draft", dependencies=ACTION)
-async def editor_create_draft(request: Request, listing_id: str, token: str = Form("")):
-    """"Entwurf erzeugen" while the listing has no draft yet (afterwards the page edits that one)."""
+async def editor_create_draft(request: Request, listing_id: str, token: str = Form(""), personal: str = Form(""),
+                              own_words: str = Form(""), dream: str = Form("")):
+    """"Anschreiben schreiben lassen" while the listing has no draft yet (afterwards the page edits that one). The
+    optional ❤️ and "Was weißt/magst du?" are stored first, so this first draft already uses them."""
     listing, mode, denied = _gate(request, listing_id, token)
     if denied is not None:
         return denied
+    _store_personal(listing["id"], personal, own_words, dream)
     if db.latest_draft(listing["id"]) is None:
         try:
             await llm.create_and_store_draft(listing["id"], "initial", source="editor", record_feedback=False)

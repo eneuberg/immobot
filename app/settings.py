@@ -91,6 +91,16 @@ DISCARD_REASONS = {
     "veraltet": "Veraltet",  # received more than STALE_DAYS ago
 }
 MANUAL_DISCARD = "uninteressant"
+# "Bewerbungen": the steps after sending, set by hand (db.listing_outcomes.kind). The newest step is the stage; no step
+# = "wartet" (sent, no answer yet). Order = how far an application got.
+OUTCOMES = {
+    "antwort": "Antwort",
+    "besichtigung": "Besichtigung",
+    "zusage": "Zusage",
+    "absage": "Absage",
+}
+OUTCOME_WAITING = "Gesendet"  # the stage of a sent listing without a step
+QUIET_DAYS = 7  # "seit n Tagen still – nachfassen?" on Bewerbungen
 STALE_DAYS = 90
 # "Gesendet" stays in "Alle" on the main page for this long after it was sent, then only under "Gesendet".
 SENT_VISIBLE_HOURS = 48
