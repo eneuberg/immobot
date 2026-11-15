@@ -375,6 +375,29 @@
     toast.addEventListener("focusin", function () { clearTimeout(timer); });
   });
 
+  // The page's own reloads are no "coming back": a form sent from it, or a script putting the result in its place
+  // (editor.js: a revision done, the first draft written). The editor's pages send no referrer, so without this every
+  // such reload would look like an arrival from outside. Marked for this address in sessionStorage for OWN_NAV_MS and
+  // used up by the next load; immobotOwnNavigation(false) takes the mark back (a form that didn't leave after all,
+  // e.g. a question answered in place).
+  var OWN_NAV_KEY = "immobot-own-nav", OWN_NAV_MS = 120000;
+  window.immobotOwnNavigation = function (on) {
+    try {
+      if (on === false) sessionStorage.removeItem(OWN_NAV_KEY);
+      else sessionStorage.setItem(OWN_NAV_KEY, location.pathname + "|" + Date.now());
+    } catch (err) { /* no storage: such a reload may ask again */ }
+    document.dispatchEvent(new CustomEvent("immobot:own-navigation", { detail: on !== false }));
+  };
+  var ownNavigation = (function () {  // read (and used up) once per load
+    var raw = null;
+    try { raw = sessionStorage.getItem(OWN_NAV_KEY); sessionStorage.removeItem(OWN_NAV_KEY); } catch (err) { raw = null; }
+    if (!raw) return false;
+    var parts = raw.split("|");
+    return parts[0] === location.pathname && Date.now() - Number(parts[1]) < OWN_NAV_MS;
+  })();
+  // every form sent from a page (also one without the question, e.g. "Rückgängig" in the toast after "Aussortieren")
+  document.addEventListener("submit", function () { window.immobotOwnNavigation(); }, true);
+
   document.addEventListener("DOMContentLoaded", function () {
     var dlg = document.querySelector("[data-ask-return]");
     var isDialog = dlg && dlg.tagName === "DIALOG";
@@ -446,6 +469,8 @@
     // Leaving to another immobot page or sending a form is not "away"; pagehide comes before visibilitychange.
     window.addEventListener("pagehide", function () { unloading = true; });
     document.addEventListener("submit", function () { unloading = true; leftAt(null); }, true);
+    // A form that stayed (editor.js answered it in place): leaving the page counts as away again.
+    document.addEventListener("immobot:own-navigation", function (e) { if (!e.detail) unloading = false; });
     window.addEventListener("pageshow", function (e) {
       unloading = false;
       if (e.persisted) { leftAt(null); ask(); }  // back from the browser's cache
@@ -472,7 +497,7 @@
     var fromHere = ref && ref.origin === location.origin && ref.pathname === location.pathname;
     if (leftAt()) {
       if (document.visibilityState === "visible") { leftAt(null); ask(); }
-    } else if (fromOutside || (nav.type === "back_forward" && !fromHere)) {
+    } else if (!ownNavigation && (fromOutside || (nav.type === "back_forward" && !fromHere))) {
       ask();
     }
   });

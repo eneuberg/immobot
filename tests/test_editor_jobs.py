@@ -258,3 +258,26 @@ def test_question_prompt_and_call(fresh_db, monkeypatch):
     assert [(u["purpose"], u["listing_id"]) for u in usage] == [("question", listing_id)]
     assert db.list_feedback() == [] and db.list_drafts(listing_id) == []
 
+
+
+# --- a restart of the server loses the jobs: editor.js starts them again (boot, revision_mark) ---------------------
+
+def test_status_says_which_server_answers(client, lid, slow_generate, monkeypatch):
+    editor_cookie(client, lid)
+    page = client.get(f"/editor/{lid}").text  # no draft yet: the first draft's bar
+    assert f'data-boot="{drafting.BOOT}"' in page
+    status = client.get(f"/editor/{lid}/draft/status").json()
+    assert status["state"] == "idle" and status["boot"] == drafting.BOOT
+    r, fields = ready(client, lid)
+    assert f'data-boot="{drafting.BOOT}" data-revision-mark="0"' in r.text
+    idle = job_status(client, lid)
+    assert (idle["state"], idle["boot"], idle["revision_mark"]) == ("idle", drafting.BOOT, 0)
+    monkeypatch.setattr(drafting, "BOOT", "anderer-start")  # as after a restart
+    client.post(f"/editor/{lid}/revise", data={**fields, "text": "Guten Tag, Entwurf", "critique": "kürzer"},
+                headers=JSON)
+    done = wait_for_job(client, lid)
+    mark = done["revision_mark"]
+    assert done["boot"] == "anderer-start" and mark > 0  # changed: a lost revision that had finished isn't sent again
+    assert job_status(client, lid)["revision_mark"] == mark
+    assert f'data-revision-mark="{mark}"' in client.get(f"/editor/{lid}").text
+    assert editor.revision_mark(9999) == 0

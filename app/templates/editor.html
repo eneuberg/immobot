@@ -67,11 +67,17 @@
    a link to it. Outside every other form. #}
 {% macro listing_drawer() %}
 {% set map_link = listing.address|maps_url %}
-<a class="ed-drawer-handle" href="#inserat" data-drawer-open aria-controls="inserat" aria-expanded="false">
-  <span class="ed-drawer-chev" aria-hidden="true">⌃</span>
-  <span class="ed-drawer-label"><strong>Inserat ansehen</strong>{% for f in facts[:2] %} · {{ f }}{% endfor %}
-    {%- if media %} · {{ media|length }} Bilder{% endif %}</span>
-</a>
+<div class="ed-bottom">
+  {# the page's columns again (same container and grid), so the handle sits under the right one on a wide screen,
+     beside the letter's "Kopieren & Inserat öffnen"; on a phone a full-width bar, or (open text) the bar's "Inserat" #}
+  <div class="container ed-bottom-in">
+    <a class="ed-drawer-handle" href="#inserat" data-drawer-open aria-controls="inserat" aria-expanded="false">
+      <span class="ed-drawer-chev" aria-hidden="true">⌃</span>
+      <span class="ed-drawer-label"><strong>Inserat ansehen</strong>{% for f in facts[:2] %} · {{ f }}{% endfor %}
+        {%- if media %} · {{ media|length }} Bilder{% endif %}</span>
+    </a>
+  </div>
+</div>
 <dialog class="ed-sheet" id="inserat" aria-labelledby="ed-sheet-title"{% if open_media %} data-open{% endif %}>
   <div class="ed-sheet-in">
     <header class="ed-sheet-head">
@@ -168,32 +174,54 @@
      editor.js posts the start form by itself when nothing runs yet ("idle"), polls /draft/status every second, runs
      the bar towards the expected time (data-expected-ms: the mean of the last drafts) and replaces the page with
      the letter when it is there. Without JS: the start button, then a static bar and a reload every 5 s. #}
+  {# The same two columns as the open text, so the page only fills in when the letter is there: the letter card holds
+     the bar (or the error and "Nochmal versuchen"); beside it "Wie viel Mühe?" and the line, which go into this first
+     draft (one form around both columns), the question field and its buttons waiting for a text. #}
   {% set dj = draft_job %}
   {% set expected_s = ((dj.expected_ms or 40000) / 1000)|round|int %}
-  <section class="ed-card ed-writing" id="text" data-draft-job="{{ dj.state }}"
-    data-status-url="/editor/{{ listing.id }}/draft/status" data-done-url="/editor/{{ listing.id }}?m=draft#text"
-    data-expected-ms="{{ dj.expected_ms }}" data-elapsed-ms="{{ dj.elapsed_ms }}" data-slow-ms="{{ dj.slow_after_ms }}">
-    <h2 class="ed-writing-title" data-draft-title>
-      {%- if dj.state == "error" %}Claude konnte nicht schreiben
-      {%- elif dj.state == "running" %}Claude schreibt dein Anschreiben …
-      {%- else %}<span class="nojs-only">Noch kein Anschreiben</span><span class="js-only">Claude schreibt dein Anschreiben …</span>{% endif -%}
-    </h2>
-    <div class="draftbar" data-draft-bar role="progressbar"{% if dj.state == "error" %} hidden{% endif %}
-      aria-label="Claude schreibt dein Anschreiben" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-      <span class="draftbar-fill"></span></div>
-    <p class="draftbar-meta"><span data-draft-note>Dauert meist etwa {{ expected_s }} s.</span>
-      <span class="draftbar-clock" data-draft-clock></span></p>
-    <p class="draftbar-slow" data-draft-slow aria-live="polite"></p>
-    <div class="flash err" role="alert" data-draft-error{% if not dj.error %} hidden{% endif %}>{{ dj.error or "" }}</div>
-    <p class="help draftbar-away" data-draft-away>Du kannst die Seite solange verlassen – Claude schreibt weiter.</p>
-    <form method="post" action="/editor/{{ listing.id }}/draft" class="ed-write" data-draft-start>
-      {{ hidden() }}
-      {% if dj.state == "idle" %}<p class="help nojs-only">Claude schreibt ein Anschreiben zu diesem Inserat – mit deinem Profil
-        und Schreibstil. Ein Satz von dir dazu macht es persönlicher.</p>{% endif %}
-      {{ personal_fields(listing, "en") }}
-      <button type="submit">{{ "Nochmal versuchen" if dj.state == "error" else "Anschreiben schreiben lassen" }}</button>
-    </form>
-  </section>
+  <form method="post" action="/editor/{{ listing.id }}/draft" class="ed-grid" data-draft-start>
+    {{ hidden() }}
+    <div class="ed-main">
+      <article class="ed-card ed-letter ed-writing" id="text" data-draft-job="{{ dj.state }}"
+        data-status-url="/editor/{{ listing.id }}/draft/status" data-done-url="/editor/{{ listing.id }}?m=draft#text"
+        data-expected-ms="{{ dj.expected_ms }}" data-elapsed-ms="{{ dj.elapsed_ms }}" data-slow-ms="{{ dj.slow_after_ms }}"
+        data-boot="{{ dj.boot }}">
+        <header class="ed-card-head"><h2>Dein Anschreiben</h2></header>
+        <div class="ed-writing-body">
+          <p class="ed-writing-title" data-draft-title>
+            {%- if dj.state == "error" %}Claude konnte nicht schreiben
+            {%- elif dj.state == "running" %}Claude schreibt dein Anschreiben …
+            {%- else %}<span class="nojs-only">Noch kein Anschreiben</span><span class="js-only">Claude schreibt dein Anschreiben …</span>{% endif -%}
+          </p>
+          <div class="draftbar" data-draft-bar role="progressbar"{% if dj.state == "error" %} hidden{% endif %}
+            aria-label="Claude schreibt dein Anschreiben" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <span class="draftbar-fill"></span></div>
+          <p class="draftbar-meta"><span data-draft-note>Dauert meist etwa {{ expected_s }} s.</span>
+            <span class="draftbar-clock" data-draft-clock></span></p>
+          <p class="draftbar-slow" data-draft-slow aria-live="polite"></p>
+          <div class="flash err" role="alert" data-draft-error{% if not dj.error %} hidden{% endif %}>{{ dj.error or "" }}</div>
+          <p class="help draftbar-away" data-draft-away>Du kannst die Seite solange verlassen – Claude schreibt weiter.</p>
+          <div class="ed-write" data-draft-start-row>
+            {% if dj.state == "idle" %}<p class="help nojs-only">Claude schreibt ein Anschreiben zu diesem Inserat – mit deinem Profil
+              und Schreibstil. Daneben kannst du sagen, wie viel Mühe es sich geben soll.</p>{% endif %}
+            <button type="submit">{{ "Nochmal versuchen" if dj.state == "error" else "Anschreiben schreiben lassen" }}</button>
+          </div>
+        </div>
+      </article>
+    </div>
+    <div class="ed-side">
+      <article class="ed-card" id="kritik">
+        <h2>Ändern lassen oder fragen</h2>
+        {{ personal_fields(listing, "en") }}
+        <label class="sr-only" for="ed-critique-wait">Was soll Claude ändern?</label>
+        <textarea id="ed-critique-wait" rows="2" disabled placeholder="Ändern lassen oder fragen geht, sobald der Text da ist."></textarea>
+        <div class="ed-ask-row">
+          <button type="button" class="secondary outline ed-revise" disabled>Überarbeiten lassen</button>
+          <button type="button" class="secondary outline ed-ask-btn" disabled>Nur fragen</button>
+        </div>
+      </article>
+    </div>
+  </form>
 
   {% elif learn_view %}
   {# /editor/{id}/lernen: what Claude learns from this text - out of the way of copying and sending. #}
@@ -339,6 +367,8 @@
           <button type="submit" formaction="/editor/{{ listing.id }}/finish" data-copy-open
             {%- if contact_url %} data-go="{{ open_path(listing.id) }}"{% endif %} aria-describedby="ed-done-note">
             {{- "Kopieren & Inserat öffnen" if contact_url else "Kopieren & abschließen" -}}</button>
+          <a class="ed-bar-inserat" href="#inserat" data-drawer-open aria-controls="inserat" aria-expanded="false"
+            aria-label="Inserat ansehen">Inserat <span aria-hidden="true">⌃</span></a>
           <p class="ed-bar-note sr-only" id="ed-done-note">Kopiert den Text, öffnet das Inserat und speichert den Text als fertig – Claude lernt daraus.</p>
         </div>
       </article>
@@ -371,7 +401,8 @@
         {% set ej_expected_s = (((ej.expected_ms if ej else 35000) or 35000) / 1000)|round|int %}
         <div class="ed-job" data-editor-job="{{ ej.state if ej else 'idle' }}" data-job-kind="{{ ej.kind if ej else '' }}"
           data-status-url="/editor/{{ listing.id }}/job/status" data-expected-ms="{{ ej.expected_ms if ej else '' }}"
-          data-elapsed-ms="{{ ej.elapsed_ms if ej else 0 }}" data-slow-ms="{{ ej.slow_after_ms if ej else '' }}"{% if not ej %} hidden{% endif %}>
+          data-elapsed-ms="{{ ej.elapsed_ms if ej else 0 }}" data-slow-ms="{{ ej.slow_after_ms if ej else '' }}"
+          data-boot="{{ boot }}" data-revision-mark="{{ revision_mark }}"{% if not ej %} hidden{% endif %}>
           <p class="ed-job-title" id="ed-job-title" data-job-title>
             {%- if ej and ej.state == "error" %}{{ "Claude konnte nicht antworten" if ej.kind == "ask" else "Claude konnte nicht überarbeiten" }}
             {%- elif ej and ej.kind == "ask" %}Claude beantwortet deine Frage …
@@ -383,6 +414,7 @@
             <span class="draftbar-clock" data-job-clock></span></p>
           <p class="draftbar-slow" data-job-slow aria-live="polite"></p>
           <div class="flash err" role="alert" data-job-error{% if not (ej and ej.error) %} hidden{% endif %}>{{ ej.error if ej and ej.error else "" }}</div>
+          <p class="ed-job-calm" role="status" data-job-calm hidden></p>
           <p class="help draftbar-away" data-job-away>Du kannst die Seite verlassen – Claude arbeitet weiter.</p>
           {% if ej and ej.state == "running" %}<noscript><p class="help">Seite gleich neu laden, um das Ergebnis zu sehen.</p></noscript>{% endif %}
         </div>

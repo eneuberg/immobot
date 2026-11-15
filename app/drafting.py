@@ -17,6 +17,7 @@ finished or failed job is shown once (editor_status / take_editor_job), then for
 
 import asyncio
 import logging
+import secrets
 import time
 from collections import deque
 
@@ -31,6 +32,10 @@ SAMPLES = 20
 EXPECTED_RANGE_MS = (5_000, 180_000)  # one odd value (a hang, a stub) can't make the bar absurd
 SLOW_AFTER_MS = 15_000  # "Dauert länger als gewöhnlich" this long after the expected time
 ERROR_KEEP_S = 600  # an error is shown (and nothing restarts by itself) for this long, then the editor starts anew
+
+# This server process. Jobs live in memory, so a restart (a deploy) loses them: every status answer says which
+# process gave it, and editor.js starts a lost job again by itself instead of showing an error.
+BOOT = secrets.token_hex(6)
 
 # listing id -> {"state": "running" | "done" | "error", "error": text or None, "started": monotonic, "ended": …}
 _jobs: dict[int, dict] = {}
@@ -66,7 +71,7 @@ def status(listing_id: int) -> dict:
     else:
         state, error, elapsed = ("done" if db.latest_draft(listing_id) else "idle"), None, 0
     return {"state": state, "error": error, "elapsed_ms": round(elapsed * 1000), "expected_ms": expected_ms(),
-            "slow_after_ms": SLOW_AFTER_MS}
+            "slow_after_ms": SLOW_AFTER_MS, "boot": BOOT}
 
 
 def start(listing_id: int) -> None:
@@ -142,19 +147,20 @@ def editor_running(listing_id: int) -> bool:
 
 def editor_status(listing_id: int, take: bool = True) -> dict:
     """{"state": "running" | "done" | "error" | "idle", "kind", "error", "answer", "elapsed_ms", "expected_ms",
-    "slow_after_ms", "message"} for the editor's polling. take: a finished or failed job is forgotten once reported
+    "slow_after_ms", "message", "boot"} for the editor's polling. take: a finished or failed job is forgotten once reported
     (the page shows the result now)."""
     current = _editor_jobs.get(listing_id)
     if current is None:
         return {"state": "idle", "kind": None, "error": None, "answer": None, "elapsed_ms": 0,
-                "expected_ms": editor_expected_ms("custom"), "slow_after_ms": SLOW_AFTER_MS, "message": None}
+                "expected_ms": editor_expected_ms("custom"), "slow_after_ms": SLOW_AFTER_MS, "message": None,
+                "boot": BOOT}
     if take and current["state"] != "running":
         _editor_jobs.pop(listing_id, None)
     elapsed = (current.get("ended") or time.monotonic()) - current["started"]
     return {"state": current["state"], "kind": current["kind"], "error": current["error"],
             "answer": current.get("answer"), "elapsed_ms": round(elapsed * 1000),
             "expected_ms": editor_expected_ms(current["kind"]), "slow_after_ms": SLOW_AFTER_MS,
-            "message": DONE_MESSAGES.get(current["kind"]), "critique": current.get("critique")}
+            "message": DONE_MESSAGES.get(current["kind"]), "critique": current.get("critique"), "boot": BOOT}
 
 
 def take_editor_job(listing_id: int) -> dict | None:

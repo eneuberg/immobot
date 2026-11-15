@@ -1016,7 +1016,6 @@ details.notes-box .notes { margin: 0; font-size: .9rem; }
 .ed-bar-note { grid-column: 1 / -1; margin: 0; font-size: .76rem; line-height: 1.35; color: var(--pico-muted-color); text-align: center; }
 .ed-bar button.copied { color: var(--ok); border-color: var(--ok); }
 @media (max-width: 359px) { .ed-bar button { padding: .55rem .2rem; font-size: .85rem; } }
-body:has(.ed-drawer-handle) .ed-card > .ed-bar { bottom: var(--drawer-h); padding-bottom: .6rem; }
 .ed-nodiff { margin: 0; font-size: .9rem; }
 .ed-card #ed-critique { margin-bottom: .5rem; }
 .ed-ask-row { display: flex; gap: .45rem; }
@@ -1225,9 +1224,9 @@ details.ed-hints.is-alarm > summary { color: var(--err); }
    - .ask-sheet.ask-bar: "Uninteressant?" / "Doch interessant?", one slim floating line - question, one muted
      action (never the green primary: green means "go on"), and ✕.
    app.js slides them up (data-anim=in) and down (data-anim=out); the toast after "Aussortieren" (.undo-toast) uses
-   the same place and motion. In the editor they sit above its sticky action bar (--ask-lift). */
+   the same place and motion. In the editor they sit above its bottom row (--dock-lift). */
 .ask-sheet {
-  position: fixed; left: 0; right: 0; bottom: var(--drawer-h, 0px); z-index: 30;
+  position: fixed; left: 0; right: 0; bottom: var(--dock-lift, 0px); z-index: 30;
   padding: .75rem 1rem calc(.75rem + env(safe-area-inset-bottom));
   background: var(--pico-card-background-color); border-top: 1px solid var(--pico-card-border-color);
   box-shadow: 0 -6px 24px rgba(16, 24, 40, .12);
@@ -1241,17 +1240,21 @@ details.ed-hints.is-alarm > summary { color: var(--err); }
 .ask-sheet[data-cooling] .ask-sheet-actions { opacity: .45; transition: opacity .2s; }
 html:not(.js) .js-only { display: none !important; }
 body:has(.ask-sheet:not([hidden], .ask-bar)) main.container { padding-bottom: 12rem; }
-body:has(.ed-drawer-handle) main.container { padding-bottom: calc(var(--drawer-h) + 1.5rem); }
-body:has(.ed-drawer-handle):has(.ask-bar:not([hidden]), .undo-toast:not([hidden])) main.container { padding-bottom: calc(var(--drawer-h) + 6rem); }
-body:has(.ed-drawer-handle):has(.ask-sheet:not([hidden], .ask-bar)) main.container { padding-bottom: calc(var(--drawer-h) + 12rem); }
+body:has(.ed-bottom) main.container { padding-bottom: calc(var(--dock-lift) + 1.5rem); }
+body:has(.ed-bottom):has(.ask-bar:not([hidden]), .undo-toast:not([hidden])) main.container { padding-bottom: calc(var(--dock-lift) + 6rem); }
+body:has(.ed-bottom):has(.ask-sheet:not([hidden], .ask-bar)) main.container { padding-bottom: calc(var(--dock-lift) + 12rem); }
 body:has(.ask-bar:not([hidden])) main.container, .js body:has(.undo-toast:not([hidden])) main.container { padding-bottom: 6rem; }
 .ask-bar[hidden], .undo-toast[hidden] { display: none !important; }
-/* the editor's sticky "Kopieren & Inserat öffnen": the dock in the middle sits above it at every width */
-body:has(.ed-card > .ed-bar) { --ask-lift: calc(4.2rem + 1px); }
+/* The editor's bottom row - what is pinned to the bottom edge - and the dock in the middle above it: on a phone the
+   "Inserat ansehen" bar, or with the open text the locked "Kopieren & Inserat öffnen" bar (with "Inserat"); on a wide
+   screen "Kopieren" under the letter and "Inserat ansehen" under the right column, one row of the same height. */
+body:has(.ed-bottom) { --dock-lift: 3rem; }
+body:has(.ed-card > .ed-bar) { --dock-lift: calc(4.2rem + 1px); }
+@media (min-width: 1024px) { body:has(.ed-bottom) { --dock-lift: calc(4.2rem + 1px); } }
 
 .ask-bar, .js .undo-toast {
   position: fixed; z-index: 30; left: .5rem; right: .5rem; top: auto;
-  bottom: calc(.5rem + var(--ask-lift, 0px) + var(--drawer-h, 0px) + env(safe-area-inset-bottom));
+  bottom: calc(.5rem + var(--dock-lift, 0px) + env(safe-area-inset-bottom));
   display: flex; align-items: center; gap: .5rem; margin: 0; padding: .3rem .3rem .3rem 1rem;
   background: var(--pico-card-background-color); color: var(--text);
   border: 1px solid var(--pico-card-border-color); border-radius: var(--radius);
@@ -1285,16 +1288,16 @@ body:has(.ed-card > .ed-bar) { --ask-lift: calc(4.2rem + 1px); }
 
 /* From 768 px one dock in the middle at the bottom, on the axis of the editor's "Inserat ansehen" handle. */
 @media (min-width: 768px) {
-  .ask-sheet:not(.ask-bar) { left: 0; right: 0; margin: 0 auto; bottom: calc(.75rem + var(--ask-lift, 0px) + var(--drawer-h, 0px));
+  .ask-sheet:not(.ask-bar) { left: 0; right: 0; margin: 0 auto; bottom: calc(.75rem + var(--dock-lift, 0px));
     width: 26rem; max-width: calc(100% - 2rem); border: 1px solid var(--pico-card-border-color); border-radius: var(--radius); }
-  .ask-bar, .js .undo-toast { left: 0; right: 0; margin: 0 auto; bottom: calc(.75rem + var(--ask-lift, 0px) + var(--drawer-h, 0px));
+  .ask-bar, .js .undo-toast { left: 0; right: 0; margin: 0 auto; bottom: calc(.75rem + var(--dock-lift, 0px));
     width: fit-content; min-width: 20rem; max-width: min(36rem, calc(100% - 2rem)); }
 }
 /* Folded (app.js, the chevron; sessionStorage per listing): only a pill with the question, in the same place. */
 .ask-pill { display: none; }
 .ask-sheet[data-collapsed] { left: 0; right: 0; margin: 0 auto; width: fit-content; min-width: 0; max-width: calc(100% - 2rem);
   padding: .2rem; border: 1px solid var(--pico-card-border-color); border-radius: 999px; box-shadow: var(--shadow-lift, 0 4px 16px rgba(16, 24, 40, .12)); }
-.ask-sheet[data-collapsed]:not(.ask-bar) { bottom: calc(.5rem + var(--drawer-h, 0px) + env(safe-area-inset-bottom)); }
+.ask-sheet[data-collapsed]:not(.ask-bar) { bottom: calc(.5rem + var(--dock-lift, 0px) + env(safe-area-inset-bottom)); }
 .ask-sheet[data-collapsed] > :not(.ask-pill) { display: none !important; }
 .ask-sheet[data-collapsed] > .ask-pill { display: inline-flex; }
 .ask-pill {
@@ -1432,8 +1435,8 @@ details.rule-why > summary { min-height: 2.75rem; color: var(--pico-muted-color)
 /* ---- editor: progress bar while Claude writes the first draft (begin) -- editor.html .ed-writing, editor.js ----
    data-draft-job: idle (with JS the same as running: editor.js starts at once) | running | error. The fill is
    scaled by editor.js (transform, towards ~93 % at the expected time, then creeping); "is-done" runs it to the end. */
-.ed-writing { max-width: 40rem; margin: 0 0 1rem; }
-.ed-writing-title { margin: 0 0 1rem; font-size: 1.15rem; }
+.ed-writing-body { min-height: 15rem; }  /* about the letter's height: the page fills in, it doesn't jump */
+.ed-writing-title { margin: 0 0 1rem; font-size: 1.05rem; font-weight: 600; }
 .draftbar {
   position: relative; height: .6rem; overflow: hidden; border-radius: 999px;
   background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--pico-muted-border-color);
@@ -1461,7 +1464,7 @@ html:not(.js) .ed-writing[data-draft-job=running] .draftbar-fill {  /* no JS: no
 .ed-writing :is([data-draft-error], .draftbar)[hidden] { display: none; }
 .ed-writing .ed-write { max-width: none; margin: 1rem 0 0; }
 .ed-writing .ed-write button { width: auto; margin: 0; }
-.ed-writing:is([data-draft-job=running], .js [data-draft-job=idle]) [data-draft-start] { display: none; }
+.ed-writing:is([data-draft-job=running], .js [data-draft-job=idle]) [data-draft-start-row] { display: none; }
 .ed-writing:not([data-draft-job=running]):not(.js [data-draft-job=idle]) :is(.draftbar-meta, .draftbar-away) { display: none; }
 html:not(.js) .ed-writing[data-draft-job=idle] .draftbar { display: none; }
 /* ---- editor: progress bar (end) ---- */
@@ -1621,21 +1624,46 @@ details.st-more { margin: .5rem 0 0; }
 /* ---- editor: "Verlauf" (end) ---- */
 
 /* ---- editor: the ad in a bottom drawer (begin) -- editor.html listing_drawer(), editor.js -------------------------
-   A slim handle fixed to the bottom edge (centred, at most 900 px), everything else stacks above it: the sticky action
-   bar and the return question / toast are lifted by --drawer-h. Opened, a modal <dialog> (Pico: a full-screen
-   overlay) with the sheet at its bottom, 85 % high, scrolling inside. Without JS the dialog is a plain section at the
-   end of the page and the handle links to it. */
-body:has(.ed-drawer-handle) { --drawer-h: 3rem; }
-a.ed-drawer-handle {  /* a.… : over Pico's a[role=button] (editor.js gives it the role) */
-  position: fixed; z-index: 25; left: 0; right: 0; bottom: 0; margin: 0 auto; width: min(100%, 900px);
-  height: calc(var(--drawer-h) + env(safe-area-inset-bottom)); padding: 0 1rem env(safe-area-inset-bottom);
+   The handle is pinned to the bottom edge in a row with the page's own container and columns (.ed-bottom): on a wide
+   screen under the right column, as high as the letter's "Kopieren & Inserat öffnen" beside it; on a phone a
+   full-width bar - or, with the open text, the "Inserat" button in the locked Kopieren bar instead. Opened, a modal
+   <dialog> (Pico: a full-screen overlay) with the sheet at its bottom, 85 % high, scrolling inside. Without JS the
+   dialog is a plain section at the end of the page and the handle links to it. */
+.ed-bottom { position: fixed; z-index: 25; left: 0; right: 0; bottom: 0; pointer-events: none; }
+.ed-bottom-in { display: grid; padding-top: 0; padding-bottom: 0; }
+.ed-bottom a.ed-drawer-handle {  /* a.… : over Pico's a[role=button] (editor.js gives it the role) */
+  pointer-events: auto; height: calc(var(--dock-lift) + env(safe-area-inset-bottom)); margin: 0;
+  padding: 0 1rem env(safe-area-inset-bottom);
   display: flex; align-items: center; gap: .55rem; text-decoration: none; color: var(--pico-muted-color); font-size: .9rem;
   font-weight: 400; line-height: 1.3; text-align: left;
-  background: var(--pico-card-background-color); border: 1px solid var(--pico-card-border-color); border-bottom: 0;
+  background: color-mix(in srgb, var(--pico-card-background-color) 92%, transparent);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  border: 1px solid var(--pico-card-border-color); border-bottom: 0;
   border-radius: var(--radius) var(--radius) 0 0; box-shadow: 0 -4px 18px rgba(16, 24, 40, .1);
 }
-a.ed-drawer-handle:hover { color: var(--text); }
-a.ed-drawer-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; box-shadow: none; }
+.ed-bottom a.ed-drawer-handle:hover { color: var(--text); }
+.ed-bottom a.ed-drawer-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; box-shadow: none; }
+@media (max-width: 1023px) {
+  .ed-bottom-in { max-width: none; padding: 0; }
+  .ed-bottom a.ed-drawer-handle { border-left: 0; border-right: 0; border-radius: 0; }
+  /* the open text: one locked bar at the bottom - "Kopieren & Inserat öffnen" and "Inserat" */
+  body:has(.ed-card > .ed-bar) .ed-bottom { display: none; }
+  .ed-card > .ed-bar { position: fixed; z-index: 25; left: 0; right: 0; bottom: 0; margin: 0;
+    grid-template-columns: minmax(0, 1fr) auto; border-radius: 0; box-shadow: 0 -4px 18px rgba(16, 24, 40, .1); }
+}
+@media (min-width: 1024px) {
+  .ed-bottom-in { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); column-gap: 1.25rem; }
+  .ed-bottom a.ed-drawer-handle { grid-column: 2; padding: 0 1.1rem; }
+}
+.ed-bar a.ed-bar-inserat {
+  display: inline-flex; align-items: center; justify-content: center; gap: .35rem; min-height: 3rem; margin: 0;
+  padding: 0 .9rem; border: 1px solid var(--pico-form-element-border-color); border-radius: var(--pico-border-radius);
+  background: var(--pico-card-background-color); color: var(--text); font-size: .95rem; font-weight: 600;
+  text-decoration: none; white-space: nowrap; box-shadow: none;
+}
+.ed-bar a.ed-bar-inserat span { color: var(--accent); }
+.ed-bar a.ed-bar-inserat:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (min-width: 1024px) { .ed-bar a.ed-bar-inserat { display: none; } }  /* the handle under the right column */
 .ed-drawer-chev { flex: none; color: var(--accent); font-weight: 700; font-size: 1.05rem; line-height: 1; }
 .ed-drawer-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ed-drawer-label strong { color: var(--text); }
@@ -1682,3 +1710,5 @@ html:not(.js) dialog.ed-sheet { display: block; position: static; z-index: auto;
 html:not(.js) .ed-sheet-head { padding: .55rem 1rem; }
 html:not(.js) .ed-sheet-in { width: auto; height: auto; border: 1px solid var(--pico-card-border-color); border-radius: var(--radius); box-shadow: none; }
 /* ---- editor: bottom drawer (end) ---- */
+.ed-job-calm { margin: .5rem 0 0; padding: .5rem .75rem; border-radius: var(--radius-sm); background: var(--surface-2); font-size: .9rem; }
+.ed-job-calm[hidden] { display: none; }

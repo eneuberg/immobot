@@ -2,6 +2,7 @@
 quick buttons, the ad in a bottom drawer ("Inserat ansehen") with "Uninteressant", the folding bottom prompts."""
 
 import asyncio
+import re
 
 from app import db, editor, history, learning, web
 
@@ -150,3 +151,29 @@ def test_drawer_before_the_first_draft_and_bottom_prompts_fold(client, lid):
     bar = page.split('class="ask-sheet ask-bar"')[1].split("</aside>")[0]
     assert "data-ask-fold" in bar and "data-ask-unfold" in bar and "Uninteressant?" in bar
     assert f'id="editor-{lid}-ask"' in page and f'aria-controls="editor-{lid}-ask"' in bar
+
+
+def test_first_draft_view_is_the_editor_layout(client, lid):
+    editor_cookie(client, lid)
+    page = client.get(f"/editor/{lid}").text  # no draft yet
+    form = page.split(f'<form method="post" action="/editor/{lid}/draft" class="ed-grid" data-draft-start>')[1]
+    form = form.split("</form>")[0]
+    main, side = form.split('<div class="ed-side">')
+    assert 'class="ed-card ed-letter ed-writing" id="text"' in main and "Dein Anschreiben" in main
+    assert "data-draft-bar" in main and "data-draft-start-row" in main
+    assert 'id="kritik"' in side and 'name="effort_level"' in side and 'name="own_words"' in side  # go into the draft
+    assert re.search(r'<textarea id="ed-critique-wait"[^>]* disabled', side) and side.count("disabled>") == 2
+    assert 'name="critique"' not in side and "ed-verlauf" not in page
+    head = page.split('<header class="ed-head">')[1].split("</header>")[0]
+    assert "780 €" not in head and "ed-facts" not in head
+    assert 'class="disclosure" id="bilder"' not in page and 'class="ed-bottom"' in page
+
+
+def test_open_text_has_inserat_in_the_kopieren_bar(client, lid):
+    start(lid)
+    editor_cookie(client, lid)
+    page = open_editor(client, lid)[0].text
+    bar = page.split('<div class="ed-bar">')[1].split("</div>")[0]
+    assert "Kopieren &amp; Inserat öffnen" in bar
+    assert '<a class="ed-bar-inserat" href="#inserat" data-drawer-open aria-controls="inserat"' in bar
+    assert page.count("data-drawer-open") == 2  # and the handle under the right column

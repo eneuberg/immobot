@@ -6,6 +6,8 @@
   "use strict";
 
   var form = document.querySelector("form[data-editor]");
+  // The page's own reloads are no return to it (app.js: no "Uninteressant?" for them); false: the form stayed.
+  var ownNavigation = function (on) { if (window.immobotOwnNavigation) window.immobotOwnNavigation(on); };
   var text = document.getElementById("ed-text");
   var leaving = false;
 
@@ -217,6 +219,7 @@
       })
       .catch(function () {
         leaving = false;
+        ownNavigation(false);
         delete form.dataset.sent;
         form.querySelectorAll("[aria-busy=true]").forEach(function (b) { b.removeAttribute("aria-busy"); b.removeAttribute("aria-disabled"); });
         form.querySelectorAll("textarea").forEach(function (field) { field.readOnly = false; });
@@ -357,7 +360,7 @@
         .then(function (r) { return r.ok ? r.json() : { state: "reload" }; })
         .then(function (data) {
           if (data.state === "running" && tries < 240) setTimeout(check, 2500);
-          else window.location.reload();
+          else { ownNavigation(true); window.location.reload(); }
         })
         .catch(function () { if (tries < 240) setTimeout(check, 5000); });
     };
@@ -397,7 +400,8 @@
       if (data.expected_ms) { self.expected = data.expected_ms; note.textContent = "Dauert meist etwa " + Math.round(self.expected / 1000) + " s."; }
       if (data.slow_after_ms) self.slowAfter = data.slow_after_ms;
       var since = performance.now() - (data.elapsed_ms || 0);
-      if (!self.running || self.t0 === null || Math.abs(since - self.t0) > 3000) self.t0 = since;
+      // follows the server's clock - not after a restart, where the job started anew but she has waited since
+      if (!self.running || self.t0 === null || (!data.keep_clock && Math.abs(since - self.t0) > 3000)) self.t0 = since;
       if (!self.running) {
         self.running = true;
         bar.classList.remove("is-error", "is-done");
@@ -460,29 +464,33 @@
   if (job) {
     var title = job.querySelector("[data-draft-title]");
     var errorBox = job.querySelector("[data-draft-error]");
-    var startForm = job.querySelector("[data-draft-start]");
+    var startForm = job.closest("form[data-draft-start]");  // around both columns: the level and the line go with it
     var startButton = startForm.querySelector("[type=submit]");
     var draftBar = progressBar(job.querySelector("[data-draft-bar]"), job.querySelector("[data-draft-clock]"),
                                job.querySelector("[data-draft-note]"), job.querySelector("[data-draft-slow]"));
     draftBar.expected = Number(job.dataset.expectedMs) || 40000;
     draftBar.slowAfter = Number(job.dataset.slowMs) || 15000;
-    var restarts = 0, state = job.dataset.draftJob;
+    // A restart of the server (a deploy) loses the job (jobs live in memory): the status then says "idle" from another
+    // process (boot). The draft is simply asked for again - the bar keeps running, no error. The same process saying
+    // "idle" gets one more try, as before; only after that it is an error.
+    var restarts = 0, resumed = 0, state = job.dataset.draftJob, knownBoot = job.dataset.boot || null;
     var draftPoll = poller(job.dataset.statusUrl, function () { return state === "running"; }, function (data) { apply(data); });
 
     var running = function (data) {
+      if (data.boot) knownBoot = data.boot;
       if (state !== "running") {
         state = job.dataset.draftJob = "running";
         title.textContent = "Claude schreibt dein Anschreiben …";
         errorBox.hidden = true;
       }
-      draftBar.run(data);
+      draftBar.run(resumed ? Object.assign({}, data, { keep_clock: true }) : data);
       draftPoll.schedule(1000);
     };
     var done = function () {
       state = "done";
       draftPoll.cancel();
       title.textContent = "Fertig – dein Anschreiben kommt …";
-      draftBar.finish(function () { window.location.replace(job.dataset.doneUrl); });
+      draftBar.finish(function () { ownNavigation(true); window.location.replace(job.dataset.doneUrl); });
     };
     var failed = function (message) {
       state = job.dataset.draftJob = "error";
@@ -502,20 +510,26 @@
       else if (data.state === "done") done();
       else if (data.state === "error") failed(data.error);
       else if (data.state === "denied") failed(data.error || "Sitzung abgelaufen – bitte die Seite neu laden.");
-      else if (data.state === "idle" && restarts < 1) { restarts += 1; start(); }  // e.g. the server restarted
+      else if (data.state === "idle" && (!knownBoot || data.boot !== knownBoot) && resumed < 2) {
+        resumed += 1;  // the server restarted: the same request again, quietly
+        knownBoot = data.boot || null;
+        start(true);
+      } else if (data.state === "idle" && restarts < 1) { restarts += 1; start(true); }
       else failed("Claude hat aufgehört zu schreiben – bitte nochmal versuchen.");
     };
-    var start = function () {
-      running({ elapsed_ms: 0 });
+    // resume: the bar goes on (a restart). Without an answer (the server is just restarting) the status is asked
+    // until it answers; that decides.
+    var start = function (resume) {
+      if (!resume) running({ elapsed_ms: 0 });
       draftPoll.cancel();  // the answer to the start says how it stands
       fetch(startForm.action, { method: "POST", body: new FormData(startForm), credentials: "same-origin",
                                 headers: { Accept: "application/json" } })
-        .then(function (r) { return r.json(); })
+        .then(function (r) { return r.ok || r.status < 500 ? r.json() : Promise.reject(r.status); })
         .then(apply)
-        .catch(function () { failed("Keine Verbindung – bitte nochmal versuchen."); });
+        .catch(function () { knownBoot = null; draftPoll.schedule(2000); });
     };
 
-    startForm.addEventListener("submit", function (e) { e.preventDefault(); restarts = 0; start(); });
+    startForm.addEventListener("submit", function (e) { e.preventDefault(); restarts = 0; resumed = 0; start(); });
     if (state === "idle") start();
     else if (state === "running") running({ elapsed_ms: Number(job.dataset.elapsedMs) || 0 });
   }
@@ -537,6 +551,12 @@
     var jobBar = progressBar(panel.querySelector("[data-job-bar]"), panel.querySelector("[data-job-clock]"),
                              panel.querySelector("[data-job-note]"), panel.querySelector("[data-job-slow]"));
     var jobState = panel.dataset.editorJob, jobKind = panel.dataset.jobKind || "custom";
+    var calmBox = panel.querySelector("[data-job-calm]");
+    // After a restart of the server (another boot, the job lost): a revision that had finished already (the newest
+    // revision changed: revision_mark) just shows; otherwise the request is sent again as it was - only when this
+    // page still has it (the form data of the press, `request`), else a calm note to send it again.
+    var knownBoot = panel.dataset.boot || null, mark = panel.dataset.revisionMark || "0", request = null, resumed = 0;
+    var DONE_MESSAGES = { custom: "revised", shorter: "shorter", formal: "formal", regenerate: "regenerate" };
     var jobPoll = poller(panel.dataset.statusUrl, function () { return jobState === "running"; }, function (data) { jobApply(data); });
     var TITLES = { ask: ["Claude beantwortet deine Frage …", "Claude konnte nicht antworten"],
                    other: ["Claude überarbeitet deinen Text …", "Claude konnte nicht überarbeiten"] };
@@ -555,6 +575,9 @@
     };
     var jobRunning = function (data) {
       if (data.kind) jobKind = data.kind;
+      if (data.boot) knownBoot = data.boot;
+      if (resumed) data = Object.assign({}, data, { keep_clock: true });
+      if (calmBox) calmBox.hidden = true;
       if (jobState !== "running") {
         jobState = panel.dataset.editorJob = "running";
         jobError.hidden = true;
@@ -601,7 +624,33 @@
       }
       jobTitle.textContent = "Fertig – dein Text kommt …";
       leaving = true;
-      jobBar.finish(function () { window.location.replace(data.done_url || location.pathname + "#text"); });
+      jobBar.finish(function () { ownNavigation(true); window.location.replace(data.done_url || location.pathname + "#text"); });
+    };
+    var jobCalm = function (message) {  // no error of hers or Claude's: just send it again
+      jobState = panel.dataset.editorJob = "error";
+      jobPoll.cancel();
+      jobBar.fail();
+      panel.querySelector("[data-job-bar]").hidden = true;
+      jobTitle.textContent = jobKind === "ask" ? "Keine Antwort bekommen" : "Nicht überarbeitet";
+      jobError.hidden = true;
+      if (calmBox) { calmBox.textContent = message; calmBox.hidden = false; }
+      lockText(false);
+      release();
+    };
+    var jobIdle = function (data) {
+      var restarted = !knownBoot || (data.boot && data.boot !== knownBoot);
+      if (jobKind !== "ask" && data.revision_mark !== undefined && String(data.revision_mark) !== String(mark)) {
+        var kind = DONE_MESSAGES[jobKind] || "revised";  // it was done before the restart
+        jobDone({ done_url: location.pathname + "?m=" + kind + "#text" });
+      } else if (restarted && request && resumed < 2) {
+        resumed += 1;
+        knownBoot = data.boot || null;
+        send(request);
+      } else if (restarted) {
+        jobCalm("Der Server wurde neu gestartet – bitte nochmal abschicken.");
+      } else {
+        jobFailed("Claude hat aufgehört – bitte nochmal versuchen.");
+      }
     };
     var jobApply = function (data) {
       if (jobState === "done") return;
@@ -609,7 +658,16 @@
       else if (data.state === "done") jobDone(data);
       else if (data.state === "error" || data.state === "stale" || data.state === "denied") {
         jobFailed(data.error || "Sitzung abgelaufen – bitte die Seite neu laden.");
-      } else jobFailed("Claude hat aufgehört – bitte nochmal versuchen.");  // idle: e.g. the server restarted
+      } else jobIdle(data);
+    };
+    // One press, sent (again after a restart): no answer (the server is just restarting) - the status is asked until
+    // it answers, and that decides.
+    var send = function (req) {
+      jobPoll.cancel();  // the answer to the start says how it stands
+      fetch(req.action, { method: "POST", body: req.data, credentials: "same-origin", headers: { Accept: "application/json" } })
+        .then(function (r) { return r.ok || r.status < 500 ? r.json() : Promise.reject(r.status); })
+        .then(function (res) { jobState = "running"; jobApply(res); })
+        .catch(function () { jobState = "running"; knownBoot = null; jobPoll.schedule(2000); });
     };
     var startJob = function (btn) {
       if (text) { clearTimeout(saveTimer); savedValue = text.value; }  // the start saves the text (server side)
@@ -618,13 +676,11 @@
       var data;
       try { data = new FormData(form, btn); } catch (err) { data = new FormData(form); }
       if (btn.name && !data.has(btn.name)) data.append(btn.name, btn.value);
+      request = { action: btn.formAction, data: data };  // what was asked, as it was asked
+      resumed = 0;
       jobState = "starting";
       jobRunning({ elapsed_ms: 0, kind: jobKind });
-      jobPoll.cancel();  // the answer to the start says how it stands
-      fetch(btn.formAction, { method: "POST", body: data, credentials: "same-origin", headers: { Accept: "application/json" } })
-        .then(function (r) { return r.json(); })
-        .then(function (res) { jobState = "running"; jobApply(res); })
-        .catch(function () { jobFailed("Keine Verbindung – bitte nochmal versuchen."); });
+      send(request);
     };
 
     // "Überarbeiten lassen" with something that reads like a question (and nothing else changed): ask first.
@@ -640,6 +696,7 @@
       if (!btn || !btn.dataset.job || !window.fetch || !window.FormData) return;
       e.preventDefault();
       e.stopImmediatePropagation();
+      ownNavigation(false);  // the page stays (app.js marked the submit as leaving)
       if (jobState === "running" || jobState === "starting") return;  // one at a time
       if (looksLikeQuestion(btn)) {
         release();
@@ -677,22 +734,25 @@
   // The handle opens the sheet as a modal <dialog>: the page behind stays put and inert, focus goes into the sheet and
   // back to the handle afterwards. Closing: the grip, ✕, Escape or a tap beside the sheet; it slides (250 ms, none
   // with reduced motion). Without JS (or <dialog>) the sheet is a section at the end and the handle links to it.
+  // Openers: the handle under the right column (wide screen; a bar of its own on a phone), and on a phone with the
+  // open text the "Inserat" beside "Kopieren & Inserat öffnen".
   var sheet = document.getElementById("inserat");
-  var handle = document.querySelector("[data-drawer-open]");
-  if (sheet && handle && typeof sheet.showModal === "function") {
-    handle.setAttribute("role", "button");
+  var openers = Array.prototype.slice.call(document.querySelectorAll("[data-drawer-open]"));
+  if (sheet && openers.length && typeof sheet.showModal === "function") {
+    var opener = openers[0];
+    var expanded = function (on) { openers.forEach(function (o) { o.setAttribute("aria-expanded", on ? "true" : "false"); }); };
     var openSheet = function () {
       if (sheet.open) return;
       sheet.removeAttribute("data-anim");
       sheet.showModal();
-      handle.setAttribute("aria-expanded", "true");
+      expanded(true);
       if (!reduce) { void sheet.offsetWidth; sheet.setAttribute("data-anim", "in"); }
       var close = sheet.querySelector(".ed-sheet-close");
       if (close) close.focus({ preventScroll: true });
     };
     var closed = function () {
       sheet.removeAttribute("data-anim");
-      handle.setAttribute("aria-expanded", "false");
+      expanded(false);
     };
     var closeSheet = function () {
       if (!sheet.open || sheet.getAttribute("data-anim") === "out") return;
@@ -700,10 +760,13 @@
       sheet.setAttribute("data-anim", "out");
       setTimeout(function () { sheet.close(); }, 240);
     };
-    handle.addEventListener("click", function (e) { e.preventDefault(); openSheet(); });
-    handle.addEventListener("keydown", function (e) { if (e.key === " ") { e.preventDefault(); openSheet(); } });  // a link-button
+    openers.forEach(function (o) {
+      o.setAttribute("role", "button");
+      o.addEventListener("click", function (e) { e.preventDefault(); opener = o; openSheet(); });
+      o.addEventListener("keydown", function (e) { if (e.key === " ") { e.preventDefault(); opener = o; openSheet(); } });  // a link-button
+    });
     sheet.addEventListener("cancel", function (e) { e.preventDefault(); closeSheet(); });  // Escape
-    sheet.addEventListener("close", function () { closed(); handle.focus({ preventScroll: true }); });
+    sheet.addEventListener("close", function () { closed(); opener.focus({ preventScroll: true }); });
     sheet.addEventListener("click", function (e) { if (e.target === sheet) closeSheet(); });  // the overlay beside it
     sheet.querySelectorAll("[data-drawer-close]").forEach(function (btn) { btn.addEventListener("click", closeSheet); });
     if (sheet.hasAttribute("data-open")) openSheet();  // back from "Bilder laden" / "Inserat neu laden"

@@ -328,6 +328,8 @@ def _render(request: Request, listing: dict, mode: str, *, message: str | None =
             job_error=web.redact(request, job["error"]) if job and job.get("error") else None,
             editor_job=editor_job,
             revising=bool(editor_job and editor_job["state"] == "running" and editor_job["kind"] != drafting.ASK),
+            revision_mark=revision_mark(listing_id),
+            boot=drafting.BOOT,
             answer=answer,
             calls_today=learning.editor_calls_today(listing_id),
             calls_limit=learning.EDITOR_DAILY_LIMIT,
@@ -600,6 +602,15 @@ def editor_job_status(request: Request, listing_id: str):
     return _job_answer(request, lid)
 
 
+def revision_mark(listing_id: int) -> int:
+    """The newest revision (feedback row) of the listing's open session, 0 without one. editor.js compares it after
+    a restart: changed means the lost job had finished, so it is not sent again."""
+    session = db.open_session(listing_id)
+    rows = [row["id"] for row in db.list_feedback(session_id=session["id"]) if row["kind"] in ("critique", "quick")] \
+        if session else []
+    return max(rows, default=0)
+
+
 def _job_answer(request: Request, listing_id: int, status_code: int = 200) -> JSONResponse:
     job = drafting.editor_status(listing_id)
     answer = job.pop("answer")
@@ -607,7 +618,8 @@ def _job_answer(request: Request, listing_id: int, status_code: int = 200) -> JS
     job.pop("critique", None)
     body = {**job, "error": web.redact(request, job["error"]) if job["error"] else None,
             "answer_html": str(web.templates.env.filters["md"](answer)) if answer else None,
-            "done_url": f"/editor/{listing_id}?m={message}#text" if message and job["state"] == "done" else None}
+            "done_url": f"/editor/{listing_id}?m={message}#text" if message and job["state"] == "done" else None,
+            "revision_mark": revision_mark(listing_id)}
     return JSONResponse(body, status_code=status_code)
 
 
