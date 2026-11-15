@@ -138,7 +138,7 @@ def test_telegram_link_starts_a_browser_session(client, lid):
     assert "Entwurfs-Editor" in page.text  # minimal header: no way into the dashboard
     for link in ('href="/settings"', 'href="/status"', 'href="/"', "Abmelden", "🔗 Dashboard", f'href="/listing/{lid}"'):
         assert link not in page.text
-    assert 'href="https://portal.example/expose/1"' in page.text  # "📨 Inserat öffnen"
+    assert f'href="{editor_access.make_open_path(lid)}"' in page.text  # "📨 Inserat öffnen", via /go (no login)
 
 
 def test_cookie_is_secure_like_the_session_cookie(client, lid, monkeypatch):
@@ -559,7 +559,8 @@ def test_mark_sent(client, lid):
     post(client, lid, "finish", fields, text="Ende")
     page = client.get(f"/editor/{lid}").text
     assert "Hast du die Nachricht abgeschickt?" in page and "✅ Ja, abgeschickt" in page
-    assert f'<dialog class="ed-ask-dialog" data-ask-sent="{lid}"' in page and "data-ask-close" in page  # the overlay
+    assert f'<dialog class="ed-ask-dialog" data-ask-return="editor-{lid}" data-opened' in page  # the overlay, always
+    assert "data-dialog-close>Noch nicht</button>" in page
     assert page.count(f'action="/editor/{lid}/sent"') == 2  # card and overlay
     r = post(client, lid, "sent", {"token": fields["token"]})
     assert r.status_code == 303 and r.headers["location"] == f"/editor/{lid}?m=sent#ende"
@@ -607,7 +608,7 @@ def test_editor_banner_for_offline_listings(client, lid):
     r, fields = open_editor(client, lid)
     page = r.text
     assert "Inserat ist nicht mehr online – von Fredy gemeldet am" in page and "Du kannst hier trotzdem weiterschreiben" in page
-    assert f'action="/editor/{lid}/restore"' not in page and "data-asks-after-open" not in page
+    assert f'action="/editor/{lid}/restore"' not in page and "data-ask-return" not in page
     post(client, lid, "finish", fields, text="Ende")
     page = client.get(f"/editor/{lid}").text
     assert "Ende" in page and "Hast du die Nachricht abgeschickt?" not in page
@@ -632,15 +633,20 @@ def test_editor_counts_as_seen(client, lid):
 
 
 def test_asks_after_opening_the_listing_while_writing(client, lid):
-    """Before "Fertig", "Inserat öffnen" brings "Weiter anschreiben?" on return; "Uninteressant" there dismisses."""
+    """Before "Fertig", "Weiter anschreiben?" waits on the page; once the ad was opened (here, on the dashboard or in
+    Telegram - the /go link) it is armed for every return. "Uninteressant" there dismisses."""
     db.add_draft(lid, "initial", "Original", "claude-opus-5-5")
     editor_cookie(client, lid)
     r, fields = open_editor(client, lid)
     page = r.text
-    assert "data-asks-after-open" in page and f'data-after-open="editor-{lid}"' in page and "Weiter anschreiben?" in page
+    assert f'href="{editor_access.make_open_path(lid)}"' in page and "data-opens-listing" in page
+    assert f'data-ask-return="editor-{lid}" aria-labelledby' in page and "Weiter anschreiben?" in page  # not armed
+    db.mark_opened(lid)
+    _, fields = open_editor(client, lid)
+    assert f'data-ask-return="editor-{lid}" data-opened' in client.get(f"/editor/{lid}").text
     r = post(client, lid, "dismiss", {"token": fields["token"]})
     assert r.status_code == 303 and db.get_listing(lid)["discard_reason"] == "uninteressant"
-    assert "data-after-open" not in client.get(f"/editor/{lid}").text  # nothing left to decide
+    assert "data-ask-return" not in client.get(f"/editor/{lid}").text  # nothing left to decide
 
 
 def test_no_after_open_question_once_finished(client, lid):
@@ -649,7 +655,7 @@ def test_no_after_open_question_once_finished(client, lid):
     _, fields = open_editor(client, lid)
     post(client, lid, "finish", fields, text="Ende")
     page = client.get(f"/editor/{lid}").text
-    assert "data-after-open" not in page and "data-ask-sent" in page  # "Abgeschickt?" instead
+    assert "Weiter anschreiben?" not in page and page.count("data-ask-return") == 1  # "Abgeschickt?" instead
 
 
 def test_new_round_from_a_newer_draft(client, lid):

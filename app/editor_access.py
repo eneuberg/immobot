@@ -88,6 +88,32 @@ def verify_editor_link(listing_id, exp, sig, now: float | None = None) -> bool:
     return _link_state(listing_id, exp, sig, time.time() if now is None else now) == "ok"
 
 
+# --- signed "Inserat öffnen" link -------------------------------------------------------------------
+# /go/{id}/{sig}: records that the person opened the ad (db.opened_at), then redirects to the portal. Signed, so it
+# needs no login (Telegram's URL button, the editor opened from Telegram) and nobody can mark other listings; no
+# expiry, since it only leads to the listing's own public ad.
+
+def _open_signature(listing_id: int) -> str:
+    message = f"open:{int(listing_id)}".encode("ascii")
+    digest = hmac.new(vault.editor_link_key(), message, "sha256").digest()
+    return base64.urlsafe_b64encode(digest[:18]).decode("ascii")
+
+
+def make_open_path(listing_id: int) -> str:
+    """'/go/12/AbC…'"""
+    return f"/go/{int(listing_id)}/{_open_signature(listing_id)}"
+
+
+def verify_open_link(listing_id, sig) -> bool:
+    try:
+        listing_id = int(listing_id)
+    except (TypeError, ValueError):
+        return False
+    if listing_id <= 0 or not isinstance(sig, str) or len(sig) > 100:
+        return False
+    return hmac.compare_digest(sig.encode("utf-8"), _open_signature(listing_id).encode("ascii"))
+
+
 # --- Telegram login data -------------------------------------------------------------------
 
 def _telegram_login(params: dict, bot_token: str, now: float, max_age_s: int) -> tuple[int | None, str | None]:

@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import bot, db, housekeeping, is24, learning, llm, media, portals, rent, search, settings, textdiff, textfmt, vault
+from . import bot, db, editor_access, housekeeping, is24, learning, llm, media, portals, rent, search, settings, textdiff, textfmt, vault
 
 log = logging.getLogger(__name__)
 
@@ -139,6 +139,7 @@ templates.env.globals["STATUSES"] = settings.STATUSES
 templates.env.globals["DISCARD_REASONS"] = settings.DISCARD_REASONS
 templates.env.globals["MANUAL_DISCARD"] = settings.MANUAL_DISCARD
 templates.env.globals["STALE_DAYS"] = settings.STALE_DAYS
+templates.env.globals["open_path"] = editor_access.make_open_path  # "Inserat öffnen" via /go (records it)
 # Content hash in the /static URLs: browsers may cache the files for a day, a deploy still takes effect at once.
 templates.env.globals["STATIC_VERSION"] = hashlib.sha256(
     b"".join((STATIC_DIR / name).read_bytes() for name in ("app.css", "app.js"))).hexdigest()[:12]
@@ -326,6 +327,20 @@ def _password_ok(request: Request, password: str) -> bool:
 @router.get("/healthz")
 async def healthz():
     return {"ok": True}
+
+
+@router.get("/go/{listing_id}/{sig}")
+def open_listing(listing_id: str, sig: str):
+    """"Inserat öffnen" (dashboard, editor, Telegram): remember that the person opened the ad (db.opened_at; from
+    then on the pages ask on every return), then on to the portal. Signed instead of a login (editor_access); the
+    portal gets no Referer, so the dashboard's address stays private."""
+    listing = db.get_listing(int(listing_id)) if editor_access.verify_open_link(listing_id, sig) else None
+    target = portals.safe_url(portals.contact_url(listing["provider"], listing["url"])) if listing else None
+    if not target:
+        raise HTTPException(status_code=404, detail="Inserat nicht gefunden")
+    db.mark_opened(listing["id"])
+    db.mark_seen(listing["id"])
+    return RedirectResponse(target, status_code=303)  # Referrer-Policy same-origin (SECURITY_HEADERS): none sent
 
 
 @router.post("/hook/fredy")

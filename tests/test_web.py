@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import bot, db, llm, main, settings, vault, web
+from app import bot, db, editor_access, llm, main, settings, vault, web
 
 from .conftest import TEST_SECRETS
 
@@ -440,25 +440,53 @@ def test_listing_page_locked_while_aussortiert(client):
 
 
 def test_listing_page_asks_after_opening_the_listing(client):
-    """"Inserat öffnen" carries the marker; the overlay offers the editor and "Uninteressant", for an uninteressant
-    one "Zurückholen"; nothing once sent or offline."""
+    """"Inserat öffnen" goes through the signed /go link; the question is armed (data-opened) once the ad was opened.
+    It follows the status: "Interessant?" (editor / Uninteressant), with a draft "Abgeschickt?", uninteressant
+    "Doch interessant?"; nothing once sent or offline. "Später" is a small link below, not a third button."""
     login(client)
     lid = add_listing()
     page = client.get(f"/listing/{lid}").text
-    assert "data-asks-after-open" in page and f'data-after-open="listing-{lid}"' in page
-    overlay = page.split("data-after-open=")[1].split("</dialog>")[0]
+    assert f'href="{editor_access.make_open_path(lid)}"' in page and "data-opens-listing" in page
+    overlay = page.split(f'data-ask-return="listing-{lid}"')[1].split("</dialog>")[0]
+    assert not overlay.startswith(" data-opened")  # never opened: only a click here arms it
     assert "✍️ Interessant – im Editor anschreiben" in overlay and f'action="/listing/{lid}/dismiss"' in overlay
+    assert '<p class="ed-ask-later"><button type="button" class="linkish" data-dialog-close>Später' in overlay
+    db.mark_opened(lid)
+    overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</dialog>")[0]
+    assert overlay.startswith(" data-opened")
+    db.add_draft(lid, "initial", "Hallo", "claude-opus-5-5")
+    db.advance_status(lid, "drafted")
+    overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</dialog>")[0]
+    assert "Hast du die Nachricht abgeschickt?" in overlay and f'action="/listing/{lid}/sent"' in overlay
+    assert "Interessant – im Editor" not in overlay
     db.discard(lid)
-    overlay = client.get(f"/listing/{lid}").text.split("data-after-open=")[1].split("</dialog>")[0]
+    overlay = client.get(f"/listing/{lid}").text.split(f'data-ask-return="listing-{lid}"')[1].split("</dialog>")[0]
     assert "Doch interessant?" in overlay and "❌ Uninteressant" not in overlay
     assert f'action="/listing/{lid}/restore"' in overlay
     db.restore(lid)
     db.mark_sent(lid)
-    page = client.get(f"/listing/{lid}").text
-    assert "data-after-open" not in page and "data-asks-after-open" not in page
+    assert "data-ask-return" not in client.get(f"/listing/{lid}").text
     other = add_listing(fredy_id="x2")
     db.mark_offline(["x2"])
-    assert "data-after-open" not in client.get(f"/listing/{other}").text
+    assert "data-ask-return" not in client.get(f"/listing/{other}").text
+
+
+def test_open_link_records_and_redirects(client):
+    """/go/{id}/{sig}: no login needed (Telegram), records opened_at (and seen), on to the portal without a Referer;
+    a wrong signature or a listing without a link: 404, nothing recorded."""
+    lid = add_listing()
+    path = editor_access.make_open_path(lid)
+    assert client.get(path[:-2] + "xx", follow_redirects=False).status_code == 404
+    assert client.get(f"/go/{lid + 1}/{path.rsplit('/', 1)[1]}", follow_redirects=False).status_code == 404
+    assert db.get_listing(lid)["opened_at"] is None
+    r = client.get(path, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("https://")
+    assert r.headers["referrer-policy"] == "same-origin"  # no Referer to the portal
+    listing = db.get_listing(lid)
+    assert listing["opened_at"] and listing["seen_at"] and listing["status"] == "seen"
+    first = listing["opened_at"]
+    client.get(path, follow_redirects=False)
+    assert db.get_listing(lid)["opened_at"] == first  # the first time stays
 
 
 def test_card_dismiss_and_restore(client):

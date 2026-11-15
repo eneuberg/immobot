@@ -324,37 +324,71 @@
     Array.prototype.forEach.call(document.querySelectorAll("[data-expose-preview]"), exposePreview);
   });
 
-  // Overlay after "Inserat öffnen" (<a data-asks-after-open>): when the person comes back to this page from the
-  // listing (other tab or app), <dialog data-after-open> opens - every time the link was used. The click time sits in
-  // sessionStorage, so it also works when the browser reloaded the page meanwhile.
+  // The question when the person comes back (<dialog data-ask-return="key">, listing and editor page): "Interessant?"
+  // / "Abgeschickt?". It opens every time the person comes back to the page, once data-opened is set - by the server
+  // (the ad was opened before: dashboard, editor or Telegram; the finished editor always) or by a click on
+  // "Inserat öffnen" (<a data-opens-listing>) here. "Coming back" =
+  //   - the page was hidden (other tab or app) or the window lost focus (other window) for LEAVE_MS or more;
+  //   - the browser shows it again from its cache (back button) or reloads it after being away (the time of leaving
+  //     sits in sessionStorage; a tab the phone threw out of memory);
+  //   - it was opened from outside immobot (a Telegram button, a bookmark: no referrer from this site).
+  // Not: going on within immobot, or a form on the page sending the person back to it (same address as referrer).
   document.addEventListener("DOMContentLoaded", function () {
-    var dlg = document.querySelector("dialog[data-after-open]");
+    var dlg = document.querySelector("dialog[data-ask-return]");
     if (!dlg || typeof dlg.showModal !== "function") return;
-    var key = "immobot-opened-" + dlg.dataset.afterOpen;
-    var openedAt = function (value) {
+    var LEAVE_MS = 1500;
+    var key = "immobot-left-" + dlg.dataset.askReturn;
+    var unloading = false;
+    var leftAt = function (value) {
       try {
         if (value === undefined) return Number(sessionStorage.getItem(key)) || 0;
         if (value) sessionStorage.setItem(key, String(value)); else sessionStorage.removeItem(key);
-      } catch (err) { /* no storage: nothing to remember */ }
+      } catch (err) { /* no storage: only this page's visit counts */ }
       return 0;
     };
-    document.querySelectorAll("[data-asks-after-open]").forEach(function (link) {
-      link.addEventListener("click", function () { openedAt(Date.now()); });
-    });
-    var back = function () {
-      var since = openedAt();
-      if (!since || document.visibilityState !== "visible" || Date.now() - since < 800) return;
-      openedAt(null);
-      window.immobotShowModal(dlg);
+    var ask = function () {
+      if (dlg.hasAttribute("data-opened") && document.visibilityState === "visible") window.immobotShowModal(dlg);
     };
-    document.addEventListener("visibilitychange", back);
+    var leave = function () { if (!unloading && !leftAt()) leftAt(Date.now()); };
+    var back = function () {
+      var since = leftAt();
+      if (!since || document.visibilityState !== "visible") return;
+      leftAt(null);
+      if (Date.now() - since >= LEAVE_MS) ask();
+    };
+    document.querySelectorAll("[data-opens-listing]").forEach(function (link) {
+      link.addEventListener("click", function () { dlg.setAttribute("data-opened", ""); });
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") leave(); else back();
+    });
+    window.addEventListener("blur", function () {
+      // focus moving into the map (an iframe) is not leaving
+      setTimeout(function () { if (!(document.activeElement && document.activeElement.tagName === "IFRAME")) leave(); }, 0);
+    });
     window.addEventListener("focus", back);
-    window.addEventListener("pageshow", back);
+    // Leaving to another immobot page or sending a form is not "away"; pagehide comes before visibilitychange.
+    window.addEventListener("pagehide", function () { unloading = true; });
+    document.addEventListener("submit", function () { unloading = true; leftAt(null); }, true);
+    window.addEventListener("pageshow", function (e) {
+      unloading = false;
+      if (e.persisted) { leftAt(null); ask(); }  // back from the browser's cache
+    });
     dlg.querySelectorAll("[data-dialog-close]").forEach(function (btn) {
       btn.addEventListener("click", function () { dlg.close(); });
     });
     dlg.addEventListener("click", function (e) { if (e.target === dlg) dlg.close(); });
-    back();
+    // This load: after being away (reloaded meanwhile), or arriving from outside immobot.
+    var ref = "";
+    try { ref = document.referrer ? new URL(document.referrer) : ""; } catch (err) { ref = ""; }
+    var nav = (performance.getEntriesByType && performance.getEntriesByType("navigation")[0]) || {};
+    var fromOutside = nav.type !== "reload" && (!ref || ref.origin !== location.origin);
+    var fromHere = ref && ref.origin === location.origin && ref.pathname === location.pathname;
+    if (leftAt()) {
+      if (document.visibilityState === "visible") { leftAt(null); ask(); }
+    } else if (fromOutside || (nav.type === "back_forward" && !fromHere)) {
+      ask();
+    }
   });
 
   // ---- Listing page: picture carousel (begin) ----------------------------------------------------------------

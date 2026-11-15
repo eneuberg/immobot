@@ -8,7 +8,7 @@ from telegram import ForceReply
 from telegram.error import BadRequest, Forbidden, InvalidToken, NetworkError
 from telegram.ext import ApplicationHandlerStop
 
-from app import bot, llm, portals, vault
+from app import bot, editor_access, llm, portals, vault
 from tests.conftest import TEST_SECRETS
 
 CHAT = 42
@@ -265,6 +265,9 @@ def test_draft_keyboard_layout_with_contact_url(monkeypatch):
     assert [b.callback_data for b in rows[0]] == ["new:12", "short:12", "formal:12"]
     assert rows[1][0].callback_data == "edit:12"
     assert rows[1][1].text == "📨 Inserat öffnen ↗" and rows[1][1].url == "https://example.org/contact"
+    monkeypatch.setattr(bot, "_public_base", "https://dash.example.com")  # known address: through /go (records it)
+    link = bot.open_url(listing_dict(id=12))
+    assert link == "https://dash.example.com" + editor_access.make_open_path(12)
     assert [b.callback_data for b in rows[2]] == ["sent:12", "skip:12"]
 
 
@@ -289,7 +292,7 @@ def test_draft_keyboard_editor_first(fresh_vault, monkeypatch):
         ["📝 Bearbeiten", "📨 Inserat öffnen ↗"], ["✅ Gesendet", "❌ Uninteressant"], ["🖼 Bilder", "🔗 Dashboard"]]
     editor, open_listing = rows[0]
     assert editor.login_url.url.startswith("https://immobot.example.com/e/12/") and editor.callback_data is None
-    assert open_listing.url == "https://example.org/contact"
+    assert open_listing.url == "https://immobot.example.com" + editor_access.make_open_path(12)  # records the opening
     assert [b.callback_data for b in rows[1]] == ["sent:12", "skip:12"]
     monkeypatch.setattr(portals, "contact_url", lambda provider, url: None)
     assert texts(bot.draft_keyboard(listing_dict(id=12)))[0] == ["📝 Bearbeiten"]

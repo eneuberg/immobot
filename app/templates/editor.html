@@ -41,12 +41,13 @@
     {% if contact_url or logged_in %}
     <div class="ed-links">
       {% set ask_open = contact_url and (not session or session.status != "done") and listing.status != "sent" and not listing.discard_reason %}
-      {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline"{% if ask_open %} data-asks-after-open{% endif %}>📨 Inserat öffnen ↗</a>{% endif %}
+      {% if contact_url %}<a href="{{ open_path(listing.id) }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline" data-opens-listing>📨 Inserat öffnen ↗</a>{% endif %}
       {% if logged_in %}<a href="/listing/{{ listing.id }}" role="button" class="secondary outline">🔗 Dashboard</a>{% endif %}
     </div>
     {% if ask_open %}
-    {# Before "Fertig": after "Inserat öffnen", when the person comes back (app.js), every time. #}
-    <dialog class="ed-ask-dialog" data-after-open="editor-{{ listing.id }}" aria-labelledby="after-open-title">
+    {# Before "Fertig": once the ad was opened ("Inserat öffnen" here, on the dashboard or in Telegram), every time the
+       person comes back to this page (app.js, data-ask-return). #}
+    <dialog class="ed-ask-dialog" data-ask-return="editor-{{ listing.id }}"{% if listing.opened_at %} data-opened{% endif %} aria-labelledby="after-open-title">
       <article>
         <header>
           <button type="button" aria-label="Schließen" rel="prev" data-dialog-close></button>
@@ -242,7 +243,7 @@
         <pre class="draft" id="ed-final">{{ text }}</pre>
         <div class="ed-actions">
           <button type="button" class="copy-btn" data-copy="ed-final">Kopieren</button>
-          {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary" data-opens-listing="{{ listing.id }}">📨 Inserat öffnen ↗</a>{% endif %}
+          {% if contact_url %}<a href="{{ open_path(listing.id) }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary" data-opens-listing>📨 Inserat öffnen ↗</a>{% endif %}
           {% if listing.discard_reason %}<span class="discard-chip ed-sent">{{ icon("archive") }}<span>aussortiert</span></span>
           {% elif listing.status == "sent" %}<span class="badge ok ed-sent">✓ als gesendet markiert</span>{% endif %}
           <form method="post" action="/editor/{{ listing.id }}/reopen">{{ hidden() }}<button type="submit" class="secondary outline">Weiter bearbeiten</button></form>
@@ -252,8 +253,9 @@
         {% endif %}
       </article>
       {% if listing.status != "sent" and not listing.discard_reason %}
-      {# The same question twice: as a card here, and as an overlay that editor.js opens every time the person comes
-         back to this page (other tab, other app); it closes with ✕, "Noch nicht", Esc or a click beside it. #}
+      {# The same question twice: as a card here, and as an overlay that app.js opens every time the person comes
+         back to this page (other tab or app, back button, from Telegram); it closes with ✕, "Noch nicht", Esc or a
+         click beside it. #}
       <article class="ed-card ed-ask-sent" id="abgeschickt">
         <h2>Hast du die Nachricht abgeschickt?</h2>
         <p class="help">Kopieren, im Inserat einfügen und absenden – dann hier bestätigen. Das Inserat steht danach auf „Gesendet“, auch in Telegram.</p>
@@ -262,10 +264,10 @@
           <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit" class="secondary outline">❌ Doch uninteressant</button></form>
         </div>
       </article>
-      <dialog class="ed-ask-dialog" data-ask-sent="{{ listing.id }}" aria-labelledby="ask-sent-title">
+      <dialog class="ed-ask-dialog" data-ask-return="editor-{{ listing.id }}" data-opened aria-labelledby="ask-sent-title">
         <article>
           <header>
-            <button type="button" aria-label="Schließen" rel="prev" data-ask-close></button>
+            <button type="button" aria-label="Schließen" rel="prev" data-dialog-close></button>
             <h2 id="ask-sent-title">Hast du die Nachricht abgeschickt?</h2>
           </header>
           <p class="ed-ask-listing">{{ listing.title or "Dieses Inserat" }}</p>
@@ -274,8 +276,8 @@
           <footer class="ed-actions">
             <form method="post" action="/editor/{{ listing.id }}/sent">{{ hidden() }}<button type="submit" autofocus>✅ Ja, abgeschickt</button></form>
             <form method="post" action="/editor/{{ listing.id }}/dismiss">{{ hidden() }}<button type="submit" class="secondary outline">❌ Doch uninteressant</button></form>
-            <button type="button" class="secondary outline" data-ask-close>Noch nicht</button>
           </footer>
+          <p class="ed-ask-later"><button type="button" class="linkish" data-dialog-close>Noch nicht</button></p>
         </article>
       </dialog>
       {% endif %}

@@ -115,7 +115,7 @@
         <div><dt>Entwürfe</dt><dd><a href="#entwuerfe">{{ drafts|length }} ↓</a></dd></div>
       </dl>
       <div class="lh-actions">
-        {% if contact_url %}<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer" role="button"{% if asks_after_open %} data-asks-after-open{% endif %}>Inserat öffnen ↗</a>{% endif %}
+        {% if contact_url %}<a href="{{ open_path(listing.id) }}" target="_blank" rel="noopener noreferrer" role="button" data-opens-listing>Inserat öffnen ↗</a>{% endif %}
         <a href="/editor/{{ listing.id }}" role="button" class="secondary">📝 Im Editor bearbeiten</a>
         {% if fredy_url %}<a href="{{ fredy_url }}" target="_blank" rel="noopener noreferrer" role="button" class="secondary outline">In Fredy öffnen ↗</a>{% endif %}
       </div>
@@ -164,26 +164,33 @@
 </article>
 
 {% if asks_after_open %}
-{# Opened after "Inserat öffnen" when the person comes back (app.js), every time; closes with ✕, Später, Esc or a
-   click beside it. Not once sent, and not for offline / veraltet listings (nothing to decide any more). #}
+{# Once the ad was opened ("Inserat öffnen" here, in the editor or in Telegram: listing.opened_at, or a click on this
+   page), app.js opens this every time the person comes back to the page (other tab or app, back button, from
+   Telegram). What it asks follows the status: a draft exists → "Abgeschickt?", aussortiert → "Doch interessant?",
+   else "Interessant?". Closes with ✕, Später, Esc or a click beside it. Not once sent, not for offline / veraltet. #}
 {% set dismissed = listing.discard_reason == MANUAL_DISCARD %}
-<dialog class="ed-ask-dialog" data-after-open="listing-{{ listing.id }}" aria-labelledby="after-open-title">
+{% set ask_sent = not dismissed and listing.status == "drafted" %}
+<dialog class="ed-ask-dialog" data-ask-return="listing-{{ listing.id }}"{% if listing.opened_at %} data-opened{% endif %} aria-labelledby="after-open-title">
   <article>
     <header>
       <button type="button" aria-label="Schließen" rel="prev" data-dialog-close></button>
-      <h2 id="after-open-title">{{ "Doch interessant?" if dismissed else "Interessant?" }}</h2>
+      <h2 id="after-open-title">{{ "Doch interessant?" if dismissed else ("Hast du die Nachricht abgeschickt?" if ask_sent else "Interessant?") }}</h2>
     </header>
     <p class="ed-ask-listing">{{ listing.title or "Dieses Inserat" }}</p>
-    {% if dismissed %}<p class="help">Es ist als uninteressant aussortiert. „Zurückholen“ nimmt es wieder in die Liste.</p>{% endif %}
+    {% if dismissed %}<p class="help">Es ist als uninteressant aussortiert. „Zurückholen“ nimmt es wieder in die Liste.</p>
+    {% elif ask_sent %}<p class="help">Es steht auf „Entwurf“. „Ja“ setzt es auf „Gesendet“, auch in Telegram.</p>{% endif %}
     <footer class="ed-actions">
       {% if dismissed %}
       <form method="post" action="/listing/{{ listing.id }}/restore"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit" autofocus>↩️ Zurückholen</button></form>
+      {% elif ask_sent %}
+      <form method="post" action="/listing/{{ listing.id }}/sent"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit" autofocus>✅ Ja, abgeschickt</button></form>
+      <form method="post" action="/listing/{{ listing.id }}/dismiss"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit" class="secondary outline">❌ Doch uninteressant</button></form>
       {% else %}
       <a href="/editor/{{ listing.id }}" role="button" autofocus>✍️ Interessant – im Editor anschreiben</a>
       <form method="post" action="/listing/{{ listing.id }}/dismiss"><input type="hidden" name="next" value="/listing/{{ listing.id }}"><button type="submit" class="secondary outline">❌ Uninteressant</button></form>
       {% endif %}
-      <button type="button" class="secondary outline" data-dialog-close>Später</button>
     </footer>
+    <p class="ed-ask-later"><button type="button" class="linkish" data-dialog-close>Später</button></p>
   </article>
 </dialog>
 {% endif %}

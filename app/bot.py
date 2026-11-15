@@ -212,7 +212,7 @@ def draft_keyboard(listing: dict, editor: bool = True) -> InlineKeyboardMarkup:
     editor=False: the full layout without the button (the retry after Telegram rejected it)."""
     lid = listing["id"]
     edit = editor_button(lid) if editor else None
-    link = portals.contact_url(listing.get("provider"), listing.get("url"))
+    link = open_url(listing)
     open_listing = [InlineKeyboardButton("📨 Inserat öffnen ↗", url=link)] if link else []
     status_row = [_button("✅ Gesendet", "sent", lid), _button("❌ Uninteressant", "skip", lid)]
     if edit and editor_button_error() is None:
@@ -393,6 +393,15 @@ def public_url_info() -> tuple[str | None, str]:
 
 def dashboard_url(listing_id: int) -> str | None:
     return f"{_public_base}/listing/{int(listing_id)}" if _public_base else None
+
+
+def open_url(listing: dict) -> str | None:
+    """"📨 Inserat öffnen": through the dashboard's signed /go link (it records the opening, so the dashboard asks
+    "Abgeschickt?" afterwards), straight to the portal while the public address is unknown; None without a link."""
+    link = portals.contact_url(listing.get("provider"), listing.get("url"))
+    if not link:
+        return None
+    return f"{_public_base}{editor_access.make_open_path(listing['id'])}" if _public_base else link
 
 
 def editor_url(listing_id: int) -> str | None:

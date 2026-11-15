@@ -238,6 +238,10 @@ ADDED_COLUMNS = {
         # when the person first looked at or acted on the listing (page, editor, a status, a Telegram button);
         # NULL = never (status "new": the dashboard card glows)
         ("seen_at", "TEXT"),
+        # when the person first opened the ad on the portal ("Inserat öffnen" on the dashboard, in the editor or in
+        # Telegram, all through the signed /go link): from then on the listing and editor pages ask "Interessant?" /
+        # "Abgeschickt?" every time the person comes back to them (app.js, data-ask-return). NULL = never.
+        ("opened_at", "TEXT"),
         # Aussortiert (settings.DISCARD_REASONS), beside the status, which stays as it was underneath: NULL = not;
         # since when; 1 = by a job (housekeeping.py), 0 = by hand. discard_prev: the "uninteressant" an "offline"
         # replaced (JSON {"reason", "auto", "at"}), restored when Fredy reports the ad online again (mark_online).
@@ -503,6 +507,15 @@ def mark_seen(listing_id: int) -> bool:
         cur = conn.execute("UPDATE listings SET seen_at = COALESCE(seen_at, ?), "
                            "status = CASE WHEN status = 'new' THEN 'seen' ELSE status END "
                            "WHERE id = ? AND (seen_at IS NULL OR status = 'new')", (now_iso(), listing_id))
+        return cur.rowcount > 0
+
+
+def mark_opened(listing_id: int) -> bool:
+    """The person opened the ad on the portal (the /go link). Only the first time is stored. Returns whether it is
+    the first time."""
+    with connect() as conn:
+        cur = conn.execute("UPDATE listings SET opened_at = ? WHERE id = ? AND opened_at IS NULL",
+                           (now_iso(), listing_id))
         return cur.rowcount > 0
 
 
