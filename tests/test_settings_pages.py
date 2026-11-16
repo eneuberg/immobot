@@ -593,7 +593,7 @@ def test_add_rule_on_verhalten(client):
     card = page.split('<article id="regeln"')[1].split('<article id="beispiele"')[0]
     assert 'action="/settings/rules/add"' in card and '<details class="rule-add" open>' in card  # no rules yet: open
     assert "Ein kurzer Satz als Anweisung an Claude, in Du-Form – eine Regel pro Eintrag." in card
-    assert "Claudes Vorschläge haben dasselbe Format." in card and 'maxlength="300"' in card
+    assert "Claudes Vorschläge haben dasselbe Format." in card and 'maxlength' not in card
     r = client.post("/settings/rules/add", data={"text": " Schreib „Viele Grüße“ statt „Mit freundlichen Grüßen“. "})
     assert r.status_code == 303 and r.headers["location"] == "/settings/verhalten?done=rule_added#regeln"
     (rule,) = db.list_rules("active")

@@ -612,7 +612,7 @@ def restore(listing_id: int) -> bool:
 
 # --- personal input and "Bewerbungen" ----------------------------------------------------------------------
 
-OWN_WORDS_MAX = 300
+OWN_WORDS_MAX = 5000  # no limit in the form; only a guard against absurd input
 
 
 # "Wie viel Mühe?" per listing (macros.personal_fields, llm.personal_block): how much personality the first

@@ -28,7 +28,7 @@ PAGE, ACTION = web.PAGE, web.ACTION
 STALE_PROPOSAL_DAYS = 14  # "Ältere verfallen lassen" on /stil
 PROPOSALS_SHOWN = 5
 RULES_SHOWN = 6  # active rules before "Alle anzeigen"
-NOTE_MAX = 300
+NOTE_MAX = 5000  # no limit in the form; only a guard against absurd input
 
 
 def _since(days: int) -> str:

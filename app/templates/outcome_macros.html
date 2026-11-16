@@ -33,7 +33,7 @@
     </div>
   </fieldset>
   <label class="sr-only" for="n-{{ l.id }}">Notiz (optional)</label>
-  <input type="text" id="n-{{ l.id }}" name="note" maxlength="300" placeholder="Notiz (optional), z. B. Unterlagen mitbringen" autocomplete="off">
+  <input type="text" id="n-{{ l.id }}" name="note" placeholder="Notiz (optional), z. B. Unterlagen mitbringen" autocomplete="off">
 </form>
 {% if a.events %}
 <form method="post" action="/bewerbung/{{ l.id }}/zurueck" class="oc-undo">

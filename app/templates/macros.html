@@ -218,7 +218,7 @@ Von dir als uninteressant aussortiert am {{ l.discarded_at|local_time }}.
     </div>
   </fieldset>
   <label class="sr-only" for="{{ id_prefix }}-words">Was findest du gut? Was soll Claude wissen? (optional)</label>
-  <input type="text" id="{{ id_prefix }}-words" name="own_words" maxlength="{{ OWN_WORDS_MAX }}" value="{{ listing.own_words or '' }}"
+  <input type="text" id="{{ id_prefix }}-words" name="own_words" value="{{ listing.own_words or '' }}"
     placeholder="Was findest du gut? Was soll Claude wissen? (optional)" autocomplete="off" enterkeyhint="done"
     title="z. B. „kenne die Ecke“, „Garten ist super“, „habe schon angerufen“ – Claude greift das auf und erfindet nichts dazu">
   <p class="help personal-help" id="{{ id_prefix }}-effort-help">Fließt in den ersten Absatz ein.</p>

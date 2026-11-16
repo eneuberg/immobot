@@ -1022,9 +1022,9 @@ def test_add_own_rule_in_the_editor(client, lid):
     assert ('Schreib „Viele Grüße“ statt „Mit freundlichen Grüßen“. <small class="muted">(selbst eingetragen)</small>'
             in page)
 
-    r = post(client, lid, "rules/add", fields, text="x" * 301)
-    assert r.status_code == 400 and "Höchstens 300 Zeichen." in r.text
-    assert '<details class="rule-add is-prominent" open>' in r.text and "x" * 301 + "</textarea>" in r.text  # kept
+    r = post(client, lid, "rules/add", fields, text="x" * (learning.RULE_MAX_CHARS + 1))
+    assert r.status_code == 400 and f"Höchstens {learning.RULE_MAX_CHARS} Zeichen." in r.text
+    assert '<details class="rule-add is-prominent" open>' in r.text and "x" * (learning.RULE_MAX_CHARS + 1) + "</textarea>" in r.text  # kept
     r = post(client, lid, "rules/add", {**fields, "token": "0" * 32}, text="Fremd.")
     assert r.status_code == 403
     r = post(client, other, "rules/add", fields, text="Fremd.")  # another listing: no access

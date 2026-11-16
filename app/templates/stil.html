@@ -52,9 +52,9 @@
           <summary>Anpassen</summary>
           <div class="st-adjust-body">
             <label for="st-text-{{ p.id }}">Text</label>
-            <textarea id="st-text-{{ p.id }}" name="text" rows="2" maxlength="{{ rule_max_chars }}" data-autosize>{{ p.text }}</textarea>
+            <textarea id="st-text-{{ p.id }}" name="text" rows="2" data-autosize>{{ p.text }}</textarea>
             <label for="st-scope-{{ p.id }}">Gilt, wenn <small class="muted">(leer = immer)</small></label>
-            <input id="st-scope-{{ p.id }}" name="scope" maxlength="150" value="{{ p.scope or '' }}" placeholder="z. B. privater Vermieter">
+            <input id="st-scope-{{ p.id }}" name="scope" value="{{ p.scope or '' }}" placeholder="z. B. privater Vermieter">
             <label class="check"><input type="checkbox" name="strength" value="hard" {% if p.strength == "hard" %}checked{% endif %}> ausnahmslos <small class="muted">(sonst eine Tendenz)</small></label>
             <button type="submit" name="decision" value="angepasst" class="secondary">Angepasst übernehmen</button>
           </div>

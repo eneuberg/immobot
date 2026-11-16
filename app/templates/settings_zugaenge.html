@@ -53,7 +53,7 @@
             {# type=text on purpose: the step-up field must be the only password field, otherwise password managers
                treat the form as "change password" and offer to save the API key as the site password.
                Secret values are only masked visually (class "masked"). #}
-            <input type="text" name="value" autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="500"
+            <input type="text" name="value" autocomplete="off" spellcheck="false" autocapitalize="off"
               data-1p-ignore data-lpignore="true"{% if c.name in secret_names %} class="masked"{% endif %}>
           </label>
           <label>Dashboard-Passwort
@@ -153,8 +153,7 @@
           <div class="form-grid">
             <label>{{ "Neuer" if p.key.source else "" }} {{ p.label }}-API-Key
               {# type=text + CSS mask: the step-up field must stay the only password field (see the cards below). #}
-              <input type="text" name="value" class="masked" autocomplete="off" spellcheck="false" autocapitalize="off"
-                maxlength="500" data-1p-ignore data-lpignore="true" required>
+              <input type="text" name="value" class="masked" autocomplete="off" spellcheck="false" autocapitalize="off" data-1p-ignore data-lpignore="true" required>
             </label>
             <label>Dashboard-Passwort
               <input type="password" name="password" autocomplete="current-password" required>

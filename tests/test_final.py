@@ -114,7 +114,7 @@ def test_set_personal(fresh_db):
     assert db.set_personal(lid_, "Garten ist super", None) is False  # no level: it stays
     assert db.get_listing(lid_)["effort_level"] == 3
     assert db.set_personal(lid_, "Garten ist super", 1) is True and db.get_listing(lid_)["effort_level"] == 1
-    assert db.set_personal(lid_, "x" * 500, 1) is True and len(db.get_listing(lid_)["own_words"]) == db.OWN_WORDS_MAX
+    assert db.set_personal(lid_, "x" * (db.OWN_WORDS_MAX + 100), 1) is True and len(db.get_listing(lid_)["own_words"]) == db.OWN_WORDS_MAX
     assert db.set_personal(lid_, " ", 1) is True and db.get_listing(lid_)["own_words"] is None
     other = db.insert_listing({"fredy_id": "p2", "title": "B"})[0]
     assert db.set_personal(other, "", 2) is False  # NULL and normal are the same

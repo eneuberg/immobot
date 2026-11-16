@@ -7,7 +7,7 @@
   <form method="post" action="{{ action }}">
     {{ caller() }}
     <label for="{{ field_id }}">Deine Regel</label>
-    <textarea id="{{ field_id }}" name="text" rows="2" maxlength="{{ max_chars }}" required aria-describedby="{{ field_id }}-howto" data-autosize>{{ value }}</textarea>
+    <textarea id="{{ field_id }}" name="text" rows="2" required aria-describedby="{{ field_id }}-howto" data-autosize>{{ value }}</textarea>
     <p class="help rule-howto" id="{{ field_id }}-howto">Ein kurzer Satz als Anweisung an Claude, in Du-Form – eine Regel pro Eintrag.
       Allgemein formulieren: Sie gilt für alle künftigen Anschreiben, nichts nur zu dieser Wohnung.
       Beispiel: „Schreib ‚Viele Grüße‘ statt ‚Mit freundlichen Grüßen‘.“ Claudes Vorschläge haben dasselbe Format.</p>

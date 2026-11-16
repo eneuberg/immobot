@@ -7,7 +7,7 @@ exposé text; spelling is normalized ("Montanusstraße" = "Montanusstr." = "mont
 import re
 import unicodedata
 
-QUERY_MAX = 300
+QUERY_MAX = 5000
 
 # Words that say nothing about a particular listing.
 STOPWORDS = {

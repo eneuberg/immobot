@@ -269,16 +269,16 @@
           <p class="ed-rule-text"><strong>{{ rule.text }}</strong></p>
           {% if rule.fact_old %}<p class="ed-rule-old"><span class="muted">In „Über mich“ bisher:</span> {{ rule.fact_old }}</p>{% endif %}
           <label for="rule-{{ rule.id }}">{{ "Neu" if rule.fact_old else "Anhängen an „Über mich“" }}</label>
-          <textarea id="rule-{{ rule.id }}" name="text" rows="2" maxlength="2000" data-autosize>{{ rule.fact_new }}</textarea>
+          <textarea id="rule-{{ rule.id }}" name="text" rows="2" data-autosize>{{ rule.fact_new }}</textarea>
           {% else %}
           {% if rule.target_text %}<p class="ed-rule-old"><span class="muted">Bisher:</span> {{ rule.target_text }}</p>{% endif %}
           <label class="sr-only" for="rule-{{ rule.id }}">Text der Regel</label>
-          <textarea id="rule-{{ rule.id }}" name="text" rows="3" maxlength="300" data-autosize>{{ rule.text }}</textarea>
+          <textarea id="rule-{{ rule.id }}" name="text" rows="3" data-autosize>{{ rule.text }}</textarea>
           <details class="ed-rule-more">
             <summary>Anpassen</summary>
             <div class="ed-rule-opts">
               <label for="scope-{{ rule.id }}">Gilt, wenn <small class="muted">(leer = immer)</small></label>
-              <input id="scope-{{ rule.id }}" name="scope" maxlength="150" value="{{ rule.scope or '' }}" placeholder="z. B. privater Vermieter">
+              <input id="scope-{{ rule.id }}" name="scope" value="{{ rule.scope or '' }}" placeholder="z. B. privater Vermieter">
               <label class="check"><input type="checkbox" name="strength" value="hard" {% if rule.strength == "hard" %}checked{% endif %}> ausnahmslos <small class="muted">(sonst eine Tendenz, von der Claude abweichen darf)</small></label>
               <input type="hidden" name="has_opts" value="1">
             </div>
@@ -372,7 +372,7 @@
           </div>
         </div>
         {% endif %}
-        <textarea id="ed-text" name="text" rows="12" maxlength="20000" spellcheck="true" data-autosize
+        <textarea id="ed-text" name="text" rows="12" spellcheck="true" data-autosize
           {%- if revising %} readonly aria-describedby="ed-job-title"{% endif %}>{{ text }}</textarea>
         {# "Kopieren & Inserat öffnen" is in the bottom row (listing_drawer: form="ed-form"), pinned under this card #}
       </article>

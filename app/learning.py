@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 EDITOR_DAILY_LIMIT = 30  # Claude calls per listing within 24 hours through the editor (revisions, questions, rules)
 TEXT_MAX_CHARS = 20_000
-RULE_MAX_CHARS = 300
+RULE_MAX_CHARS = 5000  # no limit in the forms; only a guard against absurd input
 MAX_PROPOSED_RULES = 4
 MAX_ACTIVE_RULES = 25
 RULES_MERGE_HINT_AT = 15  # from this many active rules, suggest merging them into the profile
@@ -514,7 +514,7 @@ RULES_SHAPE = ('{"actions": [{"action": "add" | "update" | "remove" | "fact", "r
 RULES_DIFF_CHARS = 4000  # changed sentences in the rule prompt (one session; the full texts are there too)
 RULES_EARLIER_SESSIONS = 8  # earlier finished sessions whose changes the proposer sees (patterns across letters)
 RULES_EARLIER_DIFF_CHARS = 700
-SCOPE_MAX_CHARS = 150
+SCOPE_MAX_CHARS = 2000
 STRENGTHS = {"tendenz": "soft", "immer": "hard"}
 
 RULES_SYSTEM = """\

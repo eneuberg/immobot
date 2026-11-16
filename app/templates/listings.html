@@ -17,7 +17,7 @@
     <form method="post" action="/listings/add">
       {% if add_failed %}<div class="flash err bare" role="alert">{{ add_failed.error }}</div>{% endif %}
       <label for="add-url">ImmoScout24-Link oder geteilter Text</label>
-      <textarea id="add-url" name="url" rows="3" required maxlength="2000" autocomplete="off" spellcheck="false"
+      <textarea id="add-url" name="url" rows="3" required autocomplete="off" spellcheck="false"
         data-expose-preview="add-preview"
         placeholder="https://www.immobilienscout24.de/expose/…">{{ add_failed.url if add_failed else '' }}</textarea>
       <p class="add-preview" id="add-preview" aria-live="polite" hidden></p>
@@ -38,7 +38,7 @@
 <form method="get" action="/" class="search-listings" role="search" aria-label="Inserate durchsuchen">
   <label for="search-q" class="sr-only">Inserate durchsuchen</label>
   <div class="add-row">
-    <input type="search" id="search-q" name="q" value="{{ search.query if search else '' }}" maxlength="300"
+    <input type="search" id="search-q" name="q" value="{{ search.query if search else '' }}"
       placeholder="Suchen: Straße, Balkon, Garten …" autocomplete="off" enterkeyhint="search">
     <button type="submit" class="secondary outline" aria-label="Suchen">Suchen</button>
   </div>

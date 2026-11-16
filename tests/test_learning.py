@@ -683,8 +683,8 @@ def test_rule_limit_and_editing(lid, monkeypatch):
     assert learning.update_rule_text(first, " Eins,  neu. ")["text"] == "Eins, neu."
     with pytest.raises(learning.LearningError, match="leer"):
         learning.update_rule_text(first, " ")
-    with pytest.raises(learning.LearningError, match="Höchstens 300"):
-        learning.update_rule_text(first, "x" * 301)
+    with pytest.raises(learning.LearningError, match=f"Höchstens {learning.RULE_MAX_CHARS}"):
+        learning.update_rule_text(first, "x" * (learning.RULE_MAX_CHARS + 1))
     pending = db.add_rule("Ändere Eins.", action="update", replaces_rule_id=first)
     learning.delete_rule(first)
     assert db.get_rule(first) is None and db.get_rule(pending) is None  # its open proposals go too
@@ -704,8 +704,8 @@ def test_add_manual_rule(lid, monkeypatch):
     assert [r["text"] for r in llm.learned_context(db.get_settings())[0]] == [rule["text"], "Nenne kein Einzugsdatum."]
     with pytest.raises(learning.LearningError, match="leer"):
         learning.add_manual_rule("   ")
-    with pytest.raises(learning.LearningError, match="Höchstens 300"):
-        learning.add_manual_rule("x" * 301)
+    with pytest.raises(learning.LearningError, match=f"Höchstens {learning.RULE_MAX_CHARS}"):
+        learning.add_manual_rule("x" * (learning.RULE_MAX_CHARS + 1))
     with pytest.raises(learning.LearningError, match="gibt es schon"):
         learning.add_manual_rule("nenne kein einzugsdatum")
     learning.set_rule_active(loose["id"], False)
