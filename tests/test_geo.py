@@ -82,12 +82,15 @@ class Services:
     def __init__(self, nominatim=None, overpass=None, status=200):
         self.requests = []
         self.nominatim, self.overpass, self.status = nominatim or [], overpass or {"elements": []}, status
+        self.overpass_status = 200
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if self.status != 200:
             return httpx.Response(self.status, text="busy")
         if request.url.host == "overpass-api.de":
+            if self.overpass_status != 200:
+                return httpx.Response(self.overpass_status, text="busy")
             return httpx.Response(200, json=self.overpass)
         assert request.url.host == "nominatim.openstreetmap.org"
         return httpx.Response(200, json=self.nominatim)
@@ -112,15 +115,13 @@ def run_ensure(address):
     return asyncio.run(main())
 
 
-def test_plz_from_overpass_then_from_the_cache(services):
-    ring = [{"lon": x, "lat": y} for x, y in SQUARE]
-    services.overpass = {"elements": [{"type": "relation", "members": [{"type": "way", "role": "outer", "geometry": ring}]}]}
+def test_plz_from_nominatim_then_from_the_cache(services):
+    services.nominatim = [{"lat": "50.95", "lon": "6.91", "geojson": {"type": "Polygon", "coordinates": [SQUARE]}}]
     assert geo.cached("50823 Köln - Ehrenfeld") == {"state": "pending", "kind": "plz"}
     assert run_ensure("50823 Köln - Ehrenfeld")["state"] == "pending"
     assert len(services.requests) == 1
     request = services.requests[0]
-    assert request.method == "POST" and request.url.host == "overpass-api.de"
-    assert '"postal_code"="50823"' in httpx.QueryParams(request.content.decode())["data"]
+    assert request.url.host == "nominatim.openstreetmap.org" and request.url.params["postalcode"] == "50823"
     assert request.headers["user-agent"] == "immobot (self-hosted)"  # generic, nothing personal
     answer = run_ensure("50823 Köln")  # another listing in the same PLZ: from the cache, no request
     assert len(services.requests) == 1
@@ -128,11 +129,35 @@ def test_plz_from_overpass_then_from_the_cache(services):
     assert answer["bounds"] == [50.94, 6.9, 50.96, 6.92]
 
 
-def test_plz_without_boundary_falls_back_to_the_district(services):
-    services.nominatim = [{"lat": "50.95", "lon": "6.91", "geojson": {"type": "Polygon", "coordinates": [SQUARE]}}]
+def test_plz_from_overpass_when_nominatim_has_no_area(services):
+    services.nominatim = [{"lat": "50.95", "lon": "6.91", "geojson": {"type": "Point", "coordinates": [6.91, 50.95]}}]
+    ring = [{"lon": x, "lat": y} for x, y in SQUARE]
+    services.overpass = {"elements": [{"type": "relation", "members": [{"type": "way", "role": "outer", "geometry": ring}]}]}
+    run_ensure("50823 Köln")
+    hosts = [r.url.host for r in services.requests]
+    assert hosts == ["nominatim.openstreetmap.org", "overpass-api.de"]
+    assert services.requests[1].method == "POST"
+    assert '"postal_code"="50823"' in httpx.QueryParams(services.requests[1].content.decode())["data"]
+    assert geo.cached("50823 Köln")["geometry"]["type"] == "Polygon"
+
+
+def test_plz_with_overpass_down_falls_back_to_the_district(services):
+    """Overpass overloaded (timeouts, 504): not an error for the PLZ - the Stadtteil the ad names is shown instead."""
+    services.overpass_status = 504
+    district = {"lat": "50.95", "lon": "6.91", "geojson": {"type": "Polygon", "coordinates": [SQUARE]}}
+
+    def answer(request):
+        services.requests.append(request)
+        if request.url.host == "overpass-api.de":
+            return httpx.Response(504, text="busy")
+        if request.url.params.get("postalcode"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(200, json=[district])
+    geo._transport = httpx.MockTransport(answer)
     run_ensure("50823 Köln - Ehrenfeld")
     hosts = [r.url.host for r in services.requests]
-    assert hosts[0] == "overpass-api.de" and set(hosts[1:]) == {"nominatim.openstreetmap.org"}
+    assert hosts == ["nominatim.openstreetmap.org", "overpass-api.de", "nominatim.openstreetmap.org"]
+    assert services.requests[-1].url.params["q"] == "Ehrenfeld, Köln"
     assert geo.cached("50823 Köln - Ehrenfeld")["state"] == "ok"
 
 

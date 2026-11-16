@@ -33,6 +33,7 @@ OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 USER_AGENT = "immobot (self-hosted)"
 REQUEST_GAP_S = 1.1
 TIMEOUT_S = 20.0
+OVERPASS_TIMEOUT_S = 12.0  # only a fallback for the PLZ outline: give up early when it is overloaded
 ERROR_RETRY_S = 6 * 3600
 SIMPLIFY_DEG = 0.00015  # ~10-15 m: invisible at the zoom of a district, a fraction of the points
 MAX_POINTS = 600
@@ -263,6 +264,10 @@ def overpass_geometry(data: dict) -> dict | None:
 
 # --- network ---------------------------------------------------------------------------------------------------
 
+def _is_area(geometry: dict | None) -> bool:
+    return isinstance(geometry, dict) and geometry.get("type") in ("Polygon", "MultiPolygon")
+
+
 class GeoLookupFailed(Exception):
     """The service could not be asked (network, HTTP status, bad answer): retried after ERROR_RETRY_S."""
 
@@ -305,13 +310,19 @@ async def _find(place: dict) -> dict | None:
             return {"type": "Point", "coordinates": [round(float(hits[0]["lon"]), 6), round(float(hits[0]["lat"]), 6)]}
         return None
     if kind == "plz":
-        query = f'[out:json][timeout:25];relation["boundary"="postal_code"]["postal_code"="{place["plz"]}"];out geom;'
-        data = await _request("POST", OVERPASS_URL, data={"data": query})
-        geometry = overpass_geometry(data if isinstance(data, dict) else {})
-        if geometry is None:  # no boundary in OSM: Nominatim's postcode search, if it has an outline
-            hits = await _nominatim({"postalcode": place["plz"], "polygon_geojson": "1",
-                                     "polygon_threshold": str(SIMPLIFY_DEG)})
-            geometry = hits[0].get("geojson") if hits else None
+        # Nominatim's postcode area first: one fast request. Overpass (the mapped boundary relation) only when it has
+        # none - it is often overloaded and then times out, which must not cost the PLZ outline nor the Stadtteil.
+        hits = await _nominatim({"postalcode": place["plz"], "polygon_geojson": "1",
+                                 "polygon_threshold": str(SIMPLIFY_DEG)})
+        geometry = hits[0].get("geojson") if hits else None
+        if not _is_area(geometry):
+            query = f'[out:json][timeout:25];relation["boundary"="postal_code"]["postal_code"="{place["plz"]}"];out geom;'
+            try:
+                data = await _request("POST", OVERPASS_URL, data={"data": query}, timeout=OVERPASS_TIMEOUT_S)
+            except GeoLookupFailed as exc:
+                log.info("Overpass failed for a PLZ (%s), trying the Stadtteil", exc)
+                data = {}
+            geometry = overpass_geometry(data if isinstance(data, dict) else {})
         if geometry is None and place.get("district"):  # no PLZ area at all: the Stadtteil the ad names
             return await _find({**place, "kind": "district"})
         return shrink(geometry) if geometry else None
