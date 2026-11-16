@@ -71,6 +71,17 @@
   {# the page's columns again (same container and grid), so the handle sits under the right one on a wide screen,
      beside the letter's "Kopieren & Inserat öffnen"; on a phone a full-width bar, or (open text) the bar's "Inserat" #}
   <div class="container ed-bottom-in">
+    {% if session and session.status == "open" and not learn_view %}
+    {# The open text's one action, locked at the bottom under the letter (it belongs to the editor's form) #}
+    <div class="ed-bar">
+      <button type="submit" form="ed-form" formaction="/editor/{{ listing.id }}/finish" data-copy-open
+        {%- if contact_url %} data-go="{{ open_path(listing.id) }}"{% endif %} aria-describedby="ed-done-note">
+        {{- "Kopieren & Inserat öffnen" if contact_url else "Kopieren & abschließen" -}}</button>
+      <a class="ed-bar-inserat" href="#inserat" data-drawer-open aria-controls="inserat" aria-expanded="false"
+        aria-label="Inserat ansehen">Inserat <span aria-hidden="true">⌃</span></a>
+      <p class="ed-bar-note sr-only" id="ed-done-note">Kopiert den Text, öffnet das Inserat und speichert den Text als fertig – Claude lernt daraus.</p>
+    </div>
+    {% endif %}
     <a class="ed-drawer-handle" href="#inserat" data-drawer-open aria-controls="inserat" aria-expanded="false">
       <span class="ed-drawer-chev" aria-hidden="true">⌃</span>
       <span class="ed-drawer-label"><strong>Inserat ansehen</strong>{% for f in facts[:2] %} · {{ f }}{% endfor %}
@@ -363,14 +374,7 @@
         {% endif %}
         <textarea id="ed-text" name="text" rows="12" maxlength="20000" spellcheck="true" data-autosize
           {%- if revising %} readonly aria-describedby="ed-job-title"{% endif %}>{{ text }}</textarea>
-        <div class="ed-bar">
-          <button type="submit" formaction="/editor/{{ listing.id }}/finish" data-copy-open
-            {%- if contact_url %} data-go="{{ open_path(listing.id) }}"{% endif %} aria-describedby="ed-done-note">
-            {{- "Kopieren & Inserat öffnen" if contact_url else "Kopieren & abschließen" -}}</button>
-          <a class="ed-bar-inserat" href="#inserat" data-drawer-open aria-controls="inserat" aria-expanded="false"
-            aria-label="Inserat ansehen">Inserat <span aria-hidden="true">⌃</span></a>
-          <p class="ed-bar-note sr-only" id="ed-done-note">Kopiert den Text, öffnet das Inserat und speichert den Text als fertig – Claude lernt daraus.</p>
-        </div>
+        {# "Kopieren & Inserat öffnen" is in the bottom row (listing_drawer: form="ed-form"), pinned under this card #}
       </article>
     </div>
 

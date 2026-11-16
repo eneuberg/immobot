@@ -177,3 +177,19 @@ def test_open_text_has_inserat_in_the_kopieren_bar(client, lid):
     assert "Kopieren &amp; Inserat öffnen" in bar
     assert '<a class="ed-bar-inserat" href="#inserat" data-drawer-open aria-controls="inserat"' in bar
     assert page.count("data-drawer-open") == 2  # and the handle under the right column
+
+
+def test_kopieren_is_locked_in_the_bottom_row(client, lid):
+    """"Kopieren & Inserat öffnen" sits in the pinned bottom row beside the handle (same baseline on a wide screen),
+    outside the editor's form but submitting it (form="ed-form")."""
+    session = start(lid)
+    editor_cookie(client, lid)
+    page = open_editor(client, lid)[0].text
+    form = page.split('id="ed-form"')[1].split("</form>")[0]
+    assert "data-copy-open" not in form
+    row = page.split('<div class="ed-bottom">')[1].split("<dialog")[0]
+    assert f'<button type="submit" form="ed-form" formaction="/editor/{lid}/finish" data-copy-open' in row
+    assert row.index('class="ed-bar"') < row.index('class="ed-drawer-handle"')
+    learning.finish(session["id"], "Fertig")
+    page = open_editor(client, lid)[0].text
+    assert 'class="ed-bar"' not in page and 'class="ed-drawer-handle"' in page  # done: only the handle

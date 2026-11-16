@@ -395,6 +395,22 @@
     var parts = raw.split("|");
     return parts[0] === location.pathname && Date.now() - Number(parts[1]) < OWN_NAV_MS;
   })();
+  // The dock on a wide screen: where the editor's "Inserat ansehen" handle sits under the right column, the bottom
+  // prompts stand above it, as wide as it (app.css .dock-column; the handle's edges as --dock-left / --dock-right).
+  function syncDock() {
+    var root = document.documentElement;
+    var handle = document.querySelector(".ed-bottom .ed-drawer-handle");
+    var wide = window.matchMedia && window.matchMedia("(min-width: 1024px)").matches;
+    if (!handle || !wide || !handle.getClientRects().length) { root.classList.remove("dock-column"); return; }
+    var box = handle.getBoundingClientRect();
+    root.style.setProperty("--dock-left", box.left + "px");
+    root.style.setProperty("--dock-right", Math.max(0, root.clientWidth - box.right) + "px");
+    root.classList.add("dock-column");
+  }
+  document.addEventListener("DOMContentLoaded", syncDock);
+  window.addEventListener("resize", syncDock);
+  window.addEventListener("pageshow", syncDock);
+
   // every form sent from a page (also one without the question, e.g. "Rückgängig" in the toast after "Aussortieren")
   document.addEventListener("submit", function () { window.immobotOwnNavigation(); }, true);
 

@@ -1004,13 +1004,14 @@ details.notes-box .notes { margin: 0; font-size: .9rem; }
 .ed-card .callout { font-size: .9rem; margin-bottom: .75rem; }
 #ed-text { min-height: 15rem; margin-bottom: 0; font-size: 1rem; line-height: 1.6; }
 .js #ed-text { overflow-y: hidden; resize: none; }
-.ed-card > .ed-bar {
-  position: sticky; bottom: 0; z-index: 4; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem;
-  margin: .75rem calc(var(--pico-block-spacing-horizontal) * -1) calc(var(--pico-block-spacing-vertical) * -1);
-  padding: .6rem var(--pico-block-spacing-horizontal) calc(.6rem + env(safe-area-inset-bottom));
-  background: color-mix(in srgb, var(--pico-card-background-color) 90%, transparent);
+/* "Kopieren & Inserat öffnen": in the bottom row (.ed-bottom, see the drawer below), locked to the bottom edge */
+.ed-bottom .ed-bar {
+  pointer-events: auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: .45rem; margin: 0;
+  padding: .6rem 1rem calc(.6rem + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--pico-card-background-color) 92%, transparent);
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-  border-top: 1px solid var(--pico-card-border-color); border-radius: 0 0 var(--radius) var(--radius);
+  border: 1px solid var(--pico-card-border-color); border-bottom: 0; border-radius: var(--radius) var(--radius) 0 0;
+  box-shadow: 0 -4px 18px rgba(16, 24, 40, .1);
 }
 .ed-bar button { width: 100%; margin: 0; padding: .55rem .35rem; font-size: .92rem; white-space: nowrap; }
 .ed-bar-note { grid-column: 1 / -1; margin: 0; font-size: .76rem; line-height: 1.35; color: var(--pico-muted-color); text-align: center; }
@@ -1204,7 +1205,6 @@ details.ed-hints.is-alarm > summary { color: var(--err); }
 .ed-hints-body { padding: 0 .9rem .75rem; font-size: .9rem; color: var(--text); }
 .ed-side details.ed-hints { margin-bottom: 1rem; }
 /* one action, full width */
-.ed-card > .ed-bar { grid-template-columns: minmax(0, 1fr); }
 .ed-bar button { min-height: 3rem; font-size: 1rem; }
 .ed-side #kritik h2 { font-size: 1rem; }
 .ed-verlauf > summary { min-height: 2.75rem; }
@@ -1249,7 +1249,7 @@ body:has(.ask-bar:not([hidden])) main.container, .js body:has(.undo-toast:not([h
    "Inserat ansehen" bar, or with the open text the locked "Kopieren & Inserat öffnen" bar (with "Inserat"); on a wide
    screen "Kopieren" under the letter and "Inserat ansehen" under the right column, one row of the same height. */
 body:has(.ed-bottom) { --dock-lift: 3rem; }
-body:has(.ed-card > .ed-bar) { --dock-lift: calc(4.2rem + 1px); }
+body:has(.ed-bottom .ed-bar) { --dock-lift: calc(4.2rem + 1px); }
 @media (min-width: 1024px) { body:has(.ed-bottom) { --dock-lift: calc(4.2rem + 1px); } }
 
 .ask-bar, .js .undo-toast {
@@ -1647,12 +1647,12 @@ details.st-more { margin: .5rem 0 0; }
   .ed-bottom-in { max-width: none; padding: 0; }
   .ed-bottom a.ed-drawer-handle { border-left: 0; border-right: 0; border-radius: 0; }
   /* the open text: one locked bar at the bottom - "Kopieren & Inserat öffnen" and "Inserat" */
-  body:has(.ed-card > .ed-bar) .ed-bottom { display: none; }
-  .ed-card > .ed-bar { position: fixed; z-index: 25; left: 0; right: 0; bottom: 0; margin: 0;
-    grid-template-columns: minmax(0, 1fr) auto; border-radius: 0; box-shadow: 0 -4px 18px rgba(16, 24, 40, .1); }
+  .ed-bottom:has(.ed-bar) a.ed-drawer-handle { display: none; }
+  .ed-bottom .ed-bar { grid-template-columns: minmax(0, 1fr) auto; border-left: 0; border-right: 0; border-radius: 0; }
 }
-@media (min-width: 1024px) {
-  .ed-bottom-in { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); column-gap: 1.25rem; }
+@media (min-width: 1024px) {  /* one row: Kopieren under the letter, the handle under the right column, same height */
+  .ed-bottom-in { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); column-gap: 1.25rem; align-items: end; }
+  .ed-bottom .ed-bar { grid-column: 1; }
   .ed-bottom a.ed-drawer-handle { grid-column: 2; padding: 0 1.1rem; }
 }
 .ed-bar a.ed-bar-inserat {
@@ -1712,3 +1712,23 @@ html:not(.js) .ed-sheet-in { width: auto; height: auto; border: 1px solid var(--
 /* ---- editor: bottom drawer (end) ---- */
 .ed-job-calm { margin: .5rem 0 0; padding: .5rem .75rem; border-radius: var(--radius-sm); background: var(--surface-2); font-size: .9rem; }
 .ed-job-calm[hidden] { display: none; }
+
+/* ---- the dock (begin) -- app.js syncDock: on a wide screen the editor's handle sits under the right column, and the
+   bottom prompts (Abgeschickt?, Uninteressant?, Doch interessant?, the toast) stand right above it, as wide as it
+   (html.dock-column, --dock-left / --dock-right from the handle). On a phone with the editor's bottom row they sit
+   flush on it, so nothing of the page shows between them. Elsewhere the centred dock as before. ---- */
+.dock-column :is(.ask-bar, .ask-sheet, .undo-toast) {
+  left: var(--dock-left); right: var(--dock-right); width: auto; min-width: 0; max-width: none; margin: 0;
+  bottom: calc(var(--dock-lift, 0px) + .5rem);
+}
+.dock-column .ask-sheet[data-collapsed] { width: fit-content; margin: 0 auto; }
+.dock-column .ask-bar { gap: .2rem; padding-left: .8rem; }
+.dock-column .ask-bar .ask-bar-act { padding: .4rem .6rem; font-size: .9rem; }
+.dock-column .ask-bar :is(.ask-min, .ask-bar-close) { width: 2.4rem; }
+@media (max-width: 1023px) {
+  body:has(.ed-bottom) :is(.ask-bar, .js .undo-toast):not([data-collapsed]) {
+    left: 0; right: 0; bottom: var(--dock-lift); border-left: 0; border-right: 0; border-bottom: 0;
+    border-radius: var(--radius) var(--radius) 0 0; box-shadow: 0 -4px 18px rgba(16, 24, 40, .1);
+  }
+}
+/* ---- the dock (end) ---- */
